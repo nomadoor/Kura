@@ -215,8 +215,9 @@ class ResumeTargetTests(unittest.TestCase):
 class ResumeStepParityTests(unittest.TestCase):
     @posix_only(DATASET_IO)
     def test_every_backend_tells_its_trainer_the_target_the_plan_and_lock_show(self) -> None:
-        # Resume +200 from step 1000: the trainer's own target is in its native step space.
-        expected = {"musubi-tuner": (0, 200), "sd-scripts": (1000, 1200), "ai-toolkit": (1000, 1200)}
+        # Resume +200 from step 1000: every pinned trainer continues the logical step, so its own
+        # target is the logical one.
+        expected = {"musubi-tuner": (1000, 1200), "sd-scripts": (1000, 1200), "ai-toolkit": (1000, 1200)}
         for build in (musubi_run, sd_scripts_run, ai_toolkit_run):
             source = build()
             name = source["backend"]["name"]
@@ -246,7 +247,10 @@ class ResumeStepParityTests(unittest.TestCase):
 
 
 class ResumeExecutorParityTests(unittest.TestCase):
-    def _derived(self, root: Path) -> Path:
+    def _derived(self, root: Path, *, process_local: bool = False) -> Path:
+        # A Musubi Tuner Resume +200 from 1000. Its lock froze `logical` progress (the patched
+        # trainer prints 1150/1200), or `process_local` when it was compiled before the patch
+        # (the trainer printed 150/200).
         source = musubi_run()
         manifest = publish_source(root, source)
         run = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"])
@@ -256,10 +260,27 @@ class ResumeExecutorParityTests(unittest.TestCase):
         (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
         (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
         compile_resume_lock(root, run, run_dir / "resolved")
-        (run_dir / "logs" / "stdout.log").write_text("steps:  75%|███| 150/200 [00:10<00:04, 1.0s/it, avr_loss=0.5]\n", encoding="utf-8")
+        progress = "150/200"
+        if process_local:
+            lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock.update(native_progress="process_local", native_target="process_local")
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        else:
+            progress = "1150/1200"
+        (run_dir / "logs" / "stdout.log").write_text(f"steps:  75%|███| {progress} [00:10<00:04, 1.0s/it, avr_loss=0.5]\n", encoding="utf-8")
         return run_dir
 
-    def test_docker_and_runpod_place_process_local_progress_and_state_at_one_logical_step(self) -> None:
+    def test_a_musubi_run_compiled_under_the_process_local_contract_is_read_as_before(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._derived(root, process_local=True)
+            status: dict[str, Any] = {}
+            _materialize_stdout_progress(run_dir, status, state="running")
+            self.assertEqual((status["last_step"], status["total_steps"]), (1150, 1200))
+            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (150, 200))
+
+    def test_docker_and_runpod_place_progress_and_state_at_one_logical_step(self) -> None:
         import kura.executors.common as common
         import kura.run_commands.runpod_ssh as runpod_ssh
         import kura.training_artifacts as training_artifacts
@@ -327,7 +348,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
         for corrupt in (non_int_steps, broken_json):
             with self.subTest(corrupt=corrupt.__name__), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                run_dir = self._derived(root)
+                run_dir = self._derived(root, process_local=True)
                 corrupt(run_dir / "resolved" / "training-state-source.lock.json")
                 run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
                 _write_state_marker(_write_state(run_dir / "outputs" / "derived-step0150-state"), "musubi-tuner", 1150)
