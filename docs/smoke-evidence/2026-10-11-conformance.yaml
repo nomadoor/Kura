@@ -43,5 +43,32 @@ results:
   P6: not run (local Docker)
   P7: pass on every backend
   P8: pass on every backend
-not_covered: >-
-  The RunPod pass of the scenario was not run.
+runpod_pass:
+  observed_at: '2026-10-11'
+  command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend <name> --runpod --yes
+  gpu: NVIDIA A40 (SECURE, $0.59/hr)
+  executor_source: da6759776b28cef1d4cfc0b4c47d8e9185ba90bf189257cd7ebeafce9d888583
+  note: >-
+    Run once on every backend after the Resume step-label change; later RunPod passes run one
+    backend, Musubi Tuner or AI-Toolkit. Same images and adapter identities as the Docker pass
+    except sd-scripts and Musubi Tuner, whose adapter identities are the ones after the gradient
+    accumulation fix (5e9f853d..., 7a2a2ce3...).
+  pod_minutes: about 69 across 21 Pods (about $0.68 GPU), every Pod stopped and none left listed
+  results:
+    P1: pass on every backend
+    P2: pass on every backend
+    P3: pass on every backend, as noted per backend
+    P4: pass on every backend
+    P6: pass on every backend (every Pod recorded pod_stopped_at; the RunPod Pod list was empty afterwards)
+    P7: pass on every backend
+    P8: not measured on RunPod
+  backends:
+    sd-scripts:
+      runs: [20261011-1557_conf-sd-one-control_9b73, 20261011-1601_conf-sd-one-control-2_81c7, 20261011-1604_conf-sd-one-split_850d, 20261011-1608_conf-sd-one-resume_72d0, 20261011-1610_conf-sd-multi-fresh_46fa, 20261011-1615_conf-sd-multi-split_5026, 20261011-1619_conf-sd-multi-resume_be91]
+      p3: the two controls are equal, and the one-item Resume equals them
+    ai-toolkit:
+      runs: [20261011-1633_conf-ai-one-control_6113, 20261011-1639_conf-ai-one-control-2_3e62, 20261011-1643_conf-ai-one-split_4008, 20261011-1647_conf-ai-one-resume_105f, 20261011-1648_conf-ai-multi-fresh_405a, 20261011-1650_conf-ai-multi-split_d761, 20261011-1651_conf-ai-multi-resume_50c0]
+      p3: step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+    musubi-tuner:
+      runs: [20261011-1653_conf-musubi-one-control_cf67, 20261011-1657_conf-musubi-one-control-2_4667, 20261011-1703_conf-musubi-one-split_0076, 20261011-1707_conf-musubi-one-resume_486f, 20261011-1711_conf-musubi-multi-fresh_9194, 20261011-1713_conf-musubi-multi-split_eac3, 20261011-1717_conf-musubi-multi-resume_2cd4]
+      p3: step count and scheduler equal the controls; the two controls differ, so exact learned-state equality is not checkable

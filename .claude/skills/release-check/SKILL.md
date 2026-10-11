@@ -53,7 +53,7 @@ batch pull request. Never grow a pull request to fix a pre-existing issue.
 ## Before a milestone closes or a release
 
 **Conformance.** Run the conformance scenario on every backend on local Docker,
-then the RunPod pass on one backend (`--runpod --backend <name>`): it prints
+then the RunPod pass on Musubi Tuner or AI-Toolkit (`--runpod --backend <name>`): it prints
 the cost ceiling and launches nothing until the maintainer approves that cost
 and the command is run again with `--yes`. Record both tables as smoke
 evidence under `docs/smoke-evidence/`.
