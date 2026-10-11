@@ -61,7 +61,10 @@ table:
   Resume against the controls, disk peak against the estimate.
 
 It runs on local Docker without billing. A RunPod pass runs the same scenario
-on one backend, with the cost ceiling shown first, before a release.
+on one backend, Musubi Tuner or AI-Toolkit (the trainers most runs use), with
+the cost ceiling shown first, before a release. It checks every promise above
+except P8: the disk peak is sampled on the local disk, so P8 is checked on
+Docker only.
 
 Required: before a pull request that touches training state, Resume, saving,
 checkpoint naming, step accounting, model or dataset handoff, or an image or
