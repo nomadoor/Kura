@@ -159,9 +159,10 @@ steps, and the endpoint state is saved at the end of training; a Resume keeps th
 configured cadence. Both trainers run through one Kura state runner that marks
 each complete state with the step it holds, so Musubi Tuner's final state is
 published too. Musubi Tuner restarts the epoch on Resume, so data order is not
-continued. AI-Toolkit names each step save by the optimizer updates it holds
-(Kura's image patches upstream, which named it one below), and Kura checks the
-name against the saved optimizer state. Only state directories named
+continued. AI-Toolkit saves when its completed optimizer updates are a multiple
+of the cadence and names and records each step save by them (Kura's image
+patches upstream, which used the 0-based iteration index, one below), and Kura
+checks the name against the saved optimizer state. Only state directories named
 for the run's own output name are published, on every executor. RunPod compile freezes the effective runtime
 image, and Resume launch does not accept `--image` overrides.
 

@@ -37,14 +37,15 @@ RUN echo "${AI_TOOLKIT_H3_GRADIENT_PATCH_SHA256}  /tmp/minimax_h3_finite_gradien
         > /opt/kura-ai-toolkit-source-patch.json \
     && rm /tmp/minimax_h3_finite_gradients.patch
 
-# Upstream BaseSDTrainProcess.py (31ddc70, lines 2701-2711) names a step save after the
-# 0-based iteration index, so `_N` holds N+1 optimizer updates; 0001 names it by the updates
-# it holds, which Kura's AI-Toolkit state runner checks. See the patch header.
-COPY docker/ai-toolkit/patches/0001-name-step-saves-by-completed-updates.patch /tmp/kura-ai-toolkit-patches/0001-name-step-saves-by-completed-updates.patch
+# Upstream BaseSDTrainProcess.py (31ddc70, lines 2549 and 2701-2711) decides, names, and
+# records a step save by the 0-based iteration index, so `_N` holds N+1 optimizer updates;
+# 0001 decides, names, and records it by the updates it holds, which Kura's AI-Toolkit state
+# runner and plan read. See the patch header.
+COPY docker/ai-toolkit/patches/0001-save-by-completed-updates.patch /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch
 
 RUN cd /app/ai-toolkit \
-    && git apply --check /tmp/kura-ai-toolkit-patches/0001-name-step-saves-by-completed-updates.patch \
-    && git apply /tmp/kura-ai-toolkit-patches/0001-name-step-saves-by-completed-updates.patch \
+    && git apply --check /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch \
+    && git apply /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch \
     && rm -r /tmp/kura-ai-toolkit-patches
 
 LABEL io.kura.patch.save-step="completed-updates-v1"

@@ -625,12 +625,10 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
 
     Saves are counted at `checkpoint_save_cadence` over the steps the trainer counts in its own
     progress, which is logical for every trainer: on a Resume from the source step to the
-    target, so its saves land on logical multiples; on a fresh run from 0 to the recipe's steps. Every trainer writes an unpruned final file besides its step saves, so
-    every save is the step saves plus one; the step saves end at the last step (sd-scripts and
-    Musubi Tuner save on it too) or below it where the display declares `last_step_save:
-    final_only` (AI-Toolkit decides a save on its 0-based iteration index, so its multiples are
-    counted below the last step, which its final file holds; Kura's image names each save by
-    the updates it holds, one above that index). With no step cadence only
+    target, so its saves land on logical multiples; on a fresh run from 0 to the recipe's steps.
+    Every trainer saves when its completed updates are a multiple of the cadence, the last step
+    included (AI-Toolkit through Kura's image patch), and writes an unpruned final file besides
+    its step saves, so every save is the step saves plus one. With no step cadence only
     the final file is counted; where the trainer saves at its own default
     (`trainer_default_saves`), those saves are not counted and no default is assumed. Pruning
     during training lowers the peak, never above every save: AI-Toolkit removes all but
@@ -650,8 +648,7 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
     if not isinstance(cadence, int):
         return {"count": 1, "trainer_default_saves": cadence == "trainer_default"}
-    last = end - 1 if checkpoint.get("last_step_save") == "final_only" else end
-    every_save = last // cadence - start // cadence + 1
+    every_save = end // cadence - start // cadence + 1
     keep_last = _retention_value(checkpoint.get("keep_last"))
     window = _retention_value(checkpoint.get("retention_window_steps"))
     if keep_last is not None:
