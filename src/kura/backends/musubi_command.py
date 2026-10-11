@@ -39,6 +39,9 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
         # `process_local` and is read that way.
         "native_progress": "logical",
         "native_target": "logical",
+        # A run compiled before Kura launched Musubi through the state runner has no runner here
+        # and no marker; `compiled_training_state_contract` reads its states as before.
+        "state_runner": "musubi/state-runner.py",
         "state_step": {
             "path": "kura-state-info.json", "field": "logical_step", "space": "logical",
             "schema_version": 1, "backend": "musubi-tuner",

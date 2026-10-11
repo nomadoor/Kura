@@ -1039,6 +1039,11 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 },
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            # Compiled by an older Kura: no state runner, and a frozen process-local lock.
+            (run_dir / "resolved" / "training-state-source.lock.json").write_text(json.dumps({
+                "source_step": 2, "target_step": 3, "additional_steps": 1,
+                "native_progress": "process_local", "native_target": "process_local",
+            }), encoding="utf-8")
             candidate = root / "candidate"
             candidate.mkdir()
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
@@ -1053,7 +1058,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "path": "/workspace/runs/derived/outputs/derived-step00000001-state",
                 "name": "derived-step00000001-state",
                 "step": 1,
-                "marked_step": 3,
+                "marked_step": None,
                 "files": [{"path": "model.safetensors", "size": 1, "mtime_ns": 1}],
             }
 
@@ -1678,6 +1683,8 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            (run_dir / "resolved" / "musubi").mkdir()
+            (run_dir / "resolved" / "musubi" / "state-runner.py").write_text("runner\n", encoding="utf-8")
             state = run_dir / "outputs" / "source-step00000010-state"
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 (state / name).write_bytes(_safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode()))
@@ -1690,7 +1697,9 @@ class TrainingStateArtifactTests(unittest.TestCase):
             (run_dir / "outputs" / "source-step00000020-state").mkdir()
             self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [10])
 
-    def test_process_local_resume_state_is_published_at_its_logical_step(self) -> None:
+    def test_an_old_process_local_musubi_resume_state_is_published_at_its_logical_step(self) -> None:
+        # Compiled by an older Kura: no state runner, so no marker, and a frozen process-local
+        # lock; its state is placed by its name through the lock, as before.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "derived"
@@ -1727,9 +1736,10 @@ class TrainingStateArtifactTests(unittest.TestCase):
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 payload = _safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode())
                 (state / name).write_bytes(payload)
-            # Named for the run's own step 1 under the old counter; its marker records the
-            # logical step the restored scheduler counted, which places it.
-            _write_state_marker(state, "musubi-tuner", 3)
+            (run_dir / "resolved" / "training-state-source.lock.json").write_text(json.dumps({
+                "source_step": 2, "target_step": 3, "additional_steps": 1,
+                "native_progress": "process_local", "native_target": "process_local",
+            }), encoding="utf-8")
 
             published = publish_completed_training_states(root, run_dir)
 

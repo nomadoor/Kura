@@ -262,11 +262,14 @@ class ResumeExecutorParityTests(unittest.TestCase):
         compile_resume_lock(root, run, run_dir / "resolved")
         progress = "150/200"
         if process_local:
+            # Compiled by an older Kura: no state runner, so no marker, and a process-local lock.
             lock_path = run_dir / "resolved" / "training-state-source.lock.json"
             lock = json.loads(lock_path.read_text(encoding="utf-8"))
             lock.update(native_progress="process_local", native_target="process_local")
             lock_path.write_text(json.dumps(lock), encoding="utf-8")
         else:
+            (run_dir / "resolved" / "musubi").mkdir()
+            (run_dir / "resolved" / "musubi" / "state-runner.py").write_text("runner\n", encoding="utf-8")
             progress = "1150/1200"
         (run_dir / "logs" / "stdout.log").write_text(f"steps:  75%|███| {progress} [00:10<00:04, 1.0s/it, avr_loss=0.5]\n", encoding="utf-8")
         return run_dir
@@ -279,6 +282,15 @@ class ResumeExecutorParityTests(unittest.TestCase):
             _materialize_stdout_progress(run_dir, status, state="running")
             self.assertEqual((status["last_step"], status["total_steps"]), (1150, 1200))
             self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (150, 200))
+            # Its states carry no marker and are placed by name through the lock, as before; the
+            # same marker-less state of a run compiled with the runner is not complete yet.
+            _write_state(run_dir / "outputs" / "derived-step0150-state")
+            self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [1150])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._derived(root)
+            _write_state(run_dir / "outputs" / "derived-step1150-state")
+            self.assertEqual(publish_completed_training_states(root, run_dir), [])
 
     def test_docker_and_runpod_place_progress_and_state_at_one_logical_step(self) -> None:
         import kura.executors.common as common
@@ -335,8 +347,8 @@ class ResumeExecutorParityTests(unittest.TestCase):
 
 
     def test_an_unreadable_source_lock_is_refused_rather_than_read_as_not_a_resume(self) -> None:
-        # Read as not a Resume, native step 150 would be shown as logical step 150. The state
-        # itself is placed by its marker, which does not read the lock.
+        # Read as not a Resume, native step 150 would be published and shown as logical step 150.
+        # The run was compiled before the state runner, so its state is placed through the lock.
         def non_int_steps(lock_path: Path) -> None:
             lock = json.loads(lock_path.read_text(encoding="utf-8"))
             lock["source_step"] = "1000"
@@ -351,21 +363,20 @@ class ResumeExecutorParityTests(unittest.TestCase):
                 run_dir = self._derived(root, process_local=True)
                 corrupt(run_dir / "resolved" / "training-state-source.lock.json")
                 run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
-                _write_state_marker(_write_state(run_dir / "outputs" / "derived-step0150-state"), "musubi-tuner", 1150)
+                _write_state(run_dir / "outputs" / "derived-step0150-state")
                 checks = {
                     "status": lambda: _materialize_stdout_progress(run_dir, {}, state="running"),
                     "plan": lambda: _resume_plan_payload(root, run, run_dir),
+                    "publish": lambda: publish_completed_training_states(root, run_dir),
                 }
                 for site, check in checks.items():
                     with self.assertRaisesRegex(ValueError, "training-state source lock", msg=site):
                         check()
-                publish_completed_training_states(root, run_dir)
                 observed = [
                     json.loads(path.read_text(encoding="utf-8")).get("observed_step")
                     for path in (root / "artifacts" / "training-state").glob("*/manifest.json")
                 ]
                 self.assertNotIn(150, observed)
-                self.assertIn(1150, observed)
 
 
 class SdScriptsLogicalResumeTests(unittest.TestCase):
@@ -521,7 +532,8 @@ class AccelerateStateRunnerTests(unittest.TestCase):
 
     def _musubi_run_dir(self, root: Path, run: dict[str, Any]) -> Path:
         run_dir = root / "runs" / "derived"
-        (run_dir / "resolved").mkdir(parents=True)
+        (run_dir / "resolved" / "musubi").mkdir(parents=True)
+        (run_dir / "resolved" / "musubi" / "state-runner.py").write_text("runner\n", encoding="utf-8")
         (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
         (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
         return run_dir
