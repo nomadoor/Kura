@@ -740,6 +740,9 @@ def compare_values(image: str, first: Path, second: Path, names: list[str]) -> d
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
+CANNOT_COMPARE = "cannot compare values in the trainer image"
+
+
 def compare_states(first: Path, second: Path, *, image: str | None = None) -> list[str]:
     """How two final training states differ: their step counts and scheduler, and with
     `image` (the run's pinned trainer image) the values of their weights and optimizer
@@ -765,7 +768,7 @@ def compare_states(first: Path, second: Path, *, image: str | None = None) -> li
         try:
             counts = compare_values(image, first, second, by_value)
         except (OSError, RuntimeError, ValueError) as exc:
-            return [*differences, f"cannot compare values in the trainer image: {exc}"]
+            return [*differences, f"{CANNOT_COMPARE}: {exc}"]
         differences += [f"{name}: {changed} of {total} entries differ" for name, (changed, total) in counts.items() if changed]
     return differences
 
@@ -774,10 +777,16 @@ def resume_problems(resumed: Path, controls: list[Path], image: str) -> tuple[li
     """P3 for a Resume's final state against its uninterrupted controls' final states:
     (failures, informational notes). The Resume must equal the first control in step
     counts and scheduler; in learned state too when there are two controls and they equal
-    each other. Controls that differ (a nondeterministic trainer) leave exactness uncheckable."""
+    each other. Controls that differ (a nondeterministic trainer) leave exactness uncheckable;
+    a value comparison that could not run fails."""
     if len(controls) < 2:
         return compare_states(resumed, controls[0]), []
-    if compare_states(controls[1], controls[0], image=image):
+    between_controls = compare_states(controls[1], controls[0], image=image)
+    broken = [difference for difference in between_controls if difference.startswith(CANNOT_COMPARE)]
+    if broken:
+        # A comparison that did not run says nothing about the trainer; it is a failure.
+        return broken, []
+    if between_controls:
         return compare_states(resumed, controls[0]), ["controls differ: exact Resume not checkable"]
     return compare_states(resumed, controls[0], image=image), []
 

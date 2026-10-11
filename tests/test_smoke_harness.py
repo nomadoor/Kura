@@ -365,6 +365,9 @@ class RealSmokeHarnessTests(unittest.TestCase):
             # Controls that differ: only step counts and the scheduler are checked, and that is said.
             outcomes = {(second, True): ["model.safetensors: 3 of 4 entries differ"], (resumed, False): []}
             self.assertEqual(MODULE.resume_problems(resumed, [first, second], image), ([], ["controls differ: exact Resume not checkable"]))
+            # A comparison that could not run is a failure, not a nondeterministic trainer.
+            outcomes = {(second, True): [f"{MODULE.CANNOT_COMPARE}: no such image"], (resumed, False): []}
+            self.assertEqual(MODULE.resume_problems(resumed, [first, second], image), ([f"{MODULE.CANNOT_COMPARE}: no such image"], []))
             # One control (the multi-item dataset): step counts and the scheduler only.
             calls.clear()
             outcomes = {(resumed, False): ["scheduler.bin: 1 of 1 entries differ"]}

@@ -23,6 +23,12 @@ why, so it is not raised again.
 - 2026-10-11 | doctor | `kura doctor disk` output is too long | deferred before this backlog existed; source not recorded | P11
 - 2026-10-11 | plan JSON | `cadence_steps` mixes integers and the text "trainer default" | deferred before this backlog existed; source not recorded | -
 
+- 2026-10-11 | conformance | P8 can only fail on the checkpoint count: the byte estimate is 1 GiB per checkpoint against small LoRAs, no scenario run exercises retention or pruning, and the 0.5 s sampling would miss a short peak | review of the promises-and-verification pull request | P8
+- 2026-10-11 | conformance | `_sample_peak` can raise `FileNotFoundError` when a staging folder disappears during `rglob`, which stops the harness while `kura run execute` keeps running | review of the promises-and-verification pull request | -
+- 2026-10-11 | conformance | With `--runpod` and no `--yes`, the harness still creates datasets and compiles a run before printing the cost, and `--yes` launches whatever the ceiling (even unknown) | review of the promises-and-verification pull request | P6
+- 2026-10-11 | conformance | The AI-Toolkit conformance model (`hf-internal-testing/tiny-stable-diffusion-pipe`) has no pinned revision | review of the promises-and-verification pull request | P4
+- 2026-10-11 | conformance | A Resume that fails to run shows `-` for P3 instead of FAIL (P1 still fails and the exit code is 1) | review of the promises-and-verification pull request | P3
+
 ## Rejected
 
 - 2026-10-11 | capabilities | REJECTED: declare field types in `kura run capabilities`; typed fields would break runs that give `learning_rate` as a string | deferred before this backlog existed; source not recorded | -
