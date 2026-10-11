@@ -333,7 +333,8 @@ class PeakCheckpointsTests(unittest.TestCase):
         no_steps = musubi_run()
         del no_steps["recipe"]["steps"]
         self.assertIsNone(training_artifacts.peak_checkpoints(no_steps, {"save_every_n_steps": 50}))
-        # AI-Toolkit saves on steps 50..950 and leaves the last step to its final file.
+        # AI-Toolkit decides saves on its 0-based iteration index 50..950 (the image names them
+        # by the updates they hold, 51..951) and leaves the last step to its final file.
         final_only = {"save_every_n_steps": 50, "last_step_save": "final_only"}
         self.assertEqual(peak(final_only), 20)
         self.assertEqual(peak(final_only, 1020), 21)
@@ -387,7 +388,8 @@ class PeakCheckpointsTests(unittest.TestCase):
 
     def test_a_logical_progress_resume_counts_saves_on_logical_multiples(self) -> None:
         # Resume +170 from step 1030 to 1200 with a cadence of 100. AI-Toolkit's progress is
-        # logical: it saves on 1100 and leaves 1200 to its final file: 2 (170 // 100 + 1 counted
+        # logical: it saves on index 1100 (named 1101, the updates it holds) and leaves 1200 to
+        # its final file: 2 (170 // 100 + 1 counted
         # from 1030 would land on 1130). sd-scripts' progress is logical too, and it saves on its
         # last step: 1100, 1200, and the final file: 3. Musubi Tuner counts progress from zero in
         # its process, 0..170: a save on 100 and the final file: 2.
