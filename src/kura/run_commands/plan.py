@@ -547,8 +547,9 @@ def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     check = f"{_run_adapter(run).name}-disk-cache"
     if estimate["status"] == "unknown":
-        # Information only, as for the backends that declare no cache estimate at all.
-        return [_preflight_record(check, "info", f"disk cache size is unknown and not counted in the disk estimate; {estimate.get('detail')}", "run.yaml")]
+        # A warning, not a refusal: the disk checks leave this one write out, as they do for
+        # the backends that declare no cache estimate at all.
+        return [_preflight_record(check, "warning", f"disk cache size is unknown and not counted in the disk estimate; {estimate.get('detail')}", "run.yaml")]
     return [_preflight_record(check, "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
 
 

@@ -2079,6 +2079,22 @@ class RunPlanTests(unittest.TestCase):
         result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
         self.assertEqual(result["estimated_write_bytes"], 14 * 1024**3)
 
+    def test_launch_refuses_neither_many_checkpoints_nor_an_undeclared_disk_cache(self) -> None:
+        # The records launch enforces (`enforce_preflight_errors`) hold no error for either.
+        from kura.run_commands.plan import collect_run_preflight, enforce_preflight_errors
+
+        run = {
+            "id": "many", "type": "train", "recipe": {"steps": 3000}, "datasets": [],
+            "backend": {"name": "sd-scripts", "config": {
+                "architecture": "sd15", "mode": "lora", "save_every_n_steps": 100, "cache_latents_to_disk": True,
+            }},
+        }
+        with tempfile.TemporaryDirectory() as directory, patch("kura.run_commands.plan._dataset_layout_preflight_report", return_value=[]):
+            records = collect_run_preflight(run, Path(directory), config={}, executor="docker", download_estimate={"bytes": 0, "items": [], "unknown": [], "probe_failures": []})
+        checks = {record["check"]: record["severity"] for record in records if record["check"] in {"checkpoint-safety", "sd-scripts-disk-cache"}}
+        self.assertEqual(checks, {"checkpoint-safety": "info", "sd-scripts-disk-cache": "warning"})
+        enforce_preflight_errors([record for record in records if record["check"] in checks or record["check"] == "disk"])
+
     def test_many_checkpoints_are_reported_and_never_refused_on_any_backend(self) -> None:
         # Running out of disk is what many checkpoints could cause, and the launch disk gate
         # already budgets every checkpoint; the count itself is the user's decision.
