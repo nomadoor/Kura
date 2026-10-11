@@ -41,7 +41,7 @@ from kura.training_artifacts import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
-from tests.platform_support import DATASET_IO, posix_only  # noqa: E402
+from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only  # noqa: E402
 from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes, _write_state_marker  # noqa: E402
 
 
@@ -455,6 +455,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
     """sd-scripts and Musubi Tuner run through one Accelerate state runner that marks each
     complete save with the step it holds; every state is published at its marker's step."""
 
+    @posix_only(DATASET_IO)
     def test_both_accelerate_backends_launch_their_trainer_through_the_one_runner(self) -> None:
         from kura.backends.musubi_command import compile_musubi_tuner
         from kura.backends.sd_scripts import compile_sd_scripts
@@ -518,6 +519,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
             self.assertEqual(Accelerator().save_state(output), "saved")
         return output, json.loads((output / "kura-state-info.json").read_text(encoding="utf-8"))
 
+    @posix_only(POSIX_PATHS)
     def test_the_runner_marks_a_musubi_save_with_its_scheduler_step_and_no_train_state(self) -> None:
         output, info = self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1150)
         self.assertEqual(info["backend"], "musubi-tuner")
@@ -528,6 +530,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         self.assertEqual((info["backend"], info["logical_step"]), ("sd-scripts", 7))
         self.assertIn("train_state_sha256", info)
 
+    @posix_only(POSIX_PATHS)
     def test_the_runner_counts_one_scheduler_step_per_process_per_update(self) -> None:
         # Accelerate steps a prepared scheduler once per process for each optimizer update (and
         # both trainers scale its length by the process count), so on two GPUs 1150 updates are
@@ -539,6 +542,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "is not a whole number of updates on 2 processes"):
             self._save("musubi-tuner", {"last_epoch": 2301, "_step_count": 2302}, 1150, processes=2)
 
+    @posix_only(POSIX_PATHS)
     def test_the_runner_reads_the_step_under_gradient_accumulation(self) -> None:
         # Accelerate adds one to the scheduler's _step_count on every accumulating micro-batch
         # but advances last_epoch only on updates, so at gradient_accumulation_steps 2 seven
@@ -548,6 +552,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
                 _, info = self._save(backend, {"last_epoch": 7, "_step_count": 15}, 7)
                 self.assertEqual(info["logical_step"], 7)
 
+    @posix_only(POSIX_PATHS)
     def test_the_runner_refuses_a_save_whose_optimizer_and_scheduler_disagree(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "optimizer step 1149 does not match scheduler step 1150"):
             self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1149)
