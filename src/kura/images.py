@@ -14,7 +14,7 @@ from typing import Any
 PINNED_IMAGES: dict[str, str] = {
     "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
     "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:21294bb1fcd9d7253181a8eb386d8a924837c136a3dcbb03b55a3aeadd8a18a1",
-    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02",
+    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06",
     "comfyui": "nomadoor/kura-comfyui@sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097",
 }
 
@@ -37,6 +37,7 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:4607399fc1b9bcde0ea416ba43eb28069eafb1b80a1914e9906762dba8d24f5a": "12.8",
     "sha256:21294bb1fcd9d7253181a8eb386d8a924837c136a3dcbb03b55a3aeadd8a18a1": "13.0",
     "sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02": "12.8",
+    "sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06": "12.8",
     "sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097": "13.0",
 }
 
