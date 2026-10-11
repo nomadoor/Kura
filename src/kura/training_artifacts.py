@@ -600,10 +600,10 @@ def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps:
 
 def checkpoint_save_cadence(run: dict[str, Any], configured: Any, *, contract: dict[str, Any] | None = None) -> int | str | None:
     """The one rule for the step-save cadence a run's trainer is given. `configured` is the
-    backend's `save_every_n_steps` (zero, less, or unset is none). When Kura manages the run's
-    training state (`training_state_managed`), `managed_state_cadence` applies, so a
-    process-local Resume is capped at the steps it adds. With no cadence, the backend's
-    training-state contract declares what its trainer does: `unset_save_cadence:
+    backend's `save_every_n_steps` (zero, less, or unset is none); every trainer counts a
+    Resume's steps logically, so a Resume keeps it (a run compiled when Musubi Tuner and
+    sd-scripts counted from zero froze a cadence capped at the steps it adds in its command).
+    With no cadence, the backend's training-state contract declares what its trainer does: `unset_save_cadence:
     recipe_steps` (Musubi Tuner is given the recipe's steps), `trainer_default` (AI-Toolkit
     saves at its own default, which Kura does not know; returned as `"trainer_default"`), or
     nothing (sd-scripts is given no cadence; None). Command builders, the state save flags,
@@ -611,8 +611,6 @@ def checkpoint_save_cadence(run: dict[str, Any], configured: Any, *, contract: d
     its own command passes its contract."""
     contract = training_state_contract(run) if contract is None else contract
     cadence = _retention_value(configured)
-    if training_state_managed(run, contract):
-        cadence = managed_state_cadence(run, cadence, contract=contract)
     if cadence is not None:
         return cadence
     unset = contract.get("unset_save_cadence")
@@ -626,10 +624,8 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     estimates: `{"count": n, "trainer_default_saves": bool}`, or None when the run has no steps.
 
     Saves are counted at `checkpoint_save_cadence` over the steps the trainer counts in its own
-    progress: on a Resume whose `native_progress` is `process_local` (Musubi Tuner) from 0 to
-    the steps it adds, on a `logical` one (AI-Toolkit, sd-scripts) from the source
-    step to the target, so its saves land on logical multiples; on a fresh run from 0 to the
-    recipe's steps. Every trainer writes an unpruned final file besides its step saves, so
+    progress, which is logical for every trainer: on a Resume from the source step to the
+    target, so its saves land on logical multiples; on a fresh run from 0 to the recipe's steps. Every trainer writes an unpruned final file besides its step saves, so
     every save is the step saves plus one; the step saves end at the last step (sd-scripts and
     Musubi Tuner save on it too) or below it where the display declares `last_step_save:
     final_only` (AI-Toolkit decides a save on its 0-based iteration index, so its multiples are
@@ -647,8 +643,6 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     span = resume_steps(run)
     if span is None:
         start, end = 0, trained_steps(run)
-    elif span["native_progress"] == "process_local":
-        start, end = 0, span["additional_steps"]
     else:
         start, end = span["source_step"], span["target_step"]
     if not end:
@@ -896,17 +890,6 @@ def missing_training_state_error(capture_required: bool, *, trainer_completed: b
 
 # Native save flags that count epochs; managed state is retained by steps, so they are refused.
 EPOCH_SAVE_FLAGS = frozenset({"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"})
-
-
-def managed_state_cadence(run: dict[str, Any], configured_cadence: int | None, *, contract: dict[str, Any] | None = None) -> int | None:
-    """The state save cadence Kura sets: the configured one (None when unset, so each backend
-    keeps its own default) on a fresh run; on a process-local Resume, the configured cadence or
-    the recipe's steps capped at the steps the run adds, so it saves at least once."""
-    steps = resume_steps(run, contract=contract)
-    if steps is None or steps["native_progress"] != "process_local":
-        return configured_cadence
-    cadence = configured_cadence if configured_cadence is not None else validated_recipe(run, required=True)["steps"]
-    return min(cadence, steps["additional_steps"])
 
 
 def managed_state_save_args(

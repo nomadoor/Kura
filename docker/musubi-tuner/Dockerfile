@@ -19,6 +19,17 @@ RUN git clone https://github.com/kohya-ss/musubi-tuner.git /opt/musubi-tuner \
     && git checkout "$MUSUBI_TUNER_REF" \
     && pip install --no-cache-dir -e .
 
+# Upstream trainer_base.py (v0.3.5, lines 2050-2054) restarts global_step at zero after
+# --resume; 0001 continues the logical step the restored scheduler counted, which Kura's
+# Musubi Tuner training-state contract reads. See the patch header.
+COPY docker/musubi-tuner/patches/0001-resume-continues-the-logical-step.patch /tmp/kura-musubi-tuner-patches/0001-resume-continues-the-logical-step.patch
+RUN cd /opt/musubi-tuner \
+    && git apply --check /tmp/kura-musubi-tuner-patches/0001-resume-continues-the-logical-step.patch \
+    && git apply /tmp/kura-musubi-tuner-patches/0001-resume-continues-the-logical-step.patch \
+    && rm -r /tmp/kura-musubi-tuner-patches
+
+LABEL io.kura.patch.resume-step="logical-global-step-v1"
+
 COPY docker/musubi-tuner/patch_flux2_diffusers_vae.py /tmp/patch_flux2_diffusers_vae.py
 RUN python /tmp/patch_flux2_diffusers_vae.py \
     && rm /tmp/patch_flux2_diffusers_vae.py

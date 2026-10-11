@@ -34,8 +34,11 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
         # Kura's state runner writes kura-state-info.json after each complete save. Resume reads
         # only an artifact's own inventory, so one published before the marker stays resumable.
         "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl", "kura-state-info.json"),
-        "native_progress": "process_local",
-        "native_target": "process_local",
+        # The pinned image's patch 0001 continues the logical step on Resume, so the trainer's
+        # step counter, progress, and target are logical; a lock compiled before it froze
+        # `process_local` and is read that way.
+        "native_progress": "logical",
+        "native_target": "logical",
         "state_step": {
             "path": "kura-state-info.json", "field": "logical_step", "space": "logical",
             "schema_version": 1, "backend": "musubi-tuner",
