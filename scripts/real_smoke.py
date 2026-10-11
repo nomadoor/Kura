@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Prepare and verify real one-step trainer smokes through the normal Kura CLI.
 
-This is a developer acceptance harness, not a release gate. It never launches a
-run: `prepare` creates, compiles, and plans runs with `kura run new/compile/plan`
-so the user can approve them; the approved launch is an ordinary
+This is a developer acceptance harness, not a release gate. `prepare` creates,
+compiles, and plans runs with `kura run new/compile/plan` so the user can
+approve them; the approved launch is an ordinary
 `uv run kura run execute <run-id>`; `verify` then checks the recorded result.
+
+`conformance` runs the fixed scenario of `docs/adr/promises-and-verification.md`
+on each backend in a separate workspace and prints one pass/fail table per
+promise. Without `--yes` it only prints its plan; it is the one mode that
+launches runs.
 
 Smoke datasets are manifest-v2 datasets under `datasets/real-smoke-*`. They
 are created only when absent and are never rewritten: an existing directory is
@@ -14,29 +19,46 @@ validated with `kura dataset validate` and used as is.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import math
 import os
 import re
 import shutil
 import struct
+import pickle
 import subprocess
 import sys
+import tempfile
+import time
+import zipfile
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
+
+from kura.paths import local_hf_cache  # noqa: E402
+from kura.provenance import image_reference_identity  # noqa: E402
+from kura.training_artifacts import checkpoint_files, checkpoint_step  # noqa: E402
+
 
 IMAGE_DATASET = "real-smoke-image"
+BUCKET_DATASET = "real-smoke-buckets"
+# Three items in three aspect-ratio buckets: at batch size 1 an epoch is three steps.
+BUCKET_SIZES = ((256, 256), (320, 192), (192, 320))
 CONTROL_DATASET = "real-smoke-image-control"
 VIDEO_DATASET = "real-smoke-video"
 # FramePack trains at 30 fps. The pinned loader can only drop frames, so a
 # 24 fps source never yields a full 37-frame latent window after conversion;
 # this video is encoded at 30 fps.
 FPS30_VIDEO_DATASET = "real-smoke-video-30fps"
+VIDEO_BUCKET_DATASET = "real-smoke-video-buckets"
 MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 A40 = "NVIDIA A40"
 
@@ -87,9 +109,9 @@ _AITK_COMMON: dict[str, Any] = {
 }
 
 
-def _sd_scripts_dataset(dataset_id: str) -> dict[str, Any]:
+def _sd_scripts_dataset(dataset_id: str, resolution: int = 512) -> dict[str, Any]:
     return {
-        "general": {"resolution": [512, 512], "caption_extension": ".txt", "enable_bucket": True, "min_bucket_reso": 256, "max_bucket_reso": 512},
+        "general": {"resolution": [resolution, resolution], "caption_extension": ".txt", "enable_bucket": True, "min_bucket_reso": resolution // 2, "max_bucket_reso": resolution},
         "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": dataset_id, "num_repeats": 1}]}],
     }
 
@@ -307,7 +329,7 @@ def _png(width: int = 256, height: int = 256, *, variant: int = 0) -> bytes:
 
 def _write_manifest(root: Path, dataset_id: str, rows: list[dict[str, Any]]) -> None:
     (root / "dataset.yaml").write_text(
-        yaml.safe_dump({"id": dataset_id, "items_schema_version": 2, "description": "Generated one-item real-smoke dataset; never rewritten by the harness."}, sort_keys=False),
+        yaml.safe_dump({"id": dataset_id, "items_schema_version": 2, "description": "Generated real-smoke dataset; never rewritten by the harness."}, sort_keys=False),
         encoding="utf-8",
     )
     (root / "items.jsonl").write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows), encoding="utf-8")
@@ -321,6 +343,16 @@ def _create_image_dataset(root: Path, dataset_id: str) -> None:
     (root / "0001.png").write_bytes(_png())
     (root / "0001.txt").write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
     _write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.png"}], "caption": _caption("0001.txt")}])
+
+
+def _create_bucket_dataset(root: Path, dataset_id: str) -> None:
+    rows = []
+    for index, (width, height) in enumerate(BUCKET_SIZES, start=1):
+        name = f"{index:04d}"
+        (root / f"{name}.png").write_bytes(_png(width, height, variant=index))
+        (root / f"{name}.txt").write_text(f"a tiny synthetic smoke-test image {index}\n", encoding="utf-8")
+        rows.append({"id": name, "files": [{"type": "file", "role": "target", "path": f"{name}.png"}], "caption": _caption(f"{name}.txt")})
+    _write_manifest(root, dataset_id, rows)
 
 
 def _create_control_dataset(root: Path, dataset_id: str) -> None:
@@ -341,39 +373,46 @@ def _create_control_dataset(root: Path, dataset_id: str) -> None:
 
 _VIDEO_GENERATOR = r'''
 import cv2, numpy as np, sys
-writer = cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*"mp4v"), float(sys.argv[3]), (256, 256))
+width, height = int(sys.argv[4]), int(sys.argv[5])
+writer = cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*"mp4v"), float(sys.argv[3]), (width, height))
 if not writer.isOpened():
     raise SystemExit("cannot open VideoWriter")
 for i in range(int(sys.argv[2])):
-    frame = np.zeros((256, 256, 3), dtype=np.uint8)
-    frame[:, :, 0] = np.arange(256, dtype=np.uint8)[None, :]
-    frame[:, :, 1] = np.arange(256, dtype=np.uint8)[:, None]
-    frame[220:236, i % 64:64 + i % 64] = (0, 180, 255)
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[:, :, 0] = (np.arange(width) % 256).astype(np.uint8)[None, :]
+    frame[:, :, 1] = (np.arange(height) % 256).astype(np.uint8)[:, None]
+    frame[height - 36:height - 20, i % 64:64 + i % 64] = (0, 180, 255)
     writer.write(frame)
 writer.release()
 '''
 
 
-def _create_video_dataset(root: Path, dataset_id: str, frames: int = 37, fps: float = 24.0) -> None:
+def _create_video_dataset(root: Path, dataset_id: str, frames: int = 37, fps: float = 24.0, sizes: tuple[tuple[int, int], ...] = ((256, 256),)) -> None:
     docker = shutil.which("docker")
     if docker is None:
-        raise SystemExit(f"creating {VIDEO_DATASET} needs Docker to encode the MP4 inside {MUSUBI_IMAGE}")
+        raise SystemExit(f"creating {dataset_id} needs Docker to encode the MP4 inside {MUSUBI_IMAGE}")
     user = ["--user", f"{os.getuid()}:{os.getgid()}"] if hasattr(os, "getuid") else []
-    result = subprocess.run(
-        [docker, "run", "--rm", *user, "-v", f"{root}:/out", "--entrypoint", "python", MUSUBI_IMAGE, "-c", _VIDEO_GENERATOR, "/out/0001.mp4", str(frames), str(fps)],
-        text=True, capture_output=True, check=False, timeout=300,
-    )
-    if result.returncode:
-        raise SystemExit(result.stderr or result.stdout or "video generation failed")
-    (root / "0001.txt").write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
-    _write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": _caption("0001.txt")}])
+    rows = []
+    for index, (width, height) in enumerate(sizes, start=1):
+        name = f"{index:04d}"
+        result = subprocess.run(
+            [docker, "run", "--rm", *user, "-v", f"{root}:/out", "--entrypoint", "python", MUSUBI_IMAGE, "-c", _VIDEO_GENERATOR, f"/out/{name}.mp4", str(frames), str(fps), str(width), str(height)],
+            text=True, capture_output=True, check=False, timeout=300,
+        )
+        if result.returncode:
+            raise SystemExit(result.stderr or result.stdout or "video generation failed")
+        (root / f"{name}.txt").write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
+        rows.append({"id": name, "files": [{"type": "file", "role": "target", "path": f"{name}.mp4"}], "caption": _caption(f"{name}.txt")})
+    _write_manifest(root, dataset_id, rows)
 
 
 _CREATORS = {
     IMAGE_DATASET: _create_image_dataset,
+    BUCKET_DATASET: _create_bucket_dataset,
     CONTROL_DATASET: _create_control_dataset,
     VIDEO_DATASET: _create_video_dataset,
     FPS30_VIDEO_DATASET: lambda root, dataset_id: _create_video_dataset(root, dataset_id, frames=45, fps=30.0),
+    VIDEO_BUCKET_DATASET: lambda root, dataset_id: _create_video_dataset(root, dataset_id, sizes=BUCKET_SIZES),
 }
 
 
@@ -397,22 +436,27 @@ def ensure_dataset(workspace: Path, dataset_id: str) -> str:
     return "created"
 
 
+def _kura_argv(*args: str) -> list[str]:
+    # --project runs this checkout's Kura from any workspace.
+    return ["uv", "run", "--project", str(REPO), "kura", *args]
+
+
 def _kura(workspace: Path, *args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "KURA_NOTIFY": "none"}
-    return subprocess.run(["uv", "run", "kura", *args], cwd=workspace, text=True, capture_output=True, check=False, env=env, timeout=timeout)
+    return subprocess.run(_kura_argv(*args), cwd=workspace, text=True, capture_output=True, check=False, env=env, timeout=timeout)
 
 
-def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None) -> dict[str, Any]:
+def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, steps: int = 1, intent: str | None = None) -> dict[str, Any]:
     """The run.yaml fields a smoke owns; everything else comes from `kura run new`."""
     config = json.loads(json.dumps(smoke.config))
     if smoke.dataset_options:
         config["dataset_options"] = json.loads(json.dumps(smoke.dataset_options))
     return {
-        "intent": f"Real one-step {smoke.backend} smoke of {smoke.architecture} through the manifest-v2 handoff ({smoke_id}). Not a quality run.",
+        "intent": intent or f"Real one-step {smoke.backend} smoke of {smoke.architecture} through the manifest-v2 handoff ({smoke_id}). Not a quality run.",
         "backend": {"name": smoke.backend, "adapter_version": 1, "config": config},
         "model": {"base": smoke.model_base, "revision": None},
         "datasets": [{"id": smoke.dataset}],
-        "recipe": {"steps": 1, "seed": 1},
+        "recipe": {"steps": steps, "seed": 1},
         "compute": {
             "executor": smoke.executor,
             "gpu": gpu or smoke.gpu,
@@ -428,19 +472,28 @@ def prepare(workspace: Path, smoke_id: str, *, gpu: str | None = None) -> str:
     if gpu and smoke.executor != "runpod":
         raise SystemExit(f"{smoke_id} runs on {smoke.executor}; --gpu selects a RunPod GPU type")
     ensure_dataset(workspace, smoke.dataset)
-    created = _kura(workspace, "run", "new", "--experiment", "real-smoke", "--slug", smoke_id, "--backend", smoke.backend, "--executor", smoke.executor, "--gpu", gpu or smoke.gpu)
+    return _create_run(workspace, "real-smoke", smoke_id, replace(smoke, gpu=gpu or smoke.gpu), build_run_fields(smoke_id, smoke, gpu=gpu))
+
+
+def _create_run(workspace: Path, experiment: str, slug: str, smoke: Smoke, fields: dict[str, Any]) -> str:
+    """Create a run with `kura run new`, set the fields the harness owns, and compile it."""
+    created = _kura(workspace, "run", "new", "--experiment", experiment, "--slug", slug, "--backend", smoke.backend, "--executor", smoke.executor, "--gpu", smoke.gpu)
     match = re.search(r"([0-9]{8}-[0-9]{4}_[a-z0-9-]+_[0-9a-f]{4})", created.stdout + created.stderr)
     if created.returncode or match is None:
-        raise SystemExit(f"kura run new failed for {smoke_id}:\n{created.stdout}{created.stderr}")
+        raise SystemExit(f"kura run new failed for {slug}:\n{created.stdout}{created.stderr}")
     run_id = match.group(1)
     run_path = workspace / "runs" / run_id / "run.yaml"
     run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
-    run.update(build_run_fields(smoke_id, smoke, gpu=gpu))
+    run.update(fields)
     run_path.write_text(yaml.safe_dump(run, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    _compile(workspace, run_id)
+    return run_id
+
+
+def _compile(workspace: Path, run_id: str) -> None:
     compiled = _kura(workspace, "run", "compile", run_id)
     if compiled.returncode:
-        raise SystemExit(f"{smoke_id} ({run_id}) does not compile:\n{compiled.stdout}{compiled.stderr}")
-    return run_id
+        raise SystemExit(f"{run_id} does not compile:\n{compiled.stdout}{compiled.stderr}")
 
 
 _LOSS = re.compile(r"(?:\bloss:\s*|\bavr_loss=|\bloss=)([+-]?(?:nan|inf(?:inity)?|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?))", re.IGNORECASE)
@@ -501,7 +554,6 @@ def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, 
         "adapter_source": {"kind": realization["adapter_source"]["kind"], "value": realization["adapter_source"]["value"]},
     }
     if smoke.executor == "runpod":
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
         from kura.provenance import executor_source_identity
 
         native["transfer"] = "selected-files"
@@ -533,6 +585,458 @@ def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, 
     return record, summary
 
 
+# Conformance: the fixed scenario of docs/adr/promises-and-verification.md, section 2.
+#
+# Every step count below is chosen so the checks need no trainer arithmetic beyond
+# `expected_saves`: each Resume starts on a multiple of the cadence, so a trainer that
+# counts its Resume from zero saves on the same logical steps as one that continues the
+# logical count; the bucket dataset has three items, so at batch size 1 an epoch is three
+# steps, its split run passes the first epoch boundary, and its target is not a multiple
+# of three.
+CADENCE = 2
+KEEP_GENERATIONS = 2  # Kura's default `recovery.training_state.keep_generations`; the scenario leaves it unset.
+PROMISES = ("P1", "P2", "P3", "P4", "P6", "P7", "P8")
+
+
+@dataclass(frozen=True)
+class ScenarioRun:
+    key: str
+    dataset: str  # "one" item or "multi" items in buckets; `conformance_datasets` names them per backend
+    steps: int  # a fresh run's recipe steps, or a Resume's target step
+    resume_of: str | None = None
+
+
+SCENARIO = (
+    ScenarioRun("one-control", "one", 4),
+    ScenarioRun("one-control-2", "one", 4),
+    ScenarioRun("one-split", "one", 2),
+    ScenarioRun("one-resume", "one", 4, resume_of="one-split"),
+    ScenarioRun("multi-fresh", "multi", 7),
+    ScenarioRun("multi-split", "multi", 4),
+    ScenarioRun("multi-resume", "multi", 7, resume_of="multi-split"),
+)
+# A Resume and the uninterrupted runs it is checked against (P3, `resume_problems`): two
+# controls on one item, whose learned state the Resume must equal when they equal each
+# other; one on several, whose step count and scheduler it must equal.
+COMPARISONS = {"one-resume": ("one-control", "one-control-2"), "multi-resume": ("multi-fresh",)}
+# Compares weights and optimizers by value inside a run's trainer image; see its docstring.
+COMPARE_VALUES = Path(__file__).resolve().with_name("compare_state_values.py")
+LEARNED_FILES = ("model.safetensors", "optimizer.bin", "optimizer.pt")
+
+SD15 = _download("Comfy-Org/stable-diffusion-v1-5-archive", "v1-5-pruned-emaonly-fp16.safetensors", "ce8e3e3657a9b767b33fc0171ff91fb04aed1b2f")
+# Wan 2.1 T2V 1.3B is Musubi Tuner's smallest supported model (DiT 2.8 GB, VAE 0.25 GB, T5 11 GB).
+WAN_1_3B = {
+    "dit": _download("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/diffusion_models/wan2.1_t2v_1.3B_bf16.safetensors", "123acf1cc74bccbb9bfff8ac1ee72edc08c2341d"),
+    "vae": _download("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/vae/wan_2.1_vae.safetensors", "123acf1cc74bccbb9bfff8ac1ee72edc08c2341d"),
+    "t5": _download("Wan-AI/Wan2.1-I2V-14B-720P", "models_t5_umt5-xxl-enc-bf16.pth", "8823af45fcc58a8aa999a54b04be9abc7d2aac98"),
+}
+
+
+def conformance_datasets(backend: str) -> dict[str, str]:
+    # Kura projects Musubi Tuner's Wan text-to-video task from videos only; one frame of each is trained.
+    if backend == "musubi-tuner":
+        return {"one": VIDEO_DATASET, "multi": VIDEO_BUCKET_DATASET}
+    return {"one": IMAGE_DATASET, "multi": BUCKET_DATASET}
+
+
+def conformance_smoke(backend: str, kind: str) -> Smoke:
+    """The one small model per backend, training its `kind` ("one" or "multi") dataset with a save cadence."""
+    dataset = conformance_datasets(backend)[kind]
+    if backend == "sd-scripts":
+        config = {
+            "architecture": "sd15", "mode": "lora", "model_downloads": {"base": SD15},
+            "dataset_config": _sd_scripts_dataset(dataset, resolution=256),
+            "learning_rate": 1e-4, "optimizer_type": "AdamW8bit", "mixed_precision": "bf16",
+            "network_dim": 4, "network_alpha": 1, "save_every_n_steps": CADENCE,
+        }
+        return Smoke(backend, "sd15", SD15["repo"], dataset, config, executor="docker", gpu="gpu", expected_script="train_network.py")
+    if backend == "ai-toolkit":
+        smoke = SMOKES["ai-toolkit-sd1"]
+        return replace(smoke, dataset=dataset, config={**smoke.config, "save_every_n_steps": CADENCE})
+    if backend == "musubi-tuner":
+        config = {"architecture": "wan", "task": "t2v-1.3B", **_MUSUBI_COMMON, "save_every_n_steps": CADENCE, "fp8_t5": True, "model_downloads": WAN_1_3B}
+        return Smoke(
+            backend, "wan", "Comfy-Org/Wan_2.1_ComfyUI_repackaged", dataset, config, executor="docker", gpu="gpu",
+            expected_script="wan_train_network.py", dataset_options={dataset: dict(_VIDEO_ONE_FRAME)},
+        )
+    raise ValueError(f"no conformance model for {backend}")
+
+
+CONFORMANCE_BACKENDS = ("sd-scripts", "ai-toolkit", "musubi-tuner")
+
+
+def expected_saves(backend: str, start: int, end: int, cadence: int) -> list[tuple[int, int | None]]:
+    """The weight files a run from logical step `start` to `end` saves at `cadence`: (the
+    optimizer steps the file holds, the step its name carries, None for the final weights).
+
+    Trainer facts, read in the pinned images: sd-scripts (train_network.py) and Musubi Tuner
+    (training/trainer_base.py) add 1 to `global_step` after each update and save
+    `<name>-step%08d` when `global_step % save_every_n_steps == 0`. AI-Toolkit
+    (jobs/process/BaseSDTrainProcess.py) loops over step indices from its start step, saves
+    after that index's update when `step_num % save_every == 0`, never on the index it
+    started at, and names the file `<name>_%09d` by the index, so the file at index i holds
+    i + 1 updates. Every trainer writes its final weights, unnamed, at the end.
+    """
+    if backend == "ai-toolkit":
+        saves: list[tuple[int, int | None]] = [(index + 1, index) for index in range(start + 1, end) if index % cadence == 0]
+    else:
+        saves = [(step, step) for step in range(start + 1, end + 1) if step % cadence == 0]
+    return [*saves, (end, None)]
+
+
+def expected_state_steps(saves: list[tuple[int, int | None]], keep: int = KEEP_GENERATIONS) -> list[int]:
+    """The training-state steps left published: the newest `keep` steps the run saved at."""
+    return sorted({step for step, _ in saves})[-keep:]
+
+
+class _PlainUnpickler(pickle.Unpickler):
+    """Reads a pickle of plain Python values only; anything else is refused, never imported."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        raise pickle.UnpicklingError(f"not a plain value: {module}.{name}")
+
+    def persistent_load(self, pid: Any) -> Any:
+        raise pickle.UnpicklingError("holds a tensor")
+
+
+def _archive_members(path: Path) -> dict[str, bytes]:
+    """A torch.save archive's members by name below its top folder, without its per-save ID."""
+    with zipfile.ZipFile(path) as archive:
+        return {name.split("/", 1)[-1]: archive.read(name) for name in archive.namelist() if not name.endswith("serialization_id")}
+
+
+def _plain_archive(path: Path) -> Any:
+    members = _archive_members(path)
+    return _PlainUnpickler(io.BytesIO(members["data.pkl"])).load()
+
+
+def state_counters(payload: Path) -> dict[str, Any]:
+    """The optimizer-step counts a training-state payload records: the trainer's state file,
+    Kura's step marker, and the scheduler's step count; a counter it cannot read is a message."""
+    counters: dict[str, Any] = {}
+    for name, key in (("train_state.json", "current_step"), ("kura-state-info.json", "logical_step"), ("state-info.json", "logical_step")):
+        if (payload / name).is_file():
+            counters[f"{name}:{key}"] = json.loads((payload / name).read_text(encoding="utf-8")).get(key)
+    if (payload / "scheduler.bin").is_file():
+        try:
+            counters["scheduler.bin:last_epoch"] = _plain_archive(payload / "scheduler.bin").get("last_epoch")
+        except (KeyError, zipfile.BadZipFile, pickle.UnpicklingError, AttributeError) as exc:
+            counters["scheduler.bin:last_epoch"] = f"unreadable ({exc})"
+    return counters
+
+
+def compare_values(image: str, first: Path, second: Path, names: list[str]) -> dict[str, list[int]]:
+    """Each named file's [differing, total] value leaves in two payloads, compared by
+    `compare_state_values.py` in `image`, the run's pinned trainer image (it has torch),
+    with no network and everything mounted read-only."""
+    argv = [
+        "docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+        "-v", f"{first.resolve()}:/a:ro", "-v", f"{second.resolve()}:/b:ro", "-v", f"{COMPARE_VALUES.parent}:/c:ro",
+        image, "-I", f"/c/{COMPARE_VALUES.name}", "/a", "/b", *names,
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise RuntimeError((result.stderr or result.stdout).strip()[-500:] or f"exit code {result.returncode}")
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+CANNOT_COMPARE = "cannot compare values in the trainer image"
+
+
+def compare_states(first: Path, second: Path, *, image: str | None = None) -> list[str]:
+    """How two final training states differ: their step counts and scheduler, and with
+    `image` (the run's pinned trainer image) the values of their weights and optimizer
+    too. RNG state is not compared: Kura does not claim its exact position."""
+    counters = state_counters(second)
+    differences = [f"{name}: {value} vs {counters.get(name)}" for name, value in state_counters(first).items() if value != counters.get(name)]
+    by_value = []
+    for name in ["scheduler.bin", *(LEARNED_FILES if image else ())]:
+        left, right = first / name, second / name
+        if not left.is_file() and not right.is_file():
+            continue
+        if not (left.is_file() and right.is_file()):
+            differences.append(f"{name}: present in only one state")
+        elif name != "scheduler.bin":
+            by_value.append(name)
+        else:
+            # A scheduler holds plain values, so its pickle is the same when they are.
+            a, b = _archive_members(left), _archive_members(right)
+            changed = sorted(key for key in a.keys() | b.keys() if a.get(key) != b.get(key))
+            if changed:
+                differences.append(f"{name}: {len(changed)} of {len(a.keys() | b.keys())} entries differ")
+    if by_value and image:
+        try:
+            counts = compare_values(image, first, second, by_value)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return [*differences, f"{CANNOT_COMPARE}: {exc}"]
+        differences += [f"{name}: {changed} of {total} entries differ" for name, (changed, total) in counts.items() if changed]
+    return differences
+
+
+def resume_problems(resumed: Path, controls: list[Path], image: str) -> tuple[list[str], list[str]]:
+    """P3 for a Resume's final state against its uninterrupted controls' final states:
+    (failures, informational notes). The Resume must equal the first control in step
+    counts and scheduler; in learned state too when there are two controls and they equal
+    each other. Controls that differ (a nondeterministic trainer) leave exactness uncheckable;
+    a value comparison that could not run fails."""
+    if len(controls) < 2:
+        return compare_states(resumed, controls[0]), []
+    between_controls = compare_states(controls[1], controls[0], image=image)
+    broken = [difference for difference in between_controls if difference.startswith(CANNOT_COMPARE)]
+    if broken:
+        # A comparison that did not run says nothing about the trainer; it is a failure.
+        return broken, []
+    if between_controls:
+        return compare_states(resumed, controls[0]), ["controls differ: exact Resume not checkable"]
+    return compare_states(resumed, controls[0], image=image), []
+
+
+def _run_states(workspace: Path, run_id: str) -> dict[int, tuple[dict[str, Any], Path]]:
+    """The run's published training states by step, with their payload directories."""
+    states: dict[int, tuple[dict[str, Any], Path]] = {}
+    for path in sorted((workspace / "artifacts" / "training-state").glob("*/manifest.json")):
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        if manifest.get("source_run") == run_id:
+            states[manifest["observed_step"]] = (manifest, path.parent / "payload")
+    return states
+
+
+def _weights(run_dir: Path, outputs: list[Any]) -> list[Path]:
+    """A run's recorded weight files relative to its outputs directory, as Kura counts checkpoints."""
+    paths = [Path(str(item)) for item in outputs if str(item).endswith(".safetensors")]
+    found = checkpoint_files([path.relative_to("outputs") for path in paths if path.parts[:1] == ("outputs",)], run_dir.name)
+    return [*found.stepped, *found.final]
+
+
+def _env_lock(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "resolved" / "env.lock"
+    return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else {}
+
+
+def _image_digest(reference: Any) -> str | None:
+    """The content digest an image reference names: `name@sha256:<d>`, or a bare image ID."""
+    if not isinstance(reference, str):
+        return None
+    if reference.startswith("sha256:"):
+        return reference
+    return image_reference_identity(reference)["pinning"].get("value")
+
+
+def check_run(workspace: Path, run_id: str, backend: str, start: int, end: int, cadence: int = CADENCE) -> dict[str, list[str]]:
+    """Check one finished run against P1, P2, P4, P6, and P7; each promise maps to its failures."""
+    run_dir = workspace / "runs" / run_id
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    problems: dict[str, list[str]] = {"P1": [], "P2": [], "P4": [], "P7": []}
+    states = _run_states(workspace, run_id)
+    saves = expected_saves(backend, start, end, cadence)
+
+    if status.get("state") != "completed" or status.get("exit_code") != 0:
+        problems["P1"].append(f"ended {status.get('state')} with exit code {status.get('exit_code')}")
+    if status.get("last_step") != end:
+        problems["P1"].append(f"status last_step {status.get('last_step')}, expected {end}")
+    if end not in states:
+        problems["P1"].append(f"no training state published at step {end}")
+
+    names = sorted((checkpoint_step(path.name) for path in _weights(run_dir, status.get("outputs") or [])), key=lambda step: -1 if step is None else step)
+    wanted = sorted((name for _, name in saves), key=lambda step: -1 if step is None else step)
+    if names != wanted:
+        problems["P2"].append(f"weight file steps {names}, expected {wanted} (None is the final weights)")
+    if sorted(states) != expected_state_steps(saves):
+        problems["P2"].append(f"published state steps {sorted(states)}, expected {expected_state_steps(saves)}")
+    for step, (manifest, payload) in sorted(states.items()):
+        if not str(manifest.get("id")).startswith(f"state-step-{step:08d}-"):
+            problems["P2"].append(f"state {manifest.get('id')} is named for another step than {step}")
+        for counter, value in state_counters(payload).items():
+            if value != step:
+                problems["P2"].append(f"state at step {step} records {counter} = {value}")
+
+    postflight = status.get("dataset_input_postflight") if isinstance(status.get("dataset_input_postflight"), dict) else {}
+    if postflight.get("status") != "matched":
+        problems["P4"].append(f"dataset input postflight {postflight.get('status')}")
+    env_lock = _env_lock(run_dir)
+    realization_path = run_dir / str(status.get("last_realization"))
+    realization = json.loads(realization_path.read_text(encoding="utf-8")) if realization_path.is_file() else {}
+    used = (realization.get("image_identity") or {}).get("reference")
+    # The compiled image is its reference's digest, or the image ID compile observed for it,
+    # which a local Resume launches by.
+    observed = (env_lock.get("selected_image_identity") or {}).get("pinning") or {}
+    compiled = {_image_digest(env_lock.get("selected_image")), observed.get("value") if observed.get("strength") == "content-hash" else None} - {None}
+    if _image_digest(used) not in compiled:
+        problems["P4"].append(f"ran image {used}, compiled for {env_lock.get('selected_image')}")
+
+    if status.get("publication_state") != "completed":
+        problems["P7"].append(f"publication {status.get('publication_state')}")
+    missing = [str(item) for item in status.get("outputs") or [] if not (run_dir / str(item)).exists()]
+    if missing or not status.get("outputs"):
+        problems["P7"].append(f"recorded outputs missing: {missing or 'none recorded'}")
+    if status.get("host") == "runpod":
+        problems["P6"] = [] if isinstance(status.get("pod_stopped_at"), str) else ["no pod_stopped_at recorded"]
+    return problems
+
+
+def disk_problems(peak: dict[str, int], estimate: dict[str, Any]) -> list[str]:
+    """P8: the checkpoints on disk at once never exceed the launch estimate."""
+    problems = []
+    if peak["count"] > estimate.get("count", 0):
+        problems.append(f"{peak['count']} checkpoint files at once, estimated {estimate.get('count')}")
+    if peak["bytes"] > estimate.get("bytes", 0):
+        problems.append(f"{peak['bytes']} checkpoint bytes at once, estimated {estimate.get('bytes')}")
+    return problems
+
+
+def _checkpoint_estimate(run_dir: Path) -> dict[str, Any]:
+    from kura.run_commands.plan import _estimate_checkpoint_write_bytes
+
+    return _estimate_checkpoint_write_bytes(yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")))
+
+
+def _sample_peak(run_dir: Path, peak: dict[str, int]) -> None:
+    outputs = run_dir / "outputs"
+    sizes = 0
+    # A hidden directory is a training state being staged, not a checkpoint.
+    paths = [path.relative_to(outputs) for path in outputs.rglob("*.safetensors")] if outputs.is_dir() else []
+    weights = checkpoint_files([path for path in paths if not any(part.startswith(".") for part in path.parts)], run_dir.name)
+    files = [*weights.stepped, *weights.final]
+    for path in files:
+        try:
+            sizes += (outputs / path).stat().st_size
+        except OSError:
+            pass
+    peak["count"] = max(peak["count"], len(files))
+    peak["bytes"] = max(peak["bytes"], sizes)
+
+
+def _execute(workspace: Path, run_id: str, *, runpod: bool) -> tuple[int, dict[str, int], str]:
+    """`kura run execute`, sampling the checkpoints on local disk while it runs."""
+    run_dir = workspace / "runs" / run_id
+    peak = {"count": 0, "bytes": 0}
+    env = {**os.environ, "KURA_NOTIFY": "none"}
+    with tempfile.TemporaryFile("w+", encoding="utf-8") as log:
+        process = subprocess.Popen(_kura_argv("run", "execute", run_id, *(["--yes"] if runpod else [])), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        while process.poll() is None:
+            _sample_peak(run_dir, peak)
+            time.sleep(0.5)
+        _sample_peak(run_dir, peak)
+        log.seek(0)
+        return process.returncode, peak, log.read()[-3000:]
+
+
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
+def _cache_state(hf_cache: Path, smoke: Smoke) -> str:
+    """Whether the backend's model files are already in the workspace's Hugging Face cache."""
+    downloads = smoke.config.get("model_downloads") or {}
+    if not downloads:
+        repo = hf_cache / "hub" / f"models--{smoke.model_base.replace('/', '--')}"
+        return "cached" if repo.is_dir() else "not cached (downloaded at launch)"
+    parts = []
+    for role, item in sorted(downloads.items()):
+        path = hf_cache / "hub" / f"models--{item['repo'].replace('/', '--')}" / "snapshots" / item["revision"] / item["filename"]
+        parts.append(f"{role} {path.stat().st_size / 1e9:.2f} GB cached" if path.is_file() else f"{role} NOT cached (downloaded at launch)")
+    return ", ".join(parts)
+
+
+def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str, yes: bool) -> int:
+    if workspace.resolve() == REPO.resolve():
+        raise SystemExit("conformance creates runs; give it a separate workspace (`kura init` one), not this checkout")
+    if not (workspace / "workspace.yaml").is_file():
+        raise SystemExit(f"{workspace} is not a Kura workspace; create it with `kura init`")
+    if runpod and len(backends) != 1:
+        raise SystemExit("the RunPod pass runs one backend; name it with --backend")
+    config = yaml.safe_load((workspace / "workspace.yaml").read_text(encoding="utf-8")) or {}
+    hf_cache = local_hf_cache(workspace, config)
+    print(f"Conformance plan: workspace {workspace}, executor {'runpod (' + gpu + ')' if runpod else 'local Docker'}, Hugging Face cache {hf_cache}")
+    for backend in backends:
+        smoke = conformance_smoke(backend, "one")
+        print(f"  {backend:13} {smoke.architecture:5} {smoke.model_base}: {_cache_state(hf_cache, smoke)}")
+    datasets = sorted({dataset for backend in backends for dataset in conformance_datasets(backend).values()})
+    print("  runs per backend, in order: " + "; ".join(f"{run.key} {'Resume to ' if run.resume_of else ''}{run.steps} steps" for run in SCENARIO))
+    print(f"  datasets {', '.join(datasets)} (1 item, or 3 items in 3 buckets): created when absent, never rewritten")
+    if not runpod and not yes:
+        print("Nothing launched. Add --yes to run it.")
+        return 0
+
+    digests = {}
+    for dataset in datasets:
+        ensure_dataset(workspace, dataset)
+        digests[dataset] = _tree_digest(workspace / "datasets" / dataset)
+    table: dict[str, dict[str, list[str] | None]] = {}
+    notes: list[str] = []
+    for backend in backends:
+        results: dict[str, list[str] | None] = {promise: None for promise in PROMISES}
+        def fail(promise: str, messages: list[str], key: str) -> None:
+            results[promise] = (results[promise] or []) + [f"{key}: {message}" for message in messages]
+        ids: dict[str, str] = {}
+        for run in SCENARIO:
+            smoke = conformance_smoke(backend, run.dataset)
+            if runpod:
+                smoke = replace(smoke, executor="runpod", gpu=gpu)
+            slug = f"conf-{backend.split('-')[0]}-{run.key}"
+            if run.resume_of is None:
+                intent = f"Kura conformance ({run.key}) of {backend}; checks promises, not quality."
+                ids[run.key] = _create_run(workspace, "conformance", slug, smoke, build_run_fields(slug, smoke, steps=run.steps, intent=intent))
+            elif run.resume_of in ids:
+                created = _kura(workspace, "run", "resume", ids[run.resume_of], "--to-step", str(run.steps), "--slug", slug)
+                if created.returncode:
+                    fail("P3", [f"cannot create the Resume: {created.stderr.strip()}"], run.key)
+                    continue
+                ids[run.key] = created.stdout.strip().splitlines()[-1]
+                _compile(workspace, ids[run.key])
+            else:
+                fail("P3", ["its source run did not complete"], run.key)
+                continue
+            run_id = ids[run.key]
+            if runpod and len(ids) == 1:
+                plan = _kura(workspace, "run", "plan", run_id).stdout
+                print("\n".join(line for line in plan.splitlines() if "cost_ceiling" in line or "max_lease" in line))
+                print(f"  this pass starts {len(SCENARIO)} Pods one after another, each bounded by that ceiling")
+                if not yes:
+                    print(f"Nothing launched. Add --yes to run it, or remove the compiled run with `kura run discard {run_id} --yes`.")
+                    return 0
+            print(f"{backend} {run.key}: executing {run_id}", flush=True)
+            code, peak, log = _execute(workspace, run_id, runpod=runpod)
+            if code:
+                print(log)
+                fail("P1", [f"kura run execute exited {code}"], run.key)
+                del ids[run.key]
+                continue
+            source = next((item for item in SCENARIO if item.key == run.resume_of), None)
+            for promise, messages in check_run(workspace, run_id, backend, source.steps if source else 0, run.steps).items():
+                fail(promise, messages, run.key)
+            if not runpod:
+                fail("P8", disk_problems(peak, _checkpoint_estimate(workspace / "runs" / run_id)), run.key)
+        for resumed, controls in COMPARISONS.items():
+            if all(key in ids for key in (resumed, *controls)):
+                steps = next(item.steps for item in SCENARIO if item.key == resumed)
+                states = [_run_states(workspace, ids[key]).get(steps) for key in (resumed, *controls)]
+                if None in states:
+                    fail("P3", ["final state missing"], resumed)
+                    continue
+                image = str(_env_lock(workspace / "runs" / ids[resumed]).get("selected_image"))
+                failures, informational = resume_problems(states[0][1], [state[1] for state in states[1:]], image)
+                fail("P3", failures, resumed)
+                notes += [f"{backend} P3 {resumed}: {note} (informational)" for note in informational]
+        fail("P7", [f"dataset {dataset} changed" for dataset, digest in digests.items() if _tree_digest(workspace / "datasets" / dataset) != digest], "datasets")
+        table[backend] = results
+
+    print("\n" + f"{'promise':8}" + "".join(f"{backend:14}" for backend in backends))
+    for promise in PROMISES:
+        print(f"{promise:8}" + "".join(f"{('-' if table[b][promise] is None else 'FAIL' if table[b][promise] else 'pass'):14}" for b in backends))
+    for backend in backends:
+        for promise in PROMISES:
+            for message in table[backend][promise] or []:
+                print(f"{backend} {promise} {message}")
+    for note in notes:
+        print(note)
+    return 1 if any(table[b][p] for b in backends for p in PROMISES) else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -545,7 +1049,15 @@ def main() -> int:
     evidence_parser = commands.add_parser("evidence", help="Print evidence records for verified runs")
     evidence_parser.add_argument("--artifact", required=True, help="Path under docs/ of the campaign smoke-evidence file")
     evidence_parser.add_argument("run_id", nargs="+")
+    conformance_parser = commands.add_parser("conformance", help="Run the promise conformance scenario in a separate workspace; prints its plan unless --yes")
+    conformance_parser.add_argument("--workspace", required=True, type=Path, help="A Kura workspace for the conformance runs, never this checkout")
+    conformance_parser.add_argument("--backend", action="append", choices=CONFORMANCE_BACKENDS, help="Only this backend (repeatable); default all")
+    conformance_parser.add_argument("--runpod", action="store_true", help="The billed RunPod pass of one backend; shows the cost ceiling first")
+    conformance_parser.add_argument("--gpu", default=A40, help="RunPod GPU type for --runpod")
+    conformance_parser.add_argument("--yes", action="store_true", help="Launch the runs after showing the plan")
     args = parser.parse_args()
+    if args.command == "conformance":
+        return conformance(args.workspace.resolve(), args.backend or list(CONFORMANCE_BACKENDS), runpod=args.runpod, gpu=args.gpu, yes=args.yes)
     workspace = Path.cwd()
     if not (workspace / "workspace.yaml").is_file():
         raise SystemExit("run from a Kura workspace root")

@@ -86,6 +86,10 @@ reviewer the diff and the relevant ADRs, not your explanation. Before a
 milestone or release, a context-free agent installs Kura and does a user task
 from the shipped docs alone, and reports where it stumbled.
 
+**7. Promises are the checklist.** Kura's promises to its users are listed once,
+as P1–P11 in `docs/adr/promises-and-verification.md`. A design names the
+promises it touches; breaking one is a bug.
+
 ## Boundaries
 
 - Backends compile native configuration and container command specs; they never
@@ -132,8 +136,8 @@ replaces any delegation given earlier in a conversation or in memory.
 1. **Name the decisions.** Say which decisions the change touches and find
    every place that makes them today (search the code, not your memory).
 2. **Write the design.** Five to fifteen lines: what decides it, the owner
-   function, the copies that go away, the behavior that changes, the tests that
-   show it, and why this is the simplest form (the accident it prevents, the
+   function, the copies that go away, the promises it touches, the behavior
+   that changes, the tests that show it, and why this is the simplest form (the accident it prevents, the
    simpler option considered, and why that falls short). If it needs more, split it, or it needs an ADR. Show it to the
    maintainer and wait. Until it is approved, do not implement it; write other
    designs or stop, and never take silence for approval. An approved design is
@@ -146,13 +150,22 @@ replaces any delegation given earlier in a conversation or in memory.
    request; if that changes behavior the maintainer did not approve, show the
    updated design again before pushing. A different decision gets its own
    design.
-4. **Review before the pull request.** Run the release gate. For a change to
-   behavior or records, also give a reviewer with none of your context the
+4. **Review before the pull request.** Run the release gate. A change that
+   touches training state, Resume, saving, checkpoint naming, step accounting,
+   model or dataset handoff, or an image or trainer pin also runs the
+   conformance scenario (Validation, below) and reports its table. For a change
+   to behavior or records, also give a reviewer with none of your context the
    design and the whole branch diff (principle 6), and fix what it finds on
    the same branch.
 5. **Open one pull request**, ready for review. Its body states the design,
    `Owner:` (the function), `Copies removed:` (or none), `Behavior changed:`,
-   validation, and risks. CodeRabbit reviews it there. The maintainer merges.
+   the promises touched, validation, and risks. CodeRabbit reviews it there.
+   The maintainer merges.
+
+Each review, the context-free one and the pull request's, is one round:
+Critical and Major findings are fixed, and only the fixed part is checked
+again. Minor and Nit findings, and pre-existing issues a review happens to
+find, go to `docs/backlog.md` and are fixed later in one batch pull request.
 
 A change with no design (step 2's exceptions) still goes on a branch and into a
 pull request; pushing it needs the maintainer's go-ahead. Findings from an
@@ -201,3 +214,12 @@ uv run python scripts/check_release.py
 
 Stage new files before running it: the secrets and artifact checks read tracked
 files.
+
+The conformance scenario trains real models on local Docker, so it runs only
+when step 4 or a release requires it and the maintainer has asked for the run.
+It needs a separate workspace (`kura init`, with `docker.hf_cache` set to the
+cache that holds the models); without `--yes` it only prints its plan:
+
+```sh
+uv run python scripts/real_smoke.py conformance --workspace <workspace> [--backend <name>] --yes
+```
