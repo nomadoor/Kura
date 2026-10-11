@@ -665,22 +665,18 @@ def conformance_smoke(backend: str, kind: str) -> Smoke:
 CONFORMANCE_BACKENDS = ("sd-scripts", "ai-toolkit", "musubi-tuner")
 
 
-def expected_saves(backend: str, start: int, end: int, cadence: int) -> list[tuple[int, int | None]]:
+def expected_saves(start: int, end: int, cadence: int) -> list[tuple[int, int | None]]:
     """The weight files a run from logical step `start` to `end` saves at `cadence`: (the
     optimizer steps the file holds, the step its name carries, None for the final weights).
 
     Trainer facts, read in the pinned images: sd-scripts (train_network.py) and Musubi Tuner
     (training/trainer_base.py) add 1 to `global_step` after each update and save
-    `<name>-step%08d` when `global_step % save_every_n_steps == 0`. AI-Toolkit
-    (jobs/process/BaseSDTrainProcess.py) loops over step indices from its start step, saves
-    after that index's update when `step_num % save_every == 0`, never on the index it
-    started at, and names the file `<name>_%09d` by the index, so the file at index i holds
-    i + 1 updates. Every trainer writes its final weights, unnamed, at the end.
+    `<name>-step%08d` when `global_step % save_every_n_steps == 0`; Kura's AI-Toolkit patch
+    (docker/ai-toolkit/patches/0001-save-by-completed-updates.patch) saves and names
+    `<name>_%09d` by the completed updates the same way. Every trainer writes its final
+    weights, unnamed, at the end.
     """
-    if backend == "ai-toolkit":
-        saves: list[tuple[int, int | None]] = [(index + 1, index) for index in range(start + 1, end) if index % cadence == 0]
-    else:
-        saves = [(step, step) for step in range(start + 1, end + 1) if step % cadence == 0]
+    saves: list[tuple[int, int | None]] = [(step, step) for step in range(start + 1, end + 1) if step % cadence == 0]
     return [*saves, (end, None)]
 
 
@@ -822,13 +818,13 @@ def _image_digest(reference: Any) -> str | None:
     return image_reference_identity(reference)["pinning"].get("value")
 
 
-def check_run(workspace: Path, run_id: str, backend: str, start: int, end: int, cadence: int = CADENCE) -> dict[str, list[str]]:
+def check_run(workspace: Path, run_id: str, start: int, end: int, cadence: int = CADENCE) -> dict[str, list[str]]:
     """Check one finished run against P1, P2, P4, P6, and P7; each promise maps to its failures."""
     run_dir = workspace / "runs" / run_id
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     problems: dict[str, list[str]] = {"P1": [], "P2": [], "P4": [], "P7": []}
     states = _run_states(workspace, run_id)
-    saves = expected_saves(backend, start, end, cadence)
+    saves = expected_saves(start, end, cadence)
 
     if status.get("state") != "completed" or status.get("exit_code") != 0:
         problems["P1"].append(f"ended {status.get('state')} with exit code {status.get('exit_code')}")
@@ -1007,7 +1003,7 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
                 del ids[run.key]
                 continue
             source = next((item for item in SCENARIO if item.key == run.resume_of), None)
-            for promise, messages in check_run(workspace, run_id, backend, source.steps if source else 0, run.steps).items():
+            for promise, messages in check_run(workspace, run_id, source.steps if source else 0, run.steps).items():
                 fail(promise, messages, run.key)
             if not runpod:
                 fail("P8", disk_problems(peak, _checkpoint_estimate(workspace / "runs" / run_id)), run.key)
