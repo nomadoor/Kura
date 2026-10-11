@@ -400,7 +400,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             root = Path(directory)
             save_root = root / "outputs" / "source"
             save_root.mkdir(parents=True)
-            for name in ("source_000000001.safetensors", "source.safetensors"):
+            for name in ("source_000000002.safetensors", "source.safetensors"):
                 (save_root / name).write_text("same-weight", encoding="utf-8")
             saves = 0
 
@@ -430,7 +430,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
             with patch.dict(sys.modules, {"torch": torch}):
                 namespace["publish_generation"](
-                    process, 1, {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
+                    process, 2, {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
                 )
                 namespace["publish_generation"](
                     process, None, {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
@@ -466,15 +466,18 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 self.assertFalse(namespace["saved_states_equivalent"](existing, staged))
 
     @posix_only(POSIX_PATHS)
-    def test_ai_toolkit_runner_uses_completed_optimizer_updates_instead_of_stale_process_step(self) -> None:
+    def test_ai_toolkit_runner_refuses_a_step_save_not_named_by_its_completed_updates(self) -> None:
+        # The pinned image's patch 0001 names a step save by the optimizer updates it holds;
+        # upstream named it by the 0-based iteration index, one below. A save named 1 that
+        # holds 2 updates means the patch is missing, and no state is published from it.
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             save_root = root / "outputs" / "source"
             save_root.mkdir(parents=True)
-            weight = save_root / "source_000000001.safetensors"
-            weight.write_text("native-step-1", encoding="utf-8")
+            (save_root / "source_000000001.safetensors").write_text("native-step-1", encoding="utf-8")
+            (save_root / "source_000000002.safetensors").write_text("native-step-2", encoding="utf-8")
 
             torch = types.ModuleType("torch")
             torch.float32 = "torch.float32"
@@ -494,18 +497,86 @@ class TrainingStateArtifactTests(unittest.TestCase):
             namespace["safetensors_tensor_dtypes"] = lambda path: {"F32"}
             namespace["capture_rng_state"] = lambda torch: {"schema_version": 1}
             namespace["metadata_step"] = lambda path: int(Path(path).read_text(encoding="utf-8").rsplit("-", 1)[1])
+            spec = {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
 
             with patch.dict(sys.modules, {"torch": torch}):
-                namespace["publish_generation"](
-                    process,
-                    1,
-                    {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2},
-                )
+                with self.assertRaisesRegex(RuntimeError, "named for step 1 but holds 2 completed optimizer updates"):
+                    namespace["publish_generation"](process, 1, spec)
+                self.assertEqual(list((root / "outputs").glob("source-step*-state")), [])
+                namespace["publish_generation"](process, 2, spec)
 
             state = root / "outputs" / "source-step00000002-state"
             self.assertTrue(state.is_dir())
-            self.assertFalse((root / "outputs" / "source-step00000001-state").exists())
             self.assertEqual(json.loads((state / "state-info.json").read_text())["logical_step"], 2)
+
+    def test_ai_toolkit_runner_deletes_the_staged_resume_weight_once_it_is_loaded_and_verified(self) -> None:
+        # Kura stages the Resume weight as `<run>_<source step>` so AI-Toolkit loads it; once the
+        # trainer loaded it and Kura verified its weights and step, the copy is removed, so it is
+        # never collected as one of the run's checkpoints.
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+
+        class Base:
+            def load_weights(self, path):
+                return path
+
+            def save(self, step=None):
+                return step
+
+        class Trainer(Base):
+            def hook_before_train_loop(self):
+                return "prepared"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root / "payload"
+            payload.mkdir()
+            (payload / "model.safetensors").write_bytes(b"resume-fp32")
+            (payload / "optimizer.pt").write_bytes(b"optimizer")
+            spec = {
+                "run_id": "derived",
+                "state_root": str(root / "outputs"),
+                "resume": {"payload": str(payload), "source_step": 50, "rng_required": False},
+            }
+            staged = namespace["materialize_resume_source"](spec)
+            self.assertEqual(staged, (root / "outputs" / "derived" / "derived_000000050.safetensors").resolve())
+            self.assertEqual(staged.read_bytes(), b"resume-fp32")
+
+            torch = types.ModuleType("torch")
+            torch.load = lambda path, **kwargs: {"state": {0: {"step": 50}}}
+            modules = {
+                "torch": torch,
+                "extensions_built_in": types.ModuleType("extensions_built_in"),
+                "extensions_built_in.sd_trainer": types.ModuleType("extensions_built_in.sd_trainer"),
+                "extensions_built_in.sd_trainer.SDTrainer": types.ModuleType("extensions_built_in.sd_trainer.SDTrainer"),
+                "jobs": types.ModuleType("jobs"),
+                "jobs.process": types.ModuleType("jobs.process"),
+                "jobs.process.BaseSDTrainProcess": types.ModuleType("jobs.process.BaseSDTrainProcess"),
+            }
+            modules["extensions_built_in.sd_trainer.SDTrainer"].SDTrainer = Trainer
+            modules["jobs.process.BaseSDTrainProcess"].BaseSDTrainProcess = Base
+            with patch.dict(sys.modules, modules):
+                namespace["install_hooks"](spec, staged)
+
+            def process(step: int) -> types.SimpleNamespace:
+                return types.SimpleNamespace(
+                    _kura_loaded_weight=staged,
+                    step_num=step,
+                    start_step=step,
+                    network=types.SimpleNamespace(did_change_weights=False),
+                    save_root=str(staged.parent),
+                    optimizer=types.SimpleNamespace(param_groups=[{"lr": 1.0e-4}], load_state_dict=lambda state: None),
+                )
+
+            with patch.dict(sys.modules, {"torch": torch}):
+                # A trainer that did not restore the step keeps the copy for diagnosis.
+                with self.assertRaisesRegex(RuntimeError, "did not restore the compiled Resume step"):
+                    Trainer.hook_before_train_loop(process(0))
+                self.assertTrue(staged.is_file())
+                self.assertEqual(Trainer.hook_before_train_loop(process(50)), "prepared")
+            self.assertFalse(staged.exists())
+            self.assertTrue((staged.parent / "optimizer.pt").is_file())
+            self.assertTrue((payload / "model.safetensors").is_file())
 
     def test_ai_toolkit_runner_hard_fails_optimizer_before_original_train_hook(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}

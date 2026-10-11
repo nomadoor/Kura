@@ -58,6 +58,19 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn(f"git apply /tmp/kura-sd-scripts-patches/{name}", dockerfile)
         self.assertIn('io.kura.patch.resume-step="logical-global-step-v1"', dockerfile)
 
+    def test_ai_toolkit_image_names_step_saves_by_completed_updates(self) -> None:
+        # The state runner refuses a step save whose name is not the updates it holds; the
+        # image build applies the patch that names it so, and fails if it does not apply.
+        root = Path(__file__).resolve().parents[1]
+        name = "0001-name-step-saves-by-completed-updates.patch"
+        patch_text = (root / "docker/ai-toolkit/patches" / name).read_text(encoding="utf-8")
+        self.assertIn("-                        self.save(self.step_num)\n", patch_text)
+        self.assertIn("+                        self.save(self.step_num + 1)\n", patch_text)
+        dockerfile = (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"git apply --check /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.save-step="completed-updates-v1"', dockerfile)
+
     def test_sd_scripts_probe_fails_closed_for_each_checkpoint_loader(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("sd_scripts_probe.py"), namespace)

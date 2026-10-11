@@ -632,7 +632,9 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     recipe's steps. Every trainer writes an unpruned final file besides its step saves, so
     every save is the step saves plus one; the step saves end at the last step (sd-scripts and
     Musubi Tuner save on it too) or below it where the display declares `last_step_save:
-    final_only` (AI-Toolkit leaves the last step to its final file). With no step cadence only
+    final_only` (AI-Toolkit decides a save on its 0-based iteration index, so its multiples are
+    counted below the last step, which its final file holds; Kura's image names each save by
+    the updates it holds, one above that index). With no step cadence only
     the final file is counted; where the trainer saves at its own default
     (`trainer_default_saves`), those saves are not counted and no default is assumed. Pruning
     during training lowers the peak, never above every save: AI-Toolkit removes all but
