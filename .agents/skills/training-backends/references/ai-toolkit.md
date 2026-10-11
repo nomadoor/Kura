@@ -28,6 +28,21 @@ Use this reference only for `backend.name: ai-toolkit`.
   evidence.
 - Verify output and protected training state through Kura's wrapper rather than
   assuming upstream exit success implies publication success.
+- Upstream `BaseSDTrainProcess.py` saves after an iteration's optimizer update
+  but decided, named, and recorded (`training_info.step`) the save by the
+  0-based iteration index, so with `save_every: 100` `_100` held 101 updates.
+  The image applies `docker/ai-toolkit/patches/0001-save-by-completed-updates.patch`,
+  which saves when the completed updates are a multiple of `save_every` (the
+  last step and a Resume's first update included), names the file by them,
+  and records them as `training_info.step`; the plan counts saves as for the
+  other trainers, and the state runner (`container_scripts/ai_toolkit_state.py`)
+  refuses a step save whose name is not the optimizer's completed updates.
+  Runs from before the patch keep their names, which readers parse as written.
+  Re-check the hunks whenever the AI-Toolkit pin moves.
+- On Resume the runner stages the F32 source weight as `<run>_<source step>` in
+  the save root so AI-Toolkit loads it, then deletes that copy once the trainer
+  loaded it and Kura verified the weight, step, and optimizer before the first
+  update, so it is never collected as one of the run's checkpoints.
 
 Useful checks:
 

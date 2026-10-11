@@ -44,6 +44,52 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn("git apply --check", dockerfile)
         self.assertIn('io.kura.patch.symlink-safetensors="preserve-input-filename-v2"', dockerfile)
 
+    def test_sd_scripts_image_continues_the_logical_step_on_resume(self) -> None:
+        # The training-state contract says sd-scripts counts logical steps on Resume; the
+        # image build applies the patch that makes it so, and fails if it does not apply.
+        root = Path(__file__).resolve().parents[1]
+        name = "0002-resume-continues-the-logical-step.patch"
+        patch_text = (root / "docker/sd-scripts/patches" / name).read_text(encoding="utf-8")
+        self.assertIn("-            global_step = initial_step\n", patch_text)
+        self.assertIn("+            global_step = initial_step // args.gradient_accumulation_steps\n", patch_text)
+        self.assertIn("+            range(args.max_train_steps), initial=global_step,", patch_text)
+        dockerfile = (root / "docker/sd-scripts/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"git apply --check /tmp/kura-sd-scripts-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-sd-scripts-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.resume-step="logical-global-step-v1"', dockerfile)
+
+    def test_musubi_image_continues_the_logical_step_on_resume(self) -> None:
+        # The training-state contract says Musubi Tuner counts logical steps on Resume; the
+        # image build applies the patch that makes it so, and fails if it does not apply.
+        root = Path(__file__).resolve().parents[1]
+        name = "0001-resume-continues-the-logical-step.patch"
+        patch_text = (root / "docker/musubi-tuner/patches" / name).read_text(encoding="utf-8")
+        self.assertIn("-        progress_bar = tqdm(range(args.max_train_steps), smoothing=0,", patch_text)
+        self.assertIn('+            global_step = getattr(lr_scheduler, "scheduler", lr_scheduler).last_epoch // accelerator.num_processes\n', patch_text)
+        self.assertIn("+            num_train_epochs = math.ceil(max(args.max_train_steps - global_step, 0) / num_update_steps_per_epoch)\n", patch_text)
+        self.assertIn("+            range(args.max_train_steps), initial=global_step,", patch_text)
+        dockerfile = (root / "docker/musubi-tuner/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"git apply --check /tmp/kura-musubi-tuner-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-musubi-tuner-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.resume-step="logical-global-step-v1"', dockerfile)
+
+    def test_ai_toolkit_image_decides_names_and_records_step_saves_by_completed_updates(self) -> None:
+        # The state runner refuses a step save whose name is not the updates it holds; the
+        # image build applies the patch that names it so, and fails if it does not apply.
+        root = Path(__file__).resolve().parents[1]
+        name = "0001-save-by-completed-updates.patch"
+        patch_text = (root / "docker/ai-toolkit/patches" / name).read_text(encoding="utf-8")
+        self.assertIn("-                        self.save(self.step_num)\n", patch_text)
+        self.assertIn("+                        self.save(self.step_num + 1)\n", patch_text)
+        # The save is decided on completed updates, kept on the first iteration, and records them.
+        self.assertIn("+                is_save_step = self.save_config.save_every and (self.step_num + 1) % self.save_config.save_every == 0\n", patch_text)
+        self.assertIn("+                if not is_first_step or is_save_step:\n", patch_text)
+        self.assertIn('+            self.meta["training_info"]["step"] = step\n', patch_text)
+        dockerfile = (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"git apply --check /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.save-step="completed-updates-v1"', dockerfile)
+
     def test_sd_scripts_probe_fails_closed_for_each_checkpoint_loader(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("sd_scripts_probe.py"), namespace)
@@ -368,18 +414,19 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertNotEqual(baseline, changed)
 
-    def test_sd_scripts_adapter_identity_includes_training_state_runner(self) -> None:
-        baseline = adapter_source_identity("sd-scripts")["value"]
+    def test_accelerate_adapter_identities_include_the_training_state_runner(self) -> None:
         original = Path.read_bytes
 
         def changed_helper(path):
             payload = original(path)
-            return payload + (b"changed" if path.name == "sd_scripts_state.py" else b"")
+            return payload + (b"changed" if path.name == "accelerate_state.py" else b"")
 
-        with patch.object(Path, "read_bytes", changed_helper):
-            changed = adapter_source_identity("sd-scripts")["value"]
-
-        self.assertNotEqual(baseline, changed)
+        for backend in ("sd-scripts", "musubi-tuner"):
+            with self.subTest(backend=backend):
+                baseline = adapter_source_identity(backend)["value"]
+                with patch.object(Path, "read_bytes", changed_helper):
+                    changed = adapter_source_identity(backend)["value"]
+                self.assertNotEqual(baseline, changed)
 
     def test_container_scripts_compile(self) -> None:
         for name in (

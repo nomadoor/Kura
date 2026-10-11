@@ -1,0 +1,42 @@
+Kura: continue the logical step when Musubi Tuner resumes from a saved state.
+
+Upstream src/musubi_tuner/training/trainer_base.py (v0.3.5, commit
+4e7c714, lines 2050-2054) starts every run with `global_step = 0` and a progress bar
+from zero ("TODO skip until initial step"), also after `--resume` restored the model,
+optimizer, scheduler, and RNG (`accelerator.load_state`, ~496, called at ~1896).
+global_step names step checkpoints and states (~2242, ~2246), decides the save cadence
+(`global_step % args.save_every_n_steps`, ~2232), and stops training
+(`global_step >= args.max_train_steps`, ~2272). After a Resume this sets global_step to
+the step the restored scheduler counted (its `last_epoch`, stepped once per optimizer
+update on each process), starts the progress bar there out of max_train_steps, and runs
+only the epochs the remaining steps need (`num_train_epochs`, ~1928, counted the whole
+target; the loop breaks out of an epoch at max_train_steps but would start the next one
+and train another step). Data order is unchanged: the epoch restarts from its beginning.
+Kura's Musubi Tuner training-state contract (`native_progress: logical`) depends on this
+patch.
+
+diff --git a/src/musubi_tuner/training/trainer_base.py b/src/musubi_tuner/training/trainer_base.py
+--- a/src/musubi_tuner/training/trainer_base.py
++++ b/src/musubi_tuner/training/trainer_base.py
+@@ -2047,11 +2047,18 @@ class NetworkTrainer:
+                 init_kwargs=init_kwargs,
+             )
+ 
+-        # TODO skip until initial step
+-        progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
+-
+         epoch_to_start = 0
+         global_step = 0
++        if args.resume:
++            # Kura: continue the logical step the resumed scheduler restored (it steps once per
++            # update on each process). The epoch and data order still restart from the beginning,
++            # so run only the epochs the remaining steps need: the loop below breaks out of an
++            # epoch at max_train_steps but would start the next one.
++            global_step = getattr(lr_scheduler, "scheduler", lr_scheduler).last_epoch // accelerator.num_processes
++            num_train_epochs = math.ceil(max(args.max_train_steps - global_step, 0) / num_update_steps_per_epoch)
++        progress_bar = tqdm(
++            range(args.max_train_steps), initial=global_step, smoothing=0, disable=not accelerator.is_local_main_process, desc="steps"
++        )
+         noise_scheduler = FlowMatchDiscreteScheduler(shift=args.discrete_flow_shift, reverse=True, solver="euler")
+ 
+         loss_recorder = train_utils.LossRecorder()

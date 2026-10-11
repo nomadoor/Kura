@@ -8,6 +8,201 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: state-runner-accumulation-sd-scripts-2026-10-11
+    backend: sd-scripts
+    reason: >-
+      The Accelerate state runner no longer compares the scheduler's _step_count with
+      last_epoch, which Accelerate also advances on every accumulating micro-batch; the step is
+      still read from last_epoch and checked against the optimizer, so a run without gradient
+      accumulation behaves exactly as before. The training-state contract lists the application
+      step as restored, which only changes the plan's display.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-conformance-docker-2026-10-11
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 893088c0d1ef4480bb72bf37025c8a6d82b95260c0fbeebce10fd9cae69a813c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 5e9f853d27a2d11030cca0ceb9809f414518e01ef0864662cfd63f0967544ffe
+  - id: state-runner-accumulation-musubi-tuner-2026-10-11
+    backend: musubi-tuner
+    reason: >-
+      The Accelerate state runner no longer compares the scheduler's _step_count with
+      last_epoch, which Accelerate also advances on every accumulating micro-batch; the step is
+      still read from last_epoch and checked against the optimizer, so a run without gradient
+      accumulation behaves exactly as before. The training-state contract lists the application
+      step as restored, which only changes the plan's display.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    - musubi-tuner-conformance-docker-2026-10-11
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 96f31bc7e8883886352572b5e422e9f223c1d29bbc93b15c6d145de515e15cf8
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 7a2a2ce33f57880d7d63176d6ff43758e5bd7c13a6020849bc7d7ca65914d3d6
+  - id: resume-logical-step-ai-toolkit-2026-10-11
+    backend: ai-toolkit
+    reason: >-
+      The pinned image saves and names AI-Toolkit step files by completed updates, so a fresh
+      run's step saves now land on multiples of save_every and the last step is saved too. The
+      trainer command, the training, and the final weights are unchanged; the evidence below is
+      one-step runs with no step saves, so it carries over. Resume behavior is covered by the
+      2026-10-11 conformance run.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: a827b890a94a2c90c3f5618da68cc968cb33fb9defede4c6b99671355d1afdc1
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 4487b34c14664a45614039b8aab50445ceff0d8425a609cf0674a432b978b569
+  - id: resume-logical-step-musubi-tuner-2026-10-11
+    backend: musubi-tuner
+    reason: >-
+      The pinned image continues Musubi Tuner's step counter from the resumed step, and Kura now
+      launches managed-state runs through the shared Accelerate state runner, which marks each
+      complete save with its step after checking the scheduler against the optimizer. A fresh
+      run's trainer arguments, training, and final weights are unchanged; the runner adds that
+      check, which the Wan 2.1 conformance run exercised and which reads only the scheduler and
+      optimizer every architecture saves. Resume behavior is covered by the 2026-10-11
+      conformance run.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: cbbd142808ce9e35baa32ed8746df3e319a4164267257c18f7685f04a232e9d7
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 96f31bc7e8883886352572b5e422e9f223c1d29bbc93b15c6d145de515e15cf8
+  - id: resume-logical-step-sd-scripts-2026-10-11
+    backend: sd-scripts
+    reason: >-
+      The pinned image keeps sd-scripts' step counter logical on a Resume that crosses an epoch.
+      A fresh run's trainer command, training, and final weights are unchanged, so the fresh-run
+      evidence below carries over; the Resume evidence is superseded by the 2026-10-11
+      conformance run.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: b8ea9ae1e13ed3a4ea65b55f3f6c604730065953a6f98356713e8a924c3b66b6
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 893088c0d1ef4480bb72bf37025c8a6d82b95260c0fbeebce10fd9cae69a813c
+  - id: runpod-executor-resume-logical-step-2026-10-11
+    executor: runpod
+    reason: >-
+      When it pulls training states, the RunPod executor reads the run's training-state contract
+      as compiled, so a Musubi Tuner run compiled before the state runner keeps the marker-less
+      reading. Pod creation, transfer, collection, and stopping are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 6b33123508784f59c3e1f5639e91951701cf1314f1e15776cdadb6bb96d8331f
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: da6759776b28cef1d4cfc0b4c47d8e9185ba90bf189257cd7ebeafce9d888583
   - id: runpod-executor-acceptance-4-cost-and-messages-2026-10-08
     executor: runpod
     reason: >-

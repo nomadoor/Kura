@@ -1,0 +1,37 @@
+Kura: continue the logical step when sd-scripts resumes with --skip_until_initial_step.
+
+Upstream train_network.py (commit 37a1cbbc5725ed2a3575506e7bd2001c9908ac92, lines
+1512-1516) skips whole epochs with `initial_step -= len(train_dataloader)` and then sets
+`global_step = initial_step`: the remainder within the epoch, not the step the state was
+saved at. global_step names step checkpoints and states (~1672, ~1684), decides the save
+cadence (`global_step % args.save_every_n_steps`, ~1669), and stops training
+(`global_step >= args.max_train_steps`, ~1755). This sets global_step to the resumed step
+before the epochs are skipped, and starts the progress bar (~1529-1531) at that step out of
+the full step count, so every step the trainer prints or writes is logical. Kura's
+sd-scripts training-state contract (`native_progress: logical`) depends on this patch.
+
+diff --git a/train_network.py b/train_network.py
+--- a/train_network.py
++++ b/train_network.py
+@@ -1510,10 +1510,11 @@ class NetworkTrainer:
+
+         # training loop
+         if initial_step > 0:  # only if skip_until_initial_step is specified
++            # Kura: continue the logical step; the loop below leaves initial_step at the remainder within the epoch.
++            global_step = initial_step // args.gradient_accumulation_steps
+             for skip_epoch in range(epoch_to_start):  # skip epochs
+                 logger.info(f"skipping epoch {skip_epoch+1} because initial_step (multiplied) is {initial_step}")
+                 initial_step -= len(train_dataloader)
+-            global_step = initial_step
+
+         # log device and dtype for each model
+         logger.info(f"unet dtype: {unet_weight_dtype}, device: {unet.device}")
+@@ -1527,7 +1528,7 @@ class NetworkTrainer:
+         clean_memory_on_device(accelerator.device)
+
+         progress_bar = tqdm(
+-            range(args.max_train_steps - initial_step), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps"
++            range(args.max_train_steps), initial=global_step, smoothing=0, disable=not accelerator.is_local_main_process, desc="steps"
+         )
+
+         validation_steps = (

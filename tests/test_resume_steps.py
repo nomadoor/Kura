@@ -42,7 +42,7 @@ from kura.training_artifacts import (
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.platform_support import DATASET_IO, posix_only  # noqa: E402
-from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes  # noqa: E402
+from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes, _write_state_marker  # noqa: E402
 
 
 RESTORATION = {
@@ -163,7 +163,7 @@ def compiled_native_target(run: dict[str, Any], scratch: Path) -> int:
     if name == "musubi-tuner":
         return int(re.search(r"--max_train_steps (\d+)", command_musubi_tuner(run)["argv"][2]).group(1))
     if name == "sd-scripts":
-        return int(re.search(r'"--max_train_steps","(\d+)"', command_sd_scripts(run)["argv"][2]).group(1))
+        return int(re.search(r"--max_train_steps (\d+)", command_sd_scripts(run)["argv"][2]).group(1))
     destination = scratch / "ai-toolkit"
     destination.parent.mkdir(parents=True, exist_ok=True)
     freeze_fixture(run, destination.parent)
@@ -215,8 +215,9 @@ class ResumeTargetTests(unittest.TestCase):
 class ResumeStepParityTests(unittest.TestCase):
     @posix_only(DATASET_IO)
     def test_every_backend_tells_its_trainer_the_target_the_plan_and_lock_show(self) -> None:
-        # Resume +200 from step 1000: the trainer's own target is in its native step space.
-        expected = {"musubi-tuner": (0, 200), "sd-scripts": (1000, 1200), "ai-toolkit": (1000, 1200)}
+        # Resume +200 from step 1000: every pinned trainer continues the logical step, so its own
+        # target is the logical one.
+        expected = {"musubi-tuner": (1000, 1200), "sd-scripts": (1000, 1200), "ai-toolkit": (1000, 1200)}
         for build in (musubi_run, sd_scripts_run, ai_toolkit_run):
             source = build()
             name = source["backend"]["name"]
@@ -246,7 +247,10 @@ class ResumeStepParityTests(unittest.TestCase):
 
 
 class ResumeExecutorParityTests(unittest.TestCase):
-    def _derived(self, root: Path) -> Path:
+    def _derived(self, root: Path, *, process_local: bool = False) -> Path:
+        # A Musubi Tuner Resume +200 from 1000. Its lock froze `logical` progress (the patched
+        # trainer prints 1150/1200), or `process_local` when it was compiled before the patch
+        # (the trainer printed 150/200).
         source = musubi_run()
         manifest = publish_source(root, source)
         run = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"])
@@ -256,10 +260,39 @@ class ResumeExecutorParityTests(unittest.TestCase):
         (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
         (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
         compile_resume_lock(root, run, run_dir / "resolved")
-        (run_dir / "logs" / "stdout.log").write_text("steps:  75%|███| 150/200 [00:10<00:04, 1.0s/it, avr_loss=0.5]\n", encoding="utf-8")
+        progress = "150/200"
+        if process_local:
+            # Compiled by an older Kura: no state runner, so no marker, and a process-local lock.
+            lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock.update(native_progress="process_local", native_target="process_local")
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        else:
+            (run_dir / "resolved" / "musubi").mkdir()
+            (run_dir / "resolved" / "musubi" / "state-runner.py").write_text("runner\n", encoding="utf-8")
+            progress = "1150/1200"
+        (run_dir / "logs" / "stdout.log").write_text(f"steps:  75%|███| {progress} [00:10<00:04, 1.0s/it, avr_loss=0.5]\n", encoding="utf-8")
         return run_dir
 
-    def test_docker_and_runpod_place_process_local_progress_and_state_at_one_logical_step(self) -> None:
+    def test_a_musubi_run_compiled_under_the_process_local_contract_is_read_as_before(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._derived(root, process_local=True)
+            status: dict[str, Any] = {}
+            _materialize_stdout_progress(run_dir, status, state="running")
+            self.assertEqual((status["last_step"], status["total_steps"]), (1150, 1200))
+            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (150, 200))
+            # Its states carry no marker and are placed by name through the lock, as before; the
+            # same marker-less state of a run compiled with the runner is not complete yet.
+            _write_state(run_dir / "outputs" / "derived-step0150-state")
+            self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [1150])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._derived(root)
+            _write_state(run_dir / "outputs" / "derived-step1150-state")
+            self.assertEqual(publish_completed_training_states(root, run_dir), [])
+
+    def test_docker_and_runpod_place_progress_and_state_at_one_logical_step(self) -> None:
         import kura.executors.common as common
         import kura.run_commands.runpod_ssh as runpod_ssh
         import kura.training_artifacts as training_artifacts
@@ -280,19 +313,24 @@ class ResumeExecutorParityTests(unittest.TestCase):
                 status_owner.assert_called()
                 name = "derived-step0150-state"
                 if executor == "docker":
-                    _write_state(run_dir / "outputs" / name)
+                    _write_state_marker(_write_state(run_dir / "outputs" / name), "musubi-tuner", 1150)
                     items = publish_completed_training_states(root, run_dir)
                 else:
+                    marked = _write_state(root / "remote" / name)
+                    _write_state_marker(marked, "musubi-tuner", 1150)
                     item = {
                         "path": f"/workspace/runs/derived/outputs/{name}",
                         "name": name,
                         # The Pod reports the step the state's marker records.
                         "marked_step": 1150,
-                        "files": [{"path": file, "size": len(_state_bytes(file)), "mtime_ns": 1} for file in STATE_FILES],
+                        "files": [
+                            {"path": file.relative_to(marked).as_posix(), "size": file.stat().st_size, "mtime_ns": 1}
+                            for file in sorted(marked.iterdir())
+                        ],
                     }
 
                     def fake_scp(command: list[str], **_: object) -> subprocess.CompletedProcess:
-                        _write_state(Path(command[-1]))
+                        _write_state_marker(_write_state(Path(command[-1])), "musubi-tuner", 1150)
                         return subprocess.CompletedProcess(command, 0, "", "")
 
                     with patch.object(runpod_ssh, "_run_bounded", side_effect=fake_scp), patch.object(
@@ -310,6 +348,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
 
     def test_an_unreadable_source_lock_is_refused_rather_than_read_as_not_a_resume(self) -> None:
         # Read as not a Resume, native step 150 would be published and shown as logical step 150.
+        # The run was compiled before the state runner, so its state is placed through the lock.
         def non_int_steps(lock_path: Path) -> None:
             lock = json.loads(lock_path.read_text(encoding="utf-8"))
             lock["source_step"] = "1000"
@@ -321,7 +360,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
         for corrupt in (non_int_steps, broken_json):
             with self.subTest(corrupt=corrupt.__name__), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                run_dir = self._derived(root)
+                run_dir = self._derived(root, process_local=True)
                 corrupt(run_dir / "resolved" / "training-state-source.lock.json")
                 run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
                 _write_state(run_dir / "outputs" / "derived-step0150-state")
@@ -338,6 +377,217 @@ class ResumeExecutorParityTests(unittest.TestCase):
                     for path in (root / "artifacts" / "training-state").glob("*/manifest.json")
                 ]
                 self.assertNotIn(150, observed)
+
+
+class SdScriptsLogicalResumeTests(unittest.TestCase):
+    """The pinned sd-scripts image continues the logical step on Resume
+    (docker/sd-scripts/patches/0002-resume-continues-the-logical-step.patch): its step
+    counter, checkpoint and state names, save cadence, stop, and progress bar all count
+    logical steps, also when the source step is not at an epoch boundary."""
+
+    def _run_dir(self, root: Path) -> tuple[dict[str, Any], Path]:
+        # Six items train six steps per epoch; Resume 15 -> 32 starts in the third epoch
+        # and stops in the sixth, which is not a multiple of the steps per epoch.
+        source = sd_scripts_run()
+        source["recipe"]["steps"] = 15
+        source["backend"]["config"]["save_every_n_steps"] = 5
+        source["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+        manifest = publish_source(root, source, step=15)
+        run = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"], source_step=15, additional=17)
+        run_dir = root / "runs" / "derived"
+        (run_dir / "logs").mkdir(parents=True)
+        (run_dir / "resolved").mkdir()
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+        compile_resume_lock(root, run, run_dir / "resolved")
+        return run, run_dir
+
+    def _progress(self, run_dir: Path, line: str) -> dict[str, Any]:
+        (run_dir / "logs" / "stdout.log").write_text(line + "\n", encoding="utf-8")
+        status: dict[str, Any] = {}
+        _materialize_stdout_progress(run_dir, status, state="running")
+        return status
+
+    def test_a_multi_epoch_resume_saves_on_logical_multiples_and_stops_at_its_target(self) -> None:
+        from kura.training_artifacts import peak_checkpoints
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, run_dir = self._run_dir(root)
+            script = command_sd_scripts(run)["argv"][2]
+            # The trainer is given the logical target and the configured cadence, uncapped.
+            self.assertIn("--max_train_steps 32", script)
+            self.assertIn("--save_every_n_steps 5", script)
+            self.assertIn("--save_last_n_steps_state 5", script)
+            self.assertIn("--skip_until_initial_step", script)
+            steps = resume_steps(run)
+            self.assertEqual(
+                (steps["native_progress"], steps["native_start"], steps["native_end"]), ("logical", 15, 32),
+            )
+            # Saves at logical steps 20, 25, and 30, then the final weights at 32.
+            self.assertEqual(peak_checkpoints(run, {"save_every_n_steps": 5}), {"count": 4, "trainer_default_saves": False})
+            self.assertEqual([logical_step(step, steps) for step in (20, 25, 30)], [20, 25, 30])
+            lock = json.loads((run_dir / "resolved" / "training-state-source.lock.json").read_text(encoding="utf-8"))
+            self.assertEqual(lock["native_progress"], "logical")
+            # The patched progress bar counts logical steps toward the logical target.
+            status = self._progress(run_dir, "steps:  62%|██████    | 20/32 [00:10<00:06, 2.0it/s, avr_loss=0.5]")
+            self.assertEqual((status["last_step"], status["total_steps"]), (20, 32))
+            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (5, 17))
+
+    def test_a_run_compiled_under_the_process_local_contract_is_read_as_before(self) -> None:
+        # A lock frozen before the patched image counted the trainer's progress from zero.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, run_dir = self._run_dir(root)
+            lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock["native_progress"] = "process_local"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            steps = resume_steps(run, lock=lock)
+            self.assertEqual((steps["native_progress"], steps["native_end"]), ("process_local", 32))
+            self.assertEqual(logical_step(5, steps), 20)
+            status = self._progress(run_dir, "steps:  29%|███       | 5/17 [00:10<00:24, 2.0it/s, avr_loss=0.5]")
+            self.assertEqual((status["last_step"], status["total_steps"]), (20, 32))
+            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (5, 17))
+
+
+class AccelerateStateRunnerTests(unittest.TestCase):
+    """sd-scripts and Musubi Tuner run through one Accelerate state runner that marks each
+    complete save with the step it holds; every state is published at its marker's step."""
+
+    def test_both_accelerate_backends_launch_their_trainer_through_the_one_runner(self) -> None:
+        from kura.backends.musubi_command import compile_musubi_tuner
+        from kura.backends.sd_scripts import compile_sd_scripts
+        from kura.container_scripts import script_source
+
+        cases = (
+            (musubi_run, compile_musubi_tuner, "musubi", "src/musubi_tuner/flux_2_train_network.py"),
+            (sd_scripts_run, compile_sd_scripts, "sd-scripts", "train_network.py"),
+        )
+        for build, compile_backend, directory_name, entrypoint in cases:
+            run = build()
+            name = run["backend"]["name"]
+            with self.subTest(backend=name), tempfile.TemporaryDirectory() as directory:
+                resolved = Path(directory) / "resolved"
+                freeze_fixture(run, resolved)
+                script = compile_backend(run, resolved / directory_name)["argv"][2]
+                runner = f"/workspace/runs/derived/resolved/{directory_name}/state-runner.py {name} {entrypoint} "
+                self.assertIn(runner, script)
+                self.assertEqual(
+                    (resolved / directory_name / "state-runner.py").read_text(encoding="utf-8"),
+                    script_source("accelerate_state.py") + "\n",
+                )
+                unmanaged = build()
+                unmanaged["recovery"] = {"training_state": {"enabled": False}}
+                unmanaged_resolved = Path(directory) / "unmanaged"
+                freeze_fixture(unmanaged, unmanaged_resolved)
+                script = compile_backend(unmanaged, unmanaged_resolved / directory_name)["argv"][2]
+                self.assertNotIn("state-runner.py", script)
+                self.assertIn(f" {entrypoint} ", script)
+                self.assertFalse((unmanaged_resolved / directory_name / "state-runner.py").exists())
+
+    def _save(self, backend: str, scheduler: dict[str, Any], optimizer_step: int, *, processes: int = 1) -> tuple[Path, dict[str, Any]]:
+        from kura.container_scripts import script_source
+
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("accelerate_state.py"), namespace)
+
+        class Accelerator:
+            num_processes = processes
+
+            def save_state(self, output_dir):
+                output = Path(output_dir)
+                output.mkdir(parents=True)
+                for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
+                    (output / name).write_bytes(_state_bytes(name))
+                if backend == "sd-scripts":
+                    (output / "train_state.json").write_text('{"current_epoch":1,"current_step":1}\n', encoding="utf-8")
+                return "saved"
+
+        torch = __import__("types").ModuleType("torch")
+        torch.load = lambda path, **kwargs: (
+            scheduler if Path(path).name == "scheduler.bin" else {"state": {0: {"step": optimizer_step}}}
+        )
+        accelerate = __import__("types").ModuleType("accelerate")
+        accelerate.Accelerator = Accelerator
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root)
+        output = root / "derived-state"
+        with patch.dict(sys.modules, {"torch": torch, "accelerate": accelerate}):
+            namespace["install_hooks"](backend)
+            self.assertEqual(Accelerator().save_state(output), "saved")
+        return output, json.loads((output / "kura-state-info.json").read_text(encoding="utf-8"))
+
+    def test_the_runner_marks_a_musubi_save_with_its_scheduler_step_and_no_train_state(self) -> None:
+        output, info = self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1150)
+        self.assertEqual(info["backend"], "musubi-tuner")
+        self.assertEqual(info["logical_step"], 1150)
+        self.assertNotIn("train_state_sha256", info)
+        self.assertFalse((output / "train_state.json").exists())
+        _, info = self._save("sd-scripts", {"last_epoch": 7, "_step_count": 8}, 7)
+        self.assertEqual((info["backend"], info["logical_step"]), ("sd-scripts", 7))
+        self.assertIn("train_state_sha256", info)
+
+    def test_the_runner_counts_one_scheduler_step_per_process_per_update(self) -> None:
+        # Accelerate steps a prepared scheduler once per process for each optimizer update (and
+        # both trainers scale its length by the process count), so on two GPUs 1150 updates are
+        # last_epoch 2300; the patched Musubi trainer resumes at last_epoch // num_processes too.
+        _, info = self._save("musubi-tuner", {"last_epoch": 2300, "_step_count": 2301}, 1150, processes=2)
+        self.assertEqual(info["logical_step"], 1150)
+        _, info = self._save("sd-scripts", {"last_epoch": 14, "_step_count": 15}, 7, processes=2)
+        self.assertEqual(info["logical_step"], 7)
+        with self.assertRaisesRegex(RuntimeError, "is not a whole number of updates on 2 processes"):
+            self._save("musubi-tuner", {"last_epoch": 2301, "_step_count": 2302}, 1150, processes=2)
+
+    def test_the_runner_reads_the_step_under_gradient_accumulation(self) -> None:
+        # Accelerate adds one to the scheduler's _step_count on every accumulating micro-batch
+        # but advances last_epoch only on updates, so at gradient_accumulation_steps 2 seven
+        # updates are last_epoch 7 and _step_count 15; the step is read from last_epoch.
+        for backend in ("musubi-tuner", "sd-scripts"):
+            with self.subTest(backend=backend):
+                _, info = self._save(backend, {"last_epoch": 7, "_step_count": 15}, 7)
+                self.assertEqual(info["logical_step"], 7)
+
+    def test_the_runner_refuses_a_save_whose_optimizer_and_scheduler_disagree(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "optimizer step 1149 does not match scheduler step 1150"):
+            self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1149)
+
+    def _musubi_run_dir(self, root: Path, run: dict[str, Any]) -> Path:
+        run_dir = root / "runs" / "derived"
+        (run_dir / "resolved" / "musubi").mkdir(parents=True)
+        (run_dir / "resolved" / "musubi" / "state-runner.py").write_text("runner\n", encoding="utf-8")
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+        return run_dir
+
+    def test_musubi_final_state_is_published_at_the_step_its_marker_records(self) -> None:
+        # `<name>-state` carries no step in its name; before the marker it was never published.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = musubi_run()
+            run["recipe"]["steps"] = 20
+            run_dir = self._musubi_run_dir(root, run)
+            final = _write_state(run_dir / "outputs" / "derived-state")
+            self.assertEqual(publish_completed_training_states(root, run_dir, allow_final_state=True), [])
+            _write_state_marker(final, "musubi-tuner", 20)
+            self.assertEqual(publish_completed_training_states(root, run_dir), [])
+            published = publish_completed_training_states(root, run_dir, allow_final_state=True)
+            self.assertEqual([item["observed_step"] for item in published], [20])
+            self.assertIn("kura-state-info.json", {item["path"] for item in published[0]["files"]})
+
+    def test_a_musubi_artifact_published_before_the_marker_still_resumes(self) -> None:
+        # Resume reads an artifact's own inventory, never the contract's required files.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = musubi_run()
+            manifest = publish_source(root, source)
+            self.assertNotIn("kura-state-info.json", {item["path"] for item in manifest["files"]})
+            run = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"])
+            lock = compile_resume_lock(root, run, root / "runs" / "derived" / "resolved")
+            self.assertEqual({item["path"] for item in lock["files"]}, set(STATE_FILES))
+            script = command_musubi_tuner(run)["argv"][2]
+            self.assertIn(f"--resume {training_state_payload(manifest['id'])}", script)
+            self.assertIn("training-state-source.lock.json", script)
 
 
 class ResumeSourceVerificationTests(unittest.TestCase):

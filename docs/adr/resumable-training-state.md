@@ -90,9 +90,13 @@ not a substitute for observation.
 When a backend uses a completion marker, Kura validates its declared schema,
 backend identity, and payload digests before publication. A stale marker is
 invalidated before an in-place native save begins and the replacement marker is
-published last. A process-local Resume also caps its derived save cadence at the
-requested additional-step count so a short extension ends on a numbered,
-recoverable generation.
+published last. A process-local Resume also capped its derived save cadence at
+the requested additional-step count so a short extension ended on a numbered,
+recoverable generation. Since 2026-10-11 every pinned trainer counts a Resume's
+steps logically (sd-scripts and Musubi Tuner through image patches) and Musubi
+Tuner's final state carries a verified step marker, so no new Resume is capped;
+only the commands of runs compiled before, whose locks froze `process_local`,
+carry the cap.
 
 A backend whose plan identifies state capture as capacity-constrained may
 explicitly select one retained generation or disable capture. The run plan must

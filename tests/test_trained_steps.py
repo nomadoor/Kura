@@ -191,7 +191,7 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         # writes no step saves, and AI-Toolkit saves at a default Kura does not know.
         self.assertEqual(training_artifacts.expected_checkpoints(musubi_run(), {}, 1000), 1)
         self.assertIsNone(training_artifacts.expected_checkpoints(sd_scripts_run(), {}, 1000))
-        self.assertIsNone(training_artifacts.expected_checkpoints(ai_toolkit_run(), {"last_step_save": "final_only"}, 1000))
+        self.assertIsNone(training_artifacts.expected_checkpoints(ai_toolkit_run(), {}, 1000))
         run = musubi_run()
         with patch.object(training_artifacts, "checkpoint_save_cadence", wraps=training_artifacts.checkpoint_save_cadence) as cadence:
             training_artifacts.expected_checkpoints(run, {"save_every_n_steps": 50}, 1000)
@@ -222,12 +222,13 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         run = ai_toolkit_run()
         run["backend"]["config"]["native_config"] = {"save": {"save_every": 50, "max_step_saves_to_keep": 0}}
         checkpoint = plan._adapter_display(run)["checkpoint"]
-        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default", "last_step_save": "final_only"})
+        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"})
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         self.assertIn("about 20 checkpoints", plan._disk_warnings(run, checkpoint)[0])
         refusals = [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"]
         self.assertIn("about 20 checkpoints without pruning", refusals[0])
-        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 20)
+        # The disk peak adds the final file to the 20 step saves.
+        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 21)
         self.assertEqual(_monitor_expected(run, checkpoint), 20)
         # A positive keep-last leaves fewer: no count, no warning, no refusal, in both; the disk
         # estimate counts the peak (the kept saves plus the one written before the cleanup).
@@ -275,8 +276,8 @@ class CheckpointRetentionTests(unittest.TestCase):
             run["backend"]["config"].update(config)
             with self.subTest(config=config):
                 # Kura does not copy the trainer's default count: the peak is every save, which
-                # AI-Toolkit writes on steps 50..950 (it skips the last step) plus its final file.
-                self._assert_pruned(run, 20)
+                # AI-Toolkit (with Kura's image patch) writes on steps 50..1000, plus its final file.
+                self._assert_pruned(run, 21)
 
     def test_ai_toolkit_keep_last_zero_keeps_every_save(self) -> None:
         for config in (
@@ -286,7 +287,7 @@ class CheckpointRetentionTests(unittest.TestCase):
             run = ai_toolkit_run()
             run["backend"]["config"].update(config)
             with self.subTest(config=config):
-                self._assert_counted(run, 20, 20)
+                self._assert_counted(run, 20, 21)
 
     def test_musubi_epoch_retention_does_not_prune_step_checkpoints(self) -> None:
         # Musubi prunes step checkpoints only by save_last_n_steps (which Kura owns), not by epochs.
@@ -333,21 +334,22 @@ class PeakCheckpointsTests(unittest.TestCase):
         no_steps = musubi_run()
         del no_steps["recipe"]["steps"]
         self.assertIsNone(training_artifacts.peak_checkpoints(no_steps, {"save_every_n_steps": 50}))
-        # AI-Toolkit saves on steps 50..950 and leaves the last step to its final file.
-        final_only = {"save_every_n_steps": 50, "last_step_save": "final_only"}
-        self.assertEqual(peak(final_only), 20)
-        self.assertEqual(peak(final_only, 1020), 21)
-        self.assertEqual(peak(final_only, 50), 1)
+        # AI-Toolkit (with Kura's image patch) saves on multiples of completed updates too,
+        # 50..1000, and writes its final file.
+        every_50 = {"save_every_n_steps": 50}
+        self.assertEqual(peak(every_50, build=ai_toolkit_run), 21)
+        self.assertEqual(peak(every_50, 1020, build=ai_toolkit_run), 21)
+        self.assertEqual(peak(every_50, 50, build=ai_toolkit_run), 2)
         # Musubi Tuner prunes after training: every save is on disk first.
         self.assertEqual(peak({"save_every_n_steps": 50, "prune_before_step": 1000}), 21)
         # AI-Toolkit removes older saves after writing the new one: keep_last plus one (at the
         # end, keep_last step saves and the final file), never more than every save.
-        self.assertEqual(peak({**final_only, "keep_last": 3}), 4)
-        self.assertEqual(peak({**final_only, "keep_last": "3"}), 4)
-        self.assertEqual(peak({**final_only, "keep_last": 30}), 20)
-        self.assertEqual(peak({**final_only, "keep_last": 0}), 20)
+        self.assertEqual(peak({**every_50, "keep_last": 3}, build=ai_toolkit_run), 4)
+        self.assertEqual(peak({**every_50, "keep_last": "3"}, build=ai_toolkit_run), 4)
+        self.assertEqual(peak({**every_50, "keep_last": 30}, build=ai_toolkit_run), 21)
+        self.assertEqual(peak({**every_50, "keep_last": 0}, build=ai_toolkit_run), 21)
         # Its unset default is not copied: the conservative bound is every save.
-        self.assertEqual(peak({**final_only, "unset_keep_last": "trainer_default"}), 20)
+        self.assertEqual(peak({**every_50, "unset_keep_last": "trainer_default"}, build=ai_toolkit_run), 21)
         # sd-scripts keeps the saves within the window (window // every + 1) and removes the
         # oldest after writing the next one; at the end the final file joins the kept saves.
         self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 100}, build=sd_scripts_run), 4)
@@ -355,14 +357,15 @@ class PeakCheckpointsTests(unittest.TestCase):
         self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 10}, build=sd_scripts_run), 2)
         self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 5000}, build=sd_scripts_run), 21)
 
-    def test_each_backend_display_declares_its_last_step_save(self) -> None:
-        # The display says what the core needs; no backend name is read by the peak.
-        for run, every_save in ((ai_toolkit_run(), 20), (musubi_run(), 21), (sd_scripts_run(), 21)):
+    def test_every_backend_saves_on_the_multiples_up_to_its_last_step(self) -> None:
+        # Every pinned trainer decides a save on completed updates, so the peak is the same
+        # for each and no backend name or display key is read by it.
+        for run, every_save in ((ai_toolkit_run(), 21), (musubi_run(), 21), (sd_scripts_run(), 21)):
             run["backend"]["config"]["save_every_n_steps"] = 50
             run["safety"] = {}
             with self.subTest(backend=run["backend"]["name"]):
                 self.assertEqual(plan._estimate_checkpoint_write_bytes(run)["count"], every_save)
-        self.assertEqual(plan._adapter_display(ai_toolkit_run())["checkpoint"]["last_step_save"], "final_only")
+        self.assertNotIn("last_step_save", plan._adapter_display(ai_toolkit_run())["checkpoint"])
 
     def test_an_unset_cadence_counts_what_the_trainer_is_given(self) -> None:
         # sd-scripts gets no step cadence (final file only); Musubi Tuner is given the recipe's
@@ -386,11 +389,10 @@ class PeakCheckpointsTests(unittest.TestCase):
                     self.assertNotIn("trainer-default", text)
 
     def test_a_logical_progress_resume_counts_saves_on_logical_multiples(self) -> None:
-        # Resume +170 from step 1030 to 1200 with a cadence of 100. AI-Toolkit's progress is
-        # logical: it saves on 1100 and leaves 1200 to its final file: 2 (170 // 100 + 1 counted
-        # from 1030 would land on 1130). sd-scripts and Musubi Tuner count progress from zero in
-        # their process, 0..170: a save on 100 and the final file: 2.
-        for build, expected in ((ai_toolkit_run, 2), (sd_scripts_run, 2), (musubi_run, 2)):
+        # Resume +170 from step 1030 to 1200 with a cadence of 100. Every trainer's progress is
+        # logical and saves on multiples of completed updates, the last step included: 1100,
+        # 1200, and the final file: 3 (170 // 100 + 1 counted from 1030 would land on 1130).
+        for build, expected in ((ai_toolkit_run, 3), (sd_scripts_run, 3), (musubi_run, 3)):
             source = build()
             source["backend"]["config"]["save_every_n_steps"] = 100
             run = as_resume(source, source_step=1030, additional=170)
@@ -398,26 +400,21 @@ class PeakCheckpointsTests(unittest.TestCase):
             with self.subTest(backend=source["backend"]["name"]):
                 self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], expected)
 
-    def test_a_process_local_resume_caps_the_cadence_as_the_trainer_is_given(self) -> None:
-        # Resume +50 with no cadence set: Kura gives Musubi Tuner and sd-scripts a cadence of
-        # 50 (the steps added), so each saves once and writes its final file.
-        for build in (musubi_run, sd_scripts_run):
-            run = as_resume(build(), source_step=1000, additional=50)
-            checkpoint = plan._adapter_display(run)["checkpoint"]
-            with self.subTest(backend=run["backend"]["name"]):
-                self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps")), 50)
-                self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], 2)
-
-    def test_the_resume_cap_applies_only_when_kura_manages_state(self) -> None:
-        for build in (musubi_run, sd_scripts_run):
-            for configured, managed, expected in ((None, False, {"musubi-tuner": 1000, "sd-scripts": None}), (30, False, 30), (500, True, 50), (500, False, 500)):
+    def test_a_resume_keeps_the_cadence_its_trainer_is_given_on_a_fresh_run(self) -> None:
+        # Resume +50 from 1000 with no cadence set: Musubi Tuner is given the recipe's steps
+        # (1000) and sd-scripts none; neither has a logical multiple in 1000..1050, so each
+        # writes only its final file (and its final state). Nothing caps the cadence at the
+        # steps the run adds, whether or not Kura manages the run's state.
+        for build, cadence in ((musubi_run, 1000), (sd_scripts_run, None)):
+            for managed in (True, False):
                 source = build()
                 source["recovery"] = {"training_state": {"enabled": managed}}
                 run = as_resume(source, source_step=1000, additional=50)
-                name = run["backend"]["name"]
-                want = expected[name] if isinstance(expected, dict) else expected
-                with self.subTest(backend=name, configured=configured, managed=managed):
-                    self.assertEqual(training_artifacts.checkpoint_save_cadence(run, configured), want)
+                checkpoint = plan._adapter_display(run)["checkpoint"]
+                with self.subTest(backend=run["backend"]["name"], managed=managed):
+                    self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps")), cadence)
+                    self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], 1)
+                    self.assertEqual(training_artifacts.checkpoint_save_cadence(run, 500), 500)
 
     def test_the_disk_estimate_reads_the_peak_and_the_counts_do_not(self) -> None:
         run = sd_scripts_run()

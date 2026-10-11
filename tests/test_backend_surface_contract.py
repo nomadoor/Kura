@@ -682,7 +682,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 {"lr_scheduler": "constant"},
             )
 
-    def test_musubi_short_resume_saves_state_at_the_derived_endpoint(self) -> None:
+    def test_musubi_resume_saves_state_at_the_derived_endpoint(self) -> None:
+        # The patched trainer counts logical steps toward the logical target and keeps the
+        # recipe's cadence; the endpoint is its final state, which the runner marks with the
+        # step it holds, so nothing caps the cadence at the steps the run adds.
         commands = [["python", "train.py", "--max_train_steps", "2000", "--save_every_n_steps", "2000"]]
         run = {
             "id": "derived",
@@ -706,9 +709,11 @@ class BackendSurfaceContractTests(unittest.TestCase):
         result = musubi_script_command(commands, {"lr_scheduler": "constant"}, run)
         script = result[2]
 
-        self.assertIn("--max_train_steps 1000", script)
-        self.assertIn("--save_every_n_steps 1000", script)
-        self.assertIn("--save_last_n_steps_state 1000", script)
+        self.assertIn("--max_train_steps 3000", script)
+        self.assertIn("--save_every_n_steps 2000", script)
+        self.assertIn("--save_state_on_train_end", script)
+        self.assertIn("--save_last_n_steps_state 2000", script)
+        self.assertIn("/workspace/runs/derived/resolved/musubi/state-runner.py musubi-tuner train.py ", script)
 
     def test_explicit_command_cannot_silently_discard_other_config(self) -> None:
         for name in BACKENDS:
@@ -752,7 +757,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         base_pin = "ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc"
-        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a"
+        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a"
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
         self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
