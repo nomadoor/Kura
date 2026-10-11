@@ -57,8 +57,8 @@ def _fake_video_dataset(root: Path, dataset_id: str) -> None:
     MODULE._write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": MODULE._caption("0001.txt")}])
 
 
-def _safetensors(path: Path, values: bytes) -> None:
-    header = json.dumps({"__metadata__": {"ss_output_name": path.parent.name}, "lora.weight": {"dtype": "F32", "shape": [len(values) // 4], "data_offsets": [0, len(values)]}}).encode()
+def _safetensors(path: Path, values: bytes, *, metadata: dict[str, str] | None = None) -> None:
+    header = json.dumps({"__metadata__": metadata or {"ss_output_name": path.parent.name}, "lora.weight": {"dtype": "F32", "shape": [len(values) // 4], "data_offsets": [0, len(values)]}}).encode()
     path.write_bytes(struct.pack("<Q", len(header)) + header + values)
 
 
@@ -287,6 +287,18 @@ class RealSmokeHarnessTests(unittest.TestCase):
             self.assertNotIn("P6", problems)
             (run_dir / "status.json").write_text(json.dumps({**status, "host": "runpod"}), encoding="utf-8")
             self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7)["P6"], ["no pod_stopped_at recorded"])
+
+    def test_check_run_holds_a_weight_to_the_update_count_its_trainer_recorded(self) -> None:
+        # AI-Toolkit writes training_info.step into each weight file: its own count of updates.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_id = "20260101-0000_conf-ai-multi-resume_abcd"
+            run_dir = _finished_run(workspace, run_id, weights=[f"{run_id}_000000006.safetensors", f"{run_id}.safetensors"], states=[6, 7], last_step=7)
+            for name, step in ((f"{run_id}_000000006.safetensors", 6), (f"{run_id}.safetensors", 7)):
+                _safetensors(run_dir / "outputs" / name, b"\0\0\0\0", metadata={"training_info": json.dumps({"step": step, "epoch": 0})})
+            self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7)["P2"], [])
+            _safetensors(run_dir / "outputs" / f"{run_id}.safetensors", b"\0\0\0\0", metadata={"training_info": json.dumps({"step": 9})})
+            self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7)["P2"], [f"{run_id}.safetensors records training_info.step 9, holds step 7"])
 
     def test_check_run_compares_image_digests_not_reference_spellings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
