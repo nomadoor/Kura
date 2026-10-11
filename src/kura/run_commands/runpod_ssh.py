@@ -44,7 +44,7 @@ from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
-from kura.training_artifacts import checkpoint_step, run_output_name, state_directory_step, state_logical_step, training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -954,7 +954,7 @@ def _pull_remote_training_state_items(
         run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
     except yaml.YAMLError as exc:
         raise ValueError("cannot read the frozen run manifest for training-state sync") from exc
-    contract = training_state_contract(run)
+    contract = compiled_training_state_contract(run_dir, run)
     output_name = run_output_name(run)
     retention_floor = training_state_retention_floor(
         host_workspace,
@@ -1222,7 +1222,7 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
                 sync_states = False  # mid-run mirroring is best effort; the terminal check decides
             if sync_states:
                 try:
-                    marker = training_state_contract(_load_yaml(run_dir / "resolved" / "manifest.lock.yaml")).get("state_step")
+                    marker = compiled_training_state_contract(run_dir, _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")).get("state_step")
                     state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id, marker=marker)
                     training_states = _pull_remote_training_state_items(run_dir, details, workspace=workspace, items=state_items)
                     _record_pulled_training_states(run_dir, training_states)

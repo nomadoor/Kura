@@ -805,6 +805,24 @@ def _kura_continuity(source_env_lock: Path) -> dict[str, Any]:
     return kura_continuity(loaded if isinstance(loaded, dict) else {})
 
 
+def compiled_training_state_contract(run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
+    """The training-state contract a compiled run's states are published under.
+
+    A backend whose step marker is written by a state runner declares the runner's path below
+    `resolved/` (`state_runner`). A run compiled before Kura launched that trainer through the
+    runner has none, so its states carry no marker: they are read as they were then, by their
+    names (mapped through a frozen Resume lock), without the marker in their required files.
+    """
+    contract = training_state_contract(run)
+    runner = contract.get("state_runner")
+    if not isinstance(runner, str) or (run_dir / "resolved" / runner).is_file():
+        return contract
+    legacy = {key: value for key, value in contract.items() if key not in {"state_step", "state_runner"}}
+    marker = contract.get("state_step") if isinstance(contract.get("state_step"), dict) else {}
+    legacy["required_files"] = tuple(name for name in contract["required_files"] if name != marker.get("path"))
+    return legacy
+
+
 def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:
     """Return the active adapter's recovery contract without owning backend policy here."""
 
@@ -1049,7 +1067,7 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     """
     run, status, runtime_identity = _published_run_context(run_dir)
     policy = training_state_policy(run)
-    contract = training_state_contract(run)
+    contract = compiled_training_state_contract(run_dir, run)
     if not training_state_managed(run, contract):
         return None
     native_format = contract["native_format"]
@@ -1128,7 +1146,7 @@ def publish_completed_training_states(
     """Publish structurally complete step-state directories already on local disk."""
 
     run, _, _ = _published_run_context(run_dir)
-    contract = training_state_contract(run)
+    contract = compiled_training_state_contract(run_dir, run)
     if not training_state_managed(run, contract):
         return []
     output_name = run_output_name(run)
