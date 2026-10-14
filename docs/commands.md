@@ -318,8 +318,9 @@ workflow_patches:
   strength:      {node: "17", field: inputs.strength}
 ```
 
-`lora`, `checkpoint`, and `model_patch` take their value from the case's
-`checkpoint`. Every other binding reads the key of the same name under the
+`lora` and `model_patch` take their value from the case's `checkpoint`, which
+Kura stages into ComfyUI's LoRA or model-patch folder. A base model is chosen in
+the workflow itself; `workflow_patches.checkpoint` is refused. Every other binding reads the key of the same name under the
 case's `values` mapping.
 A no-LoRA baseline and LoRA cases may share one queue when the workflow uses
 sidecar `lora_insert`: omit `checkpoint` from the baseline row and Kura leaves

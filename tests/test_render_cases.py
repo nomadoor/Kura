@@ -442,6 +442,18 @@ class RenderCasesCompileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "set comfyui.lora_dir"):
                 compile_render(root, run_dir)
 
+    def test_a_base_model_checkpoint_binding_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run["workflow_patches"]["checkpoint"] = {"node": "4", "field": "inputs.ckpt_name"}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "choose the base model in the workflow itself"):
+                compile_render(root, run_dir)
+
     def test_render_lora_stage_is_not_a_setting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

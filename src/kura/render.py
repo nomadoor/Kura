@@ -82,7 +82,7 @@ def _validate_train_run_reference(workspace: Path, value: Any) -> str | None:
 
 CASE_KEYS = frozenset({"id", "values", "checkpoint", "meta"})
 CHECKPOINT_KEYS = frozenset({"id", "path", "hash"})
-ASSET_PATCH_NAMES = frozenset({"lora", "checkpoint", "model_patch"})
+ASSET_PATCH_NAMES = frozenset({"lora", "model_patch"})
 
 
 def _validated_checkpoint(value: Any, *, context: str, require_id: bool) -> dict[str, Any] | None:
@@ -270,6 +270,11 @@ def validate_patch_bindings(workflow: dict[str, Any], patches: Any) -> None:
         return
     if not isinstance(patches, dict):
         raise ValueError("workflow_patches must be a mapping of name to {node, field}")
+    if "checkpoint" in patches:
+        raise ValueError(
+            "workflow_patches.checkpoint would send a checkpoint's file path to ComfyUI as a base model name; "
+            "Kura stages only LoRA and model-patch files, so choose the base model in the workflow itself"
+        )
     probe = deepcopy(workflow)
     for name, patch in patches.items():
         node, field, _ = _binding_target(name, patch)
