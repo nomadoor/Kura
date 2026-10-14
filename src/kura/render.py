@@ -23,6 +23,7 @@ from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_m
 from kura.fsio import atomic_write_json
 from kura.records import record as as_record
 from kura.fsio import atomic_write_yaml as dump_yaml
+from kura.workspace import validate_workspace_config
 
 
 # Promptset keys Kura owns directly. Every other key in a promptset item must be
@@ -1289,6 +1290,8 @@ def _render_lora_strength(value: Any) -> float | None:
 def compile_render(workspace: Path, run_dir: Path) -> None:
     run = load_yaml_mapping(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
+    if workspace_config:
+        validate_workspace_config(workspace_config)
     compiled_only = [key for key in COMPILED_RENDER_KEYS if key in run]
     if compiled_only:
         hint = "; to change the inserted LoRA's strength, set render.lora_strength" if "lora_insert" in compiled_only else ""

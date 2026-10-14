@@ -100,7 +100,11 @@ that source.
 Authored input keeps no compatibility: aliases, synonyms, alternate shapes,
 retired spellings, and their translation code are removed. Readers that keep
 Kura's own existing records viewable stay where they are small. Recompiling an
-old `run.yaml` is not promised.
+old `run.yaml` is not promised. One such reader is `load_yaml_1_1`: a Resume
+recipe fingerprint recorded before this change hashed values such as `1e-6` as
+the strings YAML 1.1 gave, so it is compared against the parent's frozen
+manifest read that way, and the manifest read today must equal the derived
+run's recipe.
 
 ## Consequences
 

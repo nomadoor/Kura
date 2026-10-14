@@ -27,6 +27,9 @@ class YamlReaderTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(load_yaml_text(f"value: {text}\n")["value"], text)
 
+    def test_an_explicit_int_tag_keeps_pyyaml_reading(self) -> None:
+        self.assertEqual(load_yaml_text("a: !!int 0b101\nb: !!int 1:30\n"), {"a": 5, "b": 90})
+
     def test_load_mapping_refuses_a_non_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "run.yaml"

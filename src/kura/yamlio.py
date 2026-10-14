@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from yaml import YAMLError
 
-__all__ = ["YAMLError", "dump_yaml", "load_yaml", "load_yaml_mapping", "load_yaml_text"]
+__all__ = ["YAMLError", "dump_yaml", "load_yaml", "load_yaml_1_1", "load_yaml_mapping", "load_yaml_text"]
 
 _BOOL = "tag:yaml.org,2002:bool"
 _INT = "tag:yaml.org,2002:int"
@@ -46,6 +46,9 @@ for _tag, _regexp, _first in _CORE:
 
 def _construct_int(loader: _Loader, node: yaml.ScalarNode) -> int:
     value = loader.construct_scalar(node)
+    if not _CORE[1][1].match(value):
+        # Only an explicit `!!int` tag reaches here with another form; PyYAML reads it as before.
+        return yaml.SafeLoader.construct_yaml_int(loader, node)
     if value.startswith("0o"):
         return int(value[2:], 8)
     if value.startswith("0x"):
@@ -79,6 +82,11 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     return data
+
+
+def load_yaml_1_1(path: Path) -> Any:
+    """A record as Kura read it before 2026-10-14 (YAML 1.1), only to compare a digest recorded then."""
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def dump_yaml(value: Any) -> str:

@@ -353,15 +353,17 @@ def _drop_obsolete_keys(config: dict[str, Any]) -> list[str]:
     return notes
 
 
-def _drop_empty_strings(config: dict[str, Any], path: str = "") -> list[str]:
-    """Remove settings written as an empty string, in place; an unset setting is omitted."""
+def _drop_empty_strings(config: dict[str, Any] | list[Any], path: str = "") -> list[str]:
+    """Remove settings and list items written as an empty string, in place; an unset setting is omitted."""
     notes: list[str] = []
-    for name in list(config):
-        value, dotted = config[name], f"{path}.{name}" if path else str(name)
-        if isinstance(value, dict):
+    keys = list(config) if isinstance(config, dict) else list(range(len(config)))[::-1]
+    for key in keys:
+        value = config[key]
+        dotted = f"{path}[{key}]" if isinstance(config, list) else f"{path}.{key}" if path else str(key)
+        if isinstance(value, (dict, list)):
             notes.extend(_drop_empty_strings(value, dotted))
         elif isinstance(value, str) and not value.strip():
-            del config[name]
+            del config[key]
             notes.append(f"dropped {dotted}: it was empty; an unset setting is omitted")
     return notes
 

@@ -29,6 +29,7 @@ from kura.run_commands.runpod_ssh import _download_run_unlocked, _local_reusable
 from kura.run_commands.plan import format_run_plan
 from kura.run_envelope import resume_intent, training_state_policy
 from kura.media_types import frozen_suffixes
+from kura.yamlio import load_yaml_text
 from kura.training_artifacts import compile_resume_lock, load_training_state, publish_completed_training_states, publish_training_state, recipe_fingerprint, select_training_state, verify_training_state
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1436,6 +1437,43 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertTrue((resolved / "training-state-source.lock.json").is_file())
             changed = json.loads(json.dumps(run))
             changed["backend"]["config"]["learning_rate"] = 0.2
+            with self.assertRaisesRegex(ValueError, "recipe changed"):
+                compile_resume_lock(root, changed, root / "other")
+
+    def test_a_fingerprint_recorded_under_yaml_1_1_still_matches_its_unchanged_recipe(self) -> None:
+        # Kura before 2026-10-14 read `1e-6` as a string, hashed it, and wrote it back unquoted.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            text = (
+                "backend:\n  name: sd-scripts\n  config:\n    architecture: sd15\n    learning_rate: 1e-6\n"
+                "model:\n  base: example/model\ndatasets:\n- id: tiny\n  digest: sha256:data\nrecipe:\n  steps: 100\n  seed: 1\n"
+            )
+            source_manifest = root / "runs" / "source" / "resolved" / "manifest.lock.yaml"
+            source_manifest.parent.mkdir(parents=True)
+            source_manifest.write_text(text, encoding="utf-8")
+            old_fingerprint = recipe_fingerprint(yaml.safe_load(text))
+            candidate = root / "candidate"
+            candidate.mkdir()
+            (candidate / "optimizer.bin").write_bytes(_torch_archive_bytes(b"optimizer"))
+            manifest = publish_training_state(
+                root, source_run="source", source_realization=None, backend="sd-scripts", observed_step=100,
+                candidate=candidate, native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": ["optimizer"], "not_restored": ["data_position"]},
+                compatibility={"recipe_sha256": old_fingerprint},
+            )
+            run = {
+                **load_yaml_text(text), "id": "derived", "parent_run": "source",
+                "continuation": {
+                    "mode": "resume",
+                    "source": {"artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"], "observed_step": 100, "recipe_sha256": old_fingerprint},
+                    "additional_steps": 50, "target_step": 150, "restoration_contract": manifest["restoration_contract"],
+                },
+            }
+            self.assertNotEqual(recipe_fingerprint(run), old_fingerprint)
+            lock = compile_resume_lock(root, run, root / "runs" / "derived" / "resolved")
+            self.assertEqual(lock["target_step"], 150)
+            changed = json.loads(json.dumps(run))
+            changed["backend"]["config"]["learning_rate"] = 2e-6
             with self.assertRaisesRegex(ValueError, "recipe changed"):
                 compile_resume_lock(root, changed, root / "other")
 

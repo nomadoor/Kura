@@ -416,6 +416,15 @@ class RenderCasesCompileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "inputs.checkpoint.path must be a non-empty path"):
                     compile_render(root, run_dir)
 
+    def test_compile_refuses_an_empty_workspace_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            (root / "workspace.yaml").write_text("comfyui:\n  lora_dir: ''\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "comfyui.lora_dir is empty; delete the line"):
+                compile_render(root, run_dir)
+
     def test_compile_rejects_malformed_case_rows_before_freezing(self) -> None:
         good_values = {"prompt": "x", "negative_prompt": "", "seed": 1, "strength": 1.0, "cfg": 4.0}
         malformed = (

@@ -35,7 +35,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 8c87d211420ff655d634d98ed5a44d39426db22b4a16d74c7db110d29a632552
+      value: 8211fce450afc572114059330882fd89f157d3ce6c673a1d4edc869c28d8ebaf
   - id: one-yaml-reader-musubi-tuner-2026-10-14
     backend: musubi-tuner
     reason: YAML is read and written through one module (kura.yamlio) that follows the
@@ -68,7 +68,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 3ccf09f7d6502d7d8076adf2a7c9ecf1e37c4438a8921bf55728690f99e05821
+      value: cf9b19b3fb54a18630954d8a507eff63af281b52f0c152a75a64fe37e1ad90e1
   - id: one-yaml-reader-ai-toolkit-2026-10-14
     backend: ai-toolkit
     reason: YAML is read and written through one module (kura.yamlio) that follows the
@@ -102,7 +102,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 56fdc1ad8a60d5473fe8c683d002dc786da1f9a09e7a83da54baa80ab301aa24
+      value: 0b5197fc1c39b605c0bc4b6c72978a1b08dfadfb8788335b70b5f8e4a6ba0a77
   - id: one-yaml-reader-runpod-executor-2026-10-14
     executor: runpod
     reason: YAML is read and written through one module (kura.yamlio) that follows the

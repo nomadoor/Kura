@@ -291,6 +291,9 @@ class WorkspaceSchemaTests(unittest.TestCase):
         })
         self.assertEqual(migrated, {"schema_version": 2, "storage": {}, "comfyui": {"lora_stage_subdir": "Kura_tmp"}})
         self.assertIn("dropped comfyui.lora_dir: it was empty; an unset setting is omitted", notes)
+        listed, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"ports": ["22/tcp", ""]}})
+        self.assertEqual(listed, {"schema_version": 2, "runpod": {"ports": ["22/tcp"]}})
+        self.assertIn("dropped runpod.ports[1]: it was empty; an unset setting is omitted", notes)
 
     def test_kura_init_writes_a_workspace_with_no_empty_setting(self) -> None:
         from kura.cli import cmd_init

@@ -2306,7 +2306,7 @@ class RenderNotificationTests(unittest.TestCase):
                 path.mkdir(parents=True)
             (output_run.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
             (root / "workspace.yaml").write_text(
-                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  model_registry: {{checkpoints: {{base.safetensors: {{repo: example/repo}}}}}}\n  runpod: {{container_disk_gb: 200}}\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
+                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  model_registry: {{checkpoints: {{base.safetensors: {{repo: example/repo}}}}}}\n  runpod: {{container_disk_gb: 200}}\n",
                 encoding="utf-8",
             )
             checkpoint = output_run / "example.safetensors"
@@ -2730,7 +2730,7 @@ class RenderNotificationTests(unittest.TestCase):
             output_run = root / "runs" / "train-1" / "outputs"
             for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
                 path.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("comfyui:\n  lora_dir: ''\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("comfyui: {}\n", encoding="utf-8")
             checkpoint = output_run / "example.safetensors"
             checkpoint.write_bytes(b"fake-lora")
             (workflow_dir / "wf.json").write_text(
