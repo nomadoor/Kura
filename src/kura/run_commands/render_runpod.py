@@ -318,7 +318,7 @@ def launch_render_runpod(
         launched = True
         details = _runpod_ssh_details(run_dir, timeout_sec=300, interval_sec=5)
         ssh_details = details
-        remote_workspace = str(runpod_config.get("workspace_path") or "/workspace")
+        remote_workspace = runpod_config.get("workspace_path", "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
         # The Pod armed its lease when it started; this second guard never moves that deadline
         # and stays for Pods whose start script predates it.

@@ -277,14 +277,11 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         run = {
             "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
             "created": timestamp.isoformat(), "parent_run": None, "intent": "",
-            "backend": {"name": args.backend or "ai-toolkit", "adapter_version": 1, "config": {}},
+            "backend": {"name": args.backend or "ai-toolkit", "config": {}},
             "model": {"base": "", "revision": None},
             "datasets": [{"id": ""}],
             "recipe": {"steps": None, "seed": None},
-            "compute": {
-                "executor": executor,
-                "gpu": args.gpu,
-            },
+            "compute": {"executor": executor, **({"gpu": [args.gpu]} if args.gpu else {})},
             "sampling": {"cadence_steps": None},
         }
     _dump_yaml(run_dir / "run.yaml", run)
@@ -381,7 +378,7 @@ def _create_resume_derived_run(
         if args.executor != "runpod":
             compute.pop("capacity", None)
     if args.gpu is not None:
-        compute["gpu"] = args.gpu
+        compute["gpu"] = [args.gpu]
     derived["compute"] = compute
     source_fingerprint = recipe_fingerprint(source_run)
     continuation: dict[str, Any] = {
@@ -632,7 +629,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         env = {
             **kura_provenance(), "python_version": platform.python_version(),
             "platform": platform.platform(), "backend_name": backend.get("name"),
-            "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
+            "generated_at": _now().isoformat(),
             "declared_executor": declared_executor,
             # local_image stays for readers of runs compiled before images were pinned.
             "local_image": reference, "image_origin": image["origin"],

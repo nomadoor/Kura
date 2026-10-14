@@ -77,7 +77,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 self._dataset(root)
                 stdout = io.StringIO()
                 with contextlib.redirect_stdout(stdout):
-                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="file-only", slug=backend, backend=backend, executor="docker", gpu="cpu")), 0)
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="file-only", slug=backend, backend=backend, executor="docker", gpu=None)), 0)
                 run_id = stdout.getvalue().strip()
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
@@ -123,7 +123,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 self._dataset(root)
                 stdout = io.StringIO()
                 with contextlib.redirect_stdout(stdout):
-                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="no-base", slug=backend, backend=backend, executor="docker", gpu="cpu")), 0)
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="no-base", slug=backend, backend=backend, executor="docker", gpu=None)), 0)
                 run_id = stdout.getvalue().strip()
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))

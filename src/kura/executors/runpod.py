@@ -475,21 +475,9 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
             "across multiple data centers through the GraphQL control plane; "
             "use custom ordering or configure one data center"
         )
-    cloud_types_raw = config.get("cloud_types")
-    cloud_type_raw = config.get("cloud_type", "ANY")
-    if cloud_types_raw is not None:
-        if not isinstance(cloud_types_raw, list) or not all(value in ("SECURE", "COMMUNITY") for value in cloud_types_raw):
-            raise ValueError("runpod.cloud_types must be a list containing SECURE and/or COMMUNITY")
-        cloud_types = list(dict.fromkeys(cloud_types_raw))
-        if not cloud_types:
-            raise ValueError("runpod.cloud_types must not be empty")
-    else:
-        if cloud_type_raw in ("ANY", "AUTO"):
-            cloud_types = ["COMMUNITY", "SECURE"]
-        elif cloud_type_raw in ("SECURE", "COMMUNITY"):
-            cloud_types = [cloud_type_raw]
-        else:
-            raise ValueError("runpod.cloud_type must be SECURE, COMMUNITY, ANY, or AUTO")
+    cloud_types = config.get("cloud_types", ["COMMUNITY", "SECURE"])
+    if not isinstance(cloud_types, list) or not cloud_types or not all(value in ("SECURE", "COMMUNITY") for value in cloud_types) or len(set(cloud_types)) != len(cloud_types):
+        raise ValueError("runpod.cloud_types must list SECURE and/or COMMUNITY, each once; omit it for both")
     return {
         "storage_mode": storage_mode,
         "gpu_type_ids": gpu_types,

@@ -274,18 +274,13 @@ def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
         )
 
 
-def _configured_gib(value: Any, *, default: int) -> int:
-    if value in (None, ""):
+def _configured_gib(value: Any, *, default: int) -> float:
+    """A GiB setting as written (a positive number); omitted is the default. It is never truncated."""
+    if value is None:
         return default
-    if isinstance(value, bool):
-        raise ValueError(f"disk budget must be an integer GiB value: {value}")
-    try:
-        number = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"disk budget must be an integer GiB value: {value}") from exc
-    if number <= 0:
-        raise ValueError(f"disk budget must be positive: {value}")
-    return number
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"a GiB setting must be a positive number, not {value!r}")
+    return value
 
 
 def _resolve_local_path(workspace: Path, value: str) -> Path:
@@ -1663,16 +1658,14 @@ def cmd_run_plan(args: argparse.Namespace) -> int:
 
 
 def _parse_duration_seconds(value: Any) -> int:
-    if value in (None, "", False):
+    """A duration in seconds: whole seconds, or a whole number with an s, m, h, or d suffix; omitted is 0."""
+    if value is None:
         return 0
-    if isinstance(value, int):
-        return max(value, 0)
-    text = str(value).strip().lower()
-    if not text:
-        return 0
-    match = re.fullmatch(r"(\d+)([smhd]?)", text)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    match = re.fullmatch(r"(\d+)([smhd]?)", value) if isinstance(value, str) else None
     if not match:
-        raise ValueError("duration must be an integer seconds value or use s/m/h/d suffix")
+        raise ValueError(f"duration {value!r} must be whole seconds or a whole number with an s, m, h, or d suffix (for example 90, 30m, 2h)")
     amount = int(match.group(1))
     unit = match.group(2) or "s"
     scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]

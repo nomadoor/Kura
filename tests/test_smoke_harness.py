@@ -163,7 +163,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
 
     def test_gpu_override_reaches_runpod_compute_and_refuses_local_smokes(self) -> None:
         fields = MODULE.build_run_fields("ai-toolkit-hidream", MODULE.SMOKES["ai-toolkit-hidream"], gpu="NVIDIA A100 80GB PCIe")
-        self.assertEqual(fields["compute"]["gpu"], "NVIDIA A100 80GB PCIe")
+        self.assertEqual(fields["compute"]["gpu"], ["NVIDIA A100 80GB PCIe"])
         self.assertEqual(fields["compute"]["capacity"]["mode"], "wait")
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(SystemExit, "selects a RunPod GPU"):
             MODULE.prepare(Path(directory), "ai-toolkit-sd1", gpu="NVIDIA A100 80GB PCIe")

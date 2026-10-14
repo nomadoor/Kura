@@ -22,15 +22,17 @@ def _effective_image(name: str) -> dict[str, str]:
 
 
 def requested_gpu_types(compute: Any) -> list[str] | None:
-    """The GPU types a run names in `compute.gpu` (one or a list); None when it names none.
+    """The RunPod GPU types a run names in `compute.gpu`; None when it names none.
 
-    Training launches, render launches, and the plan all read the choice here.
+    Training launches, render launches, and the plan all read the choice here. A training
+    run.yaml lists them (validate_train_run_fields); a run compiled by an older Kura may
+    hold one name as a string, which is read as that one name.
     """
     gpu = compute.get("gpu") if isinstance(compute, dict) else None
-    if isinstance(gpu, str) and gpu and gpu.lower() not in {"true", "false", "gpu", "cpu"}:
-        return [gpu]
     if isinstance(gpu, list) and gpu and all(isinstance(item, str) and item for item in gpu):
         return list(gpu)
+    if isinstance(gpu, str) and gpu not in {"", "true", "false", "gpu", "cpu"}:
+        return [gpu]
     return None
 
 

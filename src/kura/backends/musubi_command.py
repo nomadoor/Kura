@@ -274,40 +274,6 @@ def _musubi_save_precision(override: dict[str, Any]) -> str:
     return value
 
 
-def _musubi_micro_batch(run: dict[str, Any], override: dict[str, Any]) -> int | None:
-    del run
-    direct = _int_or_none(override.get("batch_size"))
-    return direct
-
-
-def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int | None:
-    del run
-    values: list[int] = []
-    direct = override.get("resolution")
-    if isinstance(direct, list):
-        values.extend(value for item in direct if (value := _int_or_none(item)) is not None)
-    elif (value := _int_or_none(direct)) is not None:
-        values.append(value)
-    dataset_options = override.get("dataset_options")
-    if isinstance(dataset_options, dict):
-        for options in dataset_options.values():
-            if not isinstance(options, dict):
-                continue
-            blocks = options.get("blocks")
-            sources = [options, *blocks] if isinstance(blocks, list) else [options]
-            for source in sources:
-                if not isinstance(source, dict):
-                    continue
-                for key in ("resolution", "control_resolution"):
-                    configured = source.get(key)
-                    if isinstance(configured, list):
-                        values.extend(
-                            value for part in configured
-                            if (value := _int_or_none(part)) is not None
-                        )
-    return max(values) if values else None
-
-
 def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any], architecture: str) -> None:
     # Every flag read here is adapter-owned, so extra_args cannot carry it.
     h2d_only = _truthy(override.get("block_swap_h2d_only"))
@@ -326,36 +292,6 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
     pinned = _truthy(override.get("use_pinned_memory_for_block_swap"))
     if pinned and (blocks is None or blocks <= 0):
         raise ValueError("Musubi use_pinned_memory_for_block_swap requires blocks_to_swap > 0")
-    if architecture != "flux2":
-        return
-    model_version = _musubi_flux2_model_version(run)
-    if "9b" not in model_version:
-        return
-    gpu = str(run.get("compute", {}).get("gpu") or "")
-    if "A40" not in gpu.upper():
-        return
-    micro_batch = _musubi_micro_batch(run, override)
-    if micro_batch is None or micro_batch <= 1:
-        max_resolution = _musubi_max_resolution(run, override)
-        rank = _int_or_none(override.get("network_dim"))
-        checkpointing = _truthy(override.get("gradient_checkpointing"))
-        if max_resolution is not None and max_resolution >= 1024 and (rank is None or rank >= 32) and not checkpointing:
-            if _truthy(override.get("allow_a40_uncheckpointed_9b")):
-                return
-            raise ValueError(
-                "Musubi FLUX.2 9B on NVIDIA A40 at 1024-class resolution/rank32 has been observed to OOM "
-                "even with batch_size=1. Set backend.config.gradient_checkpointing: true, "
-                "or set allow_a40_uncheckpointed_9b: true to accept the risk."
-            )
-        return
-    if not _truthy(override.get("allow_a40_large_micro_batch")):
-        raise ValueError(
-            "Musubi FLUX.2 9B on NVIDIA A40 treats batch_size as GPU micro-batch; "
-            f"batch_size={micro_batch} has been observed to OOM before step 1. "
-            "Use batch_size: 1 and keep the intended effective batch with explicit "
-            "--gradient_accumulation_steps, or set backend.config."
-            "allow_a40_large_micro_batch: true to accept the risk."
-        )
 
 
 def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str]) -> bool:

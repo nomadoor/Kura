@@ -17,21 +17,22 @@ def safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
 
 
+NOTIFICATION_CHANNELS = ("desktop", "ntfy")
+
+
 def notification_channels(raw: Any) -> list[str]:
-    explicit = raw
-    if explicit in (None, "", False):
-        explicit = os.environ.get("KURA_NOTIFY")
-    if explicit not in (None, "", False):
-        if isinstance(explicit, str):
-            values = [part.strip().lower() for part in explicit.split(",") if part.strip()]
-            if any(value in ("none", "off", "false", "0") for value in values):
-                return []
-            return values
-        if isinstance(explicit, (list, tuple)):
-            values = [str(part).strip().lower() for part in explicit if str(part).strip()]
-            if any(value in ("none", "off", "false", "0") for value in values):
-                return []
-            return values
+    """The channels a run notifies: `--notify`, else KURA_NOTIFY, else the ones this host can use.
+
+    An explicit choice is `none` or a comma-separated list of desktop and ntfy, spelled exactly.
+    """
+    explicit = raw if raw is not None else os.environ.get("KURA_NOTIFY") or None
+    if explicit is not None:
+        values = explicit.split(",") if isinstance(explicit, str) else explicit
+        if values == ["none"]:
+            return []
+        if not isinstance(values, (list, tuple)) or not values or any(value not in NOTIFICATION_CHANNELS for value in values):
+            raise ValueError(f"notification channels {explicit!r} must be none or a comma-separated list of desktop and ntfy")
+        return list(values)
     channels: list[str] = []
     if shutil.which("notify-send"):
         channels.append("desktop")
@@ -41,7 +42,11 @@ def notification_channels(raw: Any) -> list[str]:
 
 
 def notify(channels: Any, *, subject: str, body: str, priority: str | None = None) -> None:
-    selected = notification_channels(channels)
+    try:
+        selected = notification_channels(channels)
+    except ValueError as exc:  # notification must never break run lifecycle
+        print(f"warning: notification skipped: {exc}", file=sys.stderr)
+        return
     if not selected:
         return
     for channel in selected:
@@ -52,8 +57,6 @@ def notify(channels: Any, *, subject: str, body: str, priority: str | None = Non
                 continue
             if channel == "ntfy":
                 send_ntfy_notification(subject, body, priority=priority)
-                continue
-            print(f"warning: unknown notification channel: {channel}", file=sys.stderr)
         except Exception as exc:  # notification must never break run lifecycle
             print(f"warning: notification failed ({channel}): {safe_error(exc)}", file=sys.stderr)
 

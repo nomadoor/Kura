@@ -103,7 +103,6 @@ _RUNPOD_FIELDS: dict[str, Any] = {
     "workspace_path": _STRING,
     "ports": _STRING_LIST,
     "backend_ports": _dynamic(_STRING_LIST),
-    "cloud_type": _value("string", choices=("SECURE", "COMMUNITY", "ANY", "AUTO")),
     "cloud_types": _sequence(_value("string", choices=("SECURE", "COMMUNITY"))),
     "country_codes": _STRING_LIST,
     "data_center_ids": _STRING_LIST,
@@ -164,6 +163,7 @@ WORKSPACE_OBSOLETE_KEYS = {
     "runpod.api_key_env": _RUNPOD_KEY,
     "comfyui.runpod.api_key_env": _RUNPOD_KEY,
     "runpod.template_id": "Kura starts every Pod from its own start script so the maximum lease is armed at start",
+    "runpod.cloud_type": "runpod.cloud_types (a list of SECURE and COMMUNITY; omitted means both) is the one setting; run `kura workspace migrate`",
 }
 
 _WORKSPACE_ALIASES = {
@@ -281,6 +281,12 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     if not isinstance(config, dict):
         raise ValueError(f"{source} must contain a YAML mapping")
     _validate_workspace_value(config, WORKSPACE_SCHEMA, source=source, path="")
+    runner = config.get("runner") if isinstance(config.get("runner"), dict) else {}
+    if "local_slots" in runner and runner["local_slots"] < 1:
+        raise ValueError(f"{source} runner.local_slots must be at least 1, not {runner['local_slots']!r}")
+    storage = config.get("storage") if isinstance(config.get("storage"), dict) else {}
+    if "host_drive" in storage and not re.fullmatch(r"[A-Z]:", storage["host_drive"]):
+        raise ValueError(f"{source} storage.host_drive must be a drive letter and colon such as D:, not {storage['host_drive']!r}")
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     for index, mount in enumerate(docker.get("mounts") or []):
         if overlaps_hf_cache(mount.get("target", "")):
@@ -368,6 +374,28 @@ def _drop_empty_strings(config: dict[str, Any] | list[Any], path: str = "") -> l
     return notes
 
 
+def _normalize_host_drive(config: dict[str, Any]) -> list[str]:
+    """Write storage.host_drive as a drive letter and colon (D:), in place."""
+    storage = config.get("storage") if isinstance(config.get("storage"), dict) else None
+    value = storage.get("host_drive") if storage is not None else None
+    if not isinstance(value, str) or not re.fullmatch(r"\s*[A-Za-z]:?\s*", value):
+        return []
+    drive = value.strip().rstrip(":").upper() + ":"
+    if drive == value:
+        return []
+    storage["host_drive"] = drive
+    return [f"wrote storage.host_drive {value!r} as {drive!r}"]
+
+
+def _move_cloud_type(config: dict[str, Any]) -> list[str]:
+    """Turn runpod.cloud_type into runpod.cloud_types, in place, before obsolete keys are dropped."""
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else None
+    if runpod is None or runpod.get("cloud_type") not in ("SECURE", "COMMUNITY") or "cloud_types" in runpod:
+        return []
+    runpod["cloud_types"] = [runpod.pop("cloud_type")]
+    return [f"moved runpod.cloud_type to runpod.cloud_types: {runpod['cloud_types']}"]
+
+
 def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
     """Turn a docker.mounts entry for the Hugging Face cache into docker.hf_cache, in place.
 
@@ -417,7 +445,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     version = config.get("schema_version")
     if version in (WORKSPACE_SCHEMA_VERSION, str(WORKSPACE_SCHEMA_VERSION)):
         fixed = deepcopy(config)
-        notes = [*_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed), *_drop_empty_strings(fixed)]
+        notes = [*_normalize_host_drive(fixed), *_move_cloud_type(fixed), *_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed), *_drop_empty_strings(fixed)]
         if version != WORKSPACE_SCHEMA_VERSION:
             fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
             notes.insert(0, "schema_version was the string '2'; it is now the integer 2")
@@ -426,7 +454,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     if version not in (None, 1):
         raise ValueError(f"cannot migrate workspace schema {version!r}; this Kura migrates schema 1 to {WORKSPACE_SCHEMA_VERSION}")
     migrated = deepcopy(config)
-    notes: list[str] = [*_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated), *_drop_empty_strings(migrated)]
+    notes: list[str] = [*_normalize_host_drive(migrated), *_move_cloud_type(migrated), *_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated), *_drop_empty_strings(migrated)]
     candidates: dict[str, list[tuple[str, str]]] = {}
 
     docker = migrated.get("docker") if isinstance(migrated.get("docker"), dict) else None

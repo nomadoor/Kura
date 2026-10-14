@@ -263,7 +263,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             "runpod": {"api_key_env": "MY_RUNPOD_KEY", "template_id": "0fqzfjy6f3", "gpu_type_ids": ["NVIDIA A40"]},
         })
         self.assertEqual(migrated, {
-            "schema_version": 2, "storage": {"host_drive": "E"}, "docker": {}, "runpod": {"gpu_type_ids": ["NVIDIA A40"]},
+            "schema_version": 2, "storage": {"host_drive": "E:"}, "docker": {}, "runpod": {"gpu_type_ids": ["NVIDIA A40"]},
         })
         joined = "\n".join(notes)
         self.assertIn("docker.gpu", joined)
@@ -294,6 +294,32 @@ class WorkspaceSchemaTests(unittest.TestCase):
         listed, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"ports": ["22/tcp", ""]}})
         self.assertEqual(listed, {"schema_version": 2, "runpod": {"ports": ["22/tcp"]}})
         self.assertIn("dropped runpod.ports[1]: it was empty; an unset setting is omitted", notes)
+
+    def test_workspace_values_have_one_form(self) -> None:
+        validate_workspace_config({"schema_version": 2, "storage": {"host_drive": "D:"}, "runner": {"local_slots": 2}, "runpod": {"cloud_types": ["SECURE"]}})
+        for config, message in (
+            ({"storage": {"host_drive": "d"}}, "storage.host_drive must be a drive letter and colon such as D:"),
+            ({"storage": {"host_drive": " D: "}}, "storage.host_drive must be a drive letter and colon"),
+            ({"runner": {"local_slots": 0}}, "runner.local_slots must be at least 1"),
+            ({"runpod": {"cloud_type": "ANY"}}, "runpod.cloud_type"),
+        ):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, message):
+                validate_workspace_config({"schema_version": 2, **config})
+        migrated, notes = migrate_workspace_config({"schema_version": 2, "storage": {"host_drive": "e"}, "runpod": {"cloud_type": "SECURE"}})
+        self.assertEqual(migrated, {"schema_version": 2, "storage": {"host_drive": "E:"}, "runpod": {"cloud_types": ["SECURE"]}})
+        migrated, _ = migrate_workspace_config({"schema_version": 2, "runpod": {"cloud_type": "ANY"}})
+        self.assertEqual(migrated, {"schema_version": 2, "runpod": {}})
+
+    def test_an_invalid_workspace_holds_local_launches_instead_of_counting_one_slot(self) -> None:
+        from kura.runner import local_slots_full
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs").mkdir()
+            (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 0}\n", encoding="utf-8")
+            self.assertTrue(local_slots_full(root))
+            (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 1}\n", encoding="utf-8")
+            self.assertFalse(local_slots_full(root))
 
     def test_kura_init_writes_a_workspace_with_no_empty_setting(self) -> None:
         from kura.cli import cmd_init

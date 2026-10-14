@@ -2322,7 +2322,7 @@ class ResumeRunTests(unittest.TestCase):
             "model": {"base": "example/model", "revision": "fixed"},
             "datasets": [{"id": "tiny", "digest": "sha256:data", "role": None}],
             "recipe": {"steps": 2000, "seed": 1},
-            "compute": {"executor": "runpod", "gpu": "NVIDIA A40", "capacity": {"mode": "immediate"}},
+            "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"], "capacity": {"mode": "immediate"}},
             "sampling": {"prompts": [], "cadence_steps": None},
             "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
         }

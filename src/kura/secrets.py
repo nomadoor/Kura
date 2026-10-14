@@ -111,24 +111,18 @@ def secret_values() -> list[str]:
 
 
 def declared_secret(name: str) -> str | None:
-    """A declared variable's value from the environment, under its own name or any declared alias.
+    """A declared variable's value from the environment, read under its one name.
 
-    Every place that sends a secret anywhere reads it here, so an alias the user
-    chose works on every executor alike.
+    Every place that sends or records a secret reads it here, so every executor sees the same value.
     """
-    for variable in USER_VARIABLES:
-        if variable.name == name:
-            for candidate in (variable.name, *variable.aliases):
-                if os.environ.get(candidate):
-                    return os.environ[candidate]
-            return None
-    raise ValueError(f"{name} is not a declared variable")
+    if name not in {variable.name for variable in USER_VARIABLES}:
+        raise ValueError(f"{name} is not a declared variable")
+    return os.environ.get(name) or None
 
 
 def known_names() -> list[str]:
-    """Names `kura secrets set` accepts: declared variables, aliases, and names workspace.yaml configures."""
+    """Names `kura secrets set` accepts: declared variables and names workspace.yaml configures."""
     names = [variable.name for variable in USER_VARIABLES]
-    names += [alias for variable in USER_VARIABLES for alias in variable.aliases]
     for configured in _configured_names():
         if configured not in names:
             names.append(configured)

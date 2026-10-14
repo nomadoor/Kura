@@ -20,10 +20,10 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
         "schema_version", "id", "type", "experiment", "created", "intent", "parent_run",
         "backend", "model", "datasets", "recipe", "compute", "sampling", "safety", "recovery", "continuation",
     }),
-    "backend": frozenset({"name", "config", "adapter_version"}),
+    "backend": frozenset({"name", "config"}),
     "model": frozenset({"base", "revision"}),
-    "datasets[]": frozenset({"id", "digest", "role", "path"}),
-    "compute": frozenset({"executor", "provider", "gpu", "capacity"}),
+    "datasets[]": frozenset({"id", "digest", "role"}),
+    "compute": frozenset({"executor", "gpu", "capacity"}),
     "compute.capacity": frozenset({"mode", "timeout", "poll_interval"}),
     "sampling": frozenset({"cadence_steps"}),
     "safety": frozenset({
@@ -31,8 +31,9 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
         "checkpoint_estimate_gb", "allow_runpod_disk_risk", "max_run_disk_gb", "allow_storage_risk",
     }),
 }
-# Keys older Kura versions wrote that nothing reads now; `kura run resume` drops them from what it copies.
-RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts"})
+# Keys older Kura versions wrote that nothing reads now; `kura run resume` and `--from` drop them
+# from the frozen run they copy, which is a record of an older Kura.
+RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider"})
 
 
 def validate_train_run_fields(run: dict[str, Any]) -> None:
@@ -49,9 +50,6 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
             path = f"{level}.{key}" if level else str(key)
             if key in TRAIN_RUN_SCHEMA[level]:
                 continue
-            if path in RETIRED_TRAIN_RUN_KEYS:
-                problems.append(f"{path} is no longer used; remove it")
-                continue
             suggestion = closest_key(str(key), TRAIN_RUN_SCHEMA[level])
             hint = f" (did you mean {suggestion!r}?)" if suggestion else ""
             problems.append(f"{path} is not a training run setting{hint}")
@@ -65,6 +63,18 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
     datasets = run.get("datasets")
     for item in datasets if isinstance(datasets, list) else []:
         check("datasets[]", item)
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    for key, value in safety.items():
+        if key.startswith("allow_") and not isinstance(value, bool):
+            problems.append(f"safety.{key} must be true or false, not {value!r}")
+        elif key.endswith("_gb") and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+            problems.append(f"safety.{key} must be a positive number of GiB, not {value!r}")
+    if isinstance(compute, dict) and "gpu" in compute:
+        gpu = compute["gpu"]
+        if not isinstance(gpu, list) or not gpu or not all(isinstance(item, str) and item.strip() for item in gpu):
+            problems.append(f"compute.gpu must be a list of RunPod GPU type IDs (for example [NVIDIA A40]), not {gpu!r}; omit it to use the workspace list")
+        elif run_executor(run) != "runpod":
+            problems.append("compute.gpu chooses a RunPod GPU; a Docker run uses the local GPU, so remove it")
     if problems:
         raise ValueError("run.yaml: " + "; ".join(problems))
 
@@ -79,6 +89,15 @@ def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
         holder = copied.get(parent) if parent else copied
         if isinstance(holder, dict):
             holder.pop(key, None)
+    for item in copied.get("datasets") if isinstance(copied.get("datasets"), list) else []:
+        if isinstance(item, dict):
+            item.pop("path", None)
+    # An older Kura wrote compute.gpu as one string, or a placeholder such as "gpu" on a Docker run.
+    compute = copied.get("compute") if isinstance(copied.get("compute"), dict) else {}
+    if isinstance(compute.get("gpu"), (str, bool)) or compute.get("gpu") is None:
+        gpu = compute.pop("gpu", None)
+        if run_executor(copied) == "runpod" and isinstance(gpu, str) and gpu not in {"", "true", "false", "gpu", "cpu"}:
+            compute["gpu"] = [gpu]
     return copied
 
 
@@ -93,9 +112,7 @@ def run_executor(run: dict[str, Any]) -> str:
 
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     executor = compute.get("executor")
-    if isinstance(executor, str) and executor:
-        return executor
-    return "runpod" if compute.get("provider") == "runpod" else "docker"
+    return executor if isinstance(executor, str) and executor else "docker"
 
 
 def capacity_policy(run: dict[str, Any]) -> dict[str, Any]:
