@@ -150,9 +150,10 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         **AI_TOOLKIT_DATASET_OPTION_CAPABILITIES,
     },
     config_value_choices=(("model_arch", tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *tagged_entries()}))),),
-    # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer.
+    # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer. Its -1 accumulation
+    # (a whole epoch) is refused: Kura counts and resumes by optimizer steps.
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 0), ("gradient_accumulation_steps", 1)),
-    decided=frozenset({"lr_scheduler"}),
+    decided=frozenset({"lr_scheduler", "optimizer_type"}),
 )
 
 MUSUBI_SURFACE = BackendSurface(
@@ -183,7 +184,7 @@ MUSUBI_SURFACE = BackendSurface(
         "one_frame_no_2x", "one_frame_no_4x", "precache", "quantized_qwen", "remove_first_image_from_target",
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only",
     }),
-    integer_minimums=(("save_every_n_steps", 1), ("gradient_accumulation_steps", 1)),
+    integer_minimums=(("save_every_n_steps", 1), ("gradient_accumulation_steps", 1), ("prune_checkpoints_before_step", 1)),
     decided=frozenset({"lr_scheduler"}),
     config_value_choices=(
         ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
@@ -400,6 +401,12 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             f"{adapter.name} backend.config contains unsupported key(s): " + ", ".join(details)
             + f". Run `kura run capabilities {adapter.name}` for accepted fields."
         )
+    for field, choices in adapter.surface.config_value_choices:
+        if field in native and native[field] not in choices:
+            raise ValueError(
+                f"{adapter.name} backend.config.{field} {native[field]!r} is not accepted; use one of: "
+                + ", ".join(choices) + f". Run `kura run capabilities {adapter.name}` for accepted values."
+            )
     not_boolean = sorted(key for key in adapter.surface.boolean_fields if key in native and not isinstance(native[key], bool))
     if not_boolean:
         raise ValueError(
@@ -411,12 +418,6 @@ def validate_backend_config(run: dict[str, Any]) -> None:
         if field in native and (isinstance(value, bool) or not isinstance(value, int) or value < minimum):
             raise ValueError(
                 f"{adapter.name} backend.config.{field} must be an integer of at least {minimum}, not {value!r}"
-            )
-    for field, choices in adapter.surface.config_value_choices:
-        if field in native and native[field] not in choices:
-            raise ValueError(
-                f"{adapter.name} backend.config.{field} {native[field]!r} is not accepted; use one of: "
-                + ", ".join(choices) + f". Run `kura run capabilities {adapter.name}` for accepted values."
             )
     defaults = dict(adapter.surface.selector_defaults)
     for condition in adapter.surface.conditions:

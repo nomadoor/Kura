@@ -5621,9 +5621,7 @@ class MusubiBackendTests(unittest.TestCase):
         }}
         cases = (
             ({"convrot_int8": True, "fp8_base": True}, "cannot be combined with fp8"),
-            ({"convrot_int8_bwd": "int8"}, "requires convrot_int8=true"),
             ({"convrot_int8": True, "include_turbo_dit": True}, "cannot be combined with include_turbo_dit"),
-            ({"gradient_checkpointing_cpu_offload": True}, "requires gradient_checkpointing=true"),
         )
         for changes, expected in cases:
             with self.subTest(changes=changes):

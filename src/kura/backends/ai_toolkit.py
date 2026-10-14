@@ -1055,7 +1055,8 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     train = config.get("train") if isinstance(config.get("train"), dict) else {}
     accumulation = native.get("gradient_accumulation_steps", 1)
-    optimizer = str(native.get("optimizer_type", train.get("optimizer", "adamw8bit"))).lower()
+    # Every pinned baseline entry fills adamw8bit when optimizer_type is unset.
+    optimizer = native.get("optimizer_type", "adamw8bit")
     limitations = []
     if accumulation != 1:
         limitations.append("AI-Toolkit Resume initially requires gradient_accumulation_steps=1")
@@ -1394,7 +1395,9 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         for section, key, field in (
             ("save", "save_every", "save_every_n_steps"), ("save", "max_step_saves_to_keep", "save_last_n_steps"),
             ("train", "gradient_accumulation_steps", "gradient_accumulation_steps"),
-            ("train", "lr_scheduler", "lr_scheduler"),
+            # The real accumulation in the pinned trainer (config_modules.py:462-465).
+            ("train", "gradient_accumulation", "gradient_accumulation_steps"),
+            ("train", "lr_scheduler", "lr_scheduler"), ("train", "optimizer", "optimizer_type"),
         ):
             if _nested(native, section, key) is not None:
                 protected.append(f"{section}.{key} (use backend.config.{field})")

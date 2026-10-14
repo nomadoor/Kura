@@ -432,7 +432,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertTrue({"save_every_n_steps", "gradient_accumulation_steps", "lr_scheduler"} <= set(decided))
 
     def test_ai_toolkit_native_config_cannot_set_what_kura_decides_from(self) -> None:
-        for section, key in (("save", "save_every"), ("save", "max_step_saves_to_keep"), ("train", "gradient_accumulation_steps"), ("train", "lr_scheduler")):
+        for section, key in (("save", "save_every"), ("save", "max_step_saves_to_keep"), ("train", "gradient_accumulation_steps"), ("train", "gradient_accumulation"), ("train", "lr_scheduler"), ("train", "optimizer")):
             with self.subTest(key=f"{section}.{key}"), tempfile.TemporaryDirectory() as directory:
                 destination = Path(directory)
                 run = {
@@ -442,6 +442,21 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self._write_ai_toolkit_projection(run, destination)
                 with self.assertRaisesRegex(ValueError, f"overrides Kura-owned field.*{section}.{key}"):
                     BACKENDS["ai-toolkit"].compile(run, destination)
+
+    def test_escape_hatches_cannot_change_the_schedule_or_the_steps(self) -> None:
+        from kura.backends import musubi_command, sd_scripts
+
+        for flags in (musubi_command.MUSUBI_OWNED_FLAGS, sd_scripts.OWNED_FLAGS):
+            self.assertLessEqual({"--lr_scheduler_type", "--max_train_epochs"}, flags)
+
+    def test_musubi_pruning_takes_a_positive_integer_only(self) -> None:
+        for value in ("1500", 2.5, True, 0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "prune_checkpoints_before_step must be an integer of at least 1"):
+                validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "prune_checkpoints_before_step": value}}})
+
+    def test_an_unknown_selector_is_reported_before_other_value_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "architecture 'flux' is not accepted"):
+            validate_backend_config({"backend": {"name": "sd-scripts", "config": {"architecture": "flux", "save_every_n_steps": "x", "cache_latents": "yes"}}})
 
     def test_model_arch_is_not_a_musubi_field(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported key\\(s\\): 'model_arch'"):

@@ -63,7 +63,9 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
 # Flags Kura owns for every architecture. Flags Kura emits only for some
 # architectures (for example --timestep_sampling) are refused by
 # _reject_emitted_duplicates only where that architecture's command carries them.
-MUSUBI_OWNED_FLAGS = EPOCH_SAVE_FLAGS | frozenset({
+# --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps, both
+# decided by Kura (trainer_base.py:373 and :1771 at v0.3.5), so they are owned too.
+MUSUBI_OWNED_FLAGS = EPOCH_SAVE_FLAGS | frozenset({"--lr_scheduler_type", "--max_train_epochs"}) | frozenset({
     "--audio_vae", "--base_weights", "--batch_size", "--block_swap_h2d_only",
     "--block_swap_ring_size", "--blocks_to_swap", "--byt5", "--cache_seed",
     "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config", "--dit",
@@ -254,16 +256,11 @@ def _musubi_video_preflight_env(run: dict[str, Any], projection: dict[str, Any])
     }
 
 
-def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: Any) -> list[str] | None:
-    if before_step in (None, False):
+def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: int | None) -> list[str] | None:
+    """Delete step checkpoints before `before_step`, a positive integer validate_backend_config checked."""
+    if before_step is None:
         return None
-    try:
-        threshold = int(before_step)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Musubi Tuner prune_checkpoints_before_step must be an integer") from exc
-    if threshold <= 0:
-        return None
-    return ["python", "-c", script_source("prune_checkpoints.py"), output_dir, output_name, str(threshold)]
+    return ["python", "-c", script_source("prune_checkpoints.py"), output_dir, output_name, str(before_step)]
 
 
 def _musubi_start_commands(dataset_config: str, download_commands: list[list[str]]) -> list[list[str]]:
@@ -771,15 +768,10 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with fp8_base or fp8_scaled")
         if convrot_int8 and _truthy(override.get("include_turbo_dit")):
             raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with include_turbo_dit")
-        if convrot_int8_bwd is not None:
-            if not isinstance(convrot_int8_bwd, str) or convrot_int8_bwd not in ("bf16", "int8"):
-                raise ValueError("Musubi Krea 2 convrot_int8_bwd must be one of: bf16, int8")
-            if not convrot_int8:
-                raise ValueError("Musubi Krea 2 convrot_int8_bwd requires convrot_int8=true")
-        if checkpoint_cpu_offload and not _truthy(override.get("gradient_checkpointing")):
-            raise ValueError(
-                "Musubi Krea 2 gradient_checkpointing_cpu_offload requires gradient_checkpointing=true"
-            )
+        # validate_backend_config refuses convrot_int8_bwd without convrot_int8 and the CPU
+        # offload without gradient_checkpointing.
+        if convrot_int8_bwd is not None and (not isinstance(convrot_int8_bwd, str) or convrot_int8_bwd not in ("bf16", "int8")):
+            raise ValueError("Musubi Krea 2 convrot_int8_bwd must be one of: bf16, int8")
         train_argv = [
             *common, "src/musubi_tuner/krea2_train_network.py",
             "--dit", dit, "--vae", vae,
