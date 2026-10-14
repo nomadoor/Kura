@@ -454,6 +454,22 @@ class RenderCasesCompileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "choose the base model in the workflow itself"):
                 compile_render(root, run_dir)
 
+    def test_stage_cleanup_never_leaves_its_base_for_an_old_manifest(self) -> None:
+        from kura.render import remove_leftover_stages
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            outside = root / "shared" / "render-1-keep.safetensors"
+            outside.parent.mkdir()
+            outside.write_bytes(b"x")
+            (root / "loras").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "comfyui:\n  lora_dir: loras\n  lora_stage_subdir: ../shared\n", encoding="utf-8")
+            remove_leftover_stages(root, run_dir)
+            self.assertTrue(outside.exists())
+
     def test_render_lora_stage_is_not_a_setting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

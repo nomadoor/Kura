@@ -290,7 +290,7 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
     for key in ("lora_stage_subdir", "model_patch_stage_subdir", "input_stage_subdir"):
         value = comfyui.get(key)
-        if value is not None and (value != value.strip("/\\") or Path(value).is_absolute() or not Path(value).parts or set(Path(value).parts) & {".", ".."}):
+        if value is not None and not plain_relative_folder(value):
             raise ValueError(f"{source} comfyui.{key} must be a relative folder name such as Kura_tmp (no leading or trailing slash, . or ..), not {value!r}")
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     for index, mount in enumerate(docker.get("mounts") or []):
@@ -299,6 +299,14 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
                 f"{source} docker.mounts[{index}] mounts over the Hugging Face cache; set docker.hf_cache to choose where "
                 "the cache lives, or run `kura workspace migrate` to move this entry there"
             )
+
+
+def plain_relative_folder(value: Any) -> bool:
+    """Whether a stage subfolder stays inside its base: a relative name with no slash at either end, `.`, or `..`."""
+    return (
+        isinstance(value, str) and value == value.strip("/\\") and not Path(value).is_absolute()
+        and bool(Path(value).parts) and not set(Path(value).parts) & {".", ".."}
+    )
 
 
 def comfyui_endpoint(config: dict[str, Any]) -> str:

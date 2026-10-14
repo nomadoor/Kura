@@ -23,7 +23,7 @@ from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_m
 from kura.fsio import atomic_write_json
 from kura.records import record as as_record
 from kura.fsio import atomic_write_yaml as dump_yaml
-from kura.workspace import validate_workspace_config
+from kura.workspace import plain_relative_folder, validate_workspace_config
 
 
 # Promptset keys Kura owns directly. Every other key in a promptset item must be
@@ -833,7 +833,8 @@ def remove_leftover_stages(workspace: Path, run_dir: Path) -> list[str]:
             continue
         base = _workspace_path(workspace, comfyui.get(dir_key))
         subdir = comfyui.get(subdir_key, "Kura_tmp")
-        if base is None:
+        # A manifest frozen by an older Kura was never validated; cleanup never leaves its base.
+        if base is None or not plain_relative_folder(subdir):
             continue
         # Run ids end in a random hex suffix (`<time>_<slug>_<hex>`), so `<id>-` never starts another run's id.
         for path in sorted((base / subdir).glob(f"{run_dir.name}-*")):
