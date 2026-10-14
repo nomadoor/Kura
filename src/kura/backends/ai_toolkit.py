@@ -23,7 +23,7 @@ from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.provenance import artifact_pinning
-from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
+from kura.training_artifacts import require_constant_scheduler_for_resume, resume_steps, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 
 
@@ -1054,7 +1054,7 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     native = backend_config(run, "ai-toolkit")
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     train = config.get("train") if isinstance(config.get("train"), dict) else {}
-    accumulation = native.get("gradient_accumulation_steps", train.get("gradient_accumulation_steps", 1))
+    accumulation = native.get("gradient_accumulation_steps", 1)
     optimizer = str(native.get("optimizer_type", train.get("optimizer", "adamw8bit"))).lower()
     limitations = []
     if accumulation != 1:
@@ -1144,9 +1144,9 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "rank": native.get("network_dim") or _nested(config, "network", "linear"),
         "alpha": native.get("network_alpha") or _nested(config, "network", "linear_alpha"),
         "learning_rate": native.get("learning_rate") or _nested(config, "train", "lr") or filled["train"].get("lr"),
-        "scheduler": native.get("lr_scheduler") or _nested(config, "train", "lr_scheduler"),
+        "scheduler": native.get("lr_scheduler"),
         "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
-        "gradient_accumulation_steps": native.get("gradient_accumulation_steps") or _nested(config, "train", "gradient_accumulation_steps"),
+        "gradient_accumulation_steps": native.get("gradient_accumulation_steps"),
         "bypass_guidance_embedding": (
             native.get("bypass_guidance_embedding")
             if "bypass_guidance_embedding" in native
@@ -1169,9 +1169,9 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "quantize_te": native.get("quantize_te") if "quantize_te" in native else _nested(config, "model", "quantize_te") if _nested(config, "model", "quantize_te") is not None else filled["model"].get("quantize_te"),
         },
         "checkpoint": {
-            "save_every_n_steps": native.get("save_every_n_steps") or _nested(config, "save", "save_every"),
+            "save_every_n_steps": native.get("save_every_n_steps"),
             # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
-            "keep_last": native["save_last_n_steps"] if native.get("save_last_n_steps") is not None else _nested(config, "save", "max_step_saves_to_keep"),
+            "keep_last": native.get("save_last_n_steps"),
             "unset_keep_last": "trainer_default",
         },
     }
@@ -1390,6 +1390,14 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         native_model_kwargs = native_model.get("model_kwargs") if isinstance(native_model, dict) else None
         if isinstance(native_model_kwargs, dict) and "edit" in native_model_kwargs:
             protected.append("model.model_kwargs.edit (use backend.config.model_edit)")
+        # Kura names, counts, and resumes saves from these, so only their typed fields set them.
+        for section, key, field in (
+            ("save", "save_every", "save_every_n_steps"), ("save", "max_step_saves_to_keep", "save_last_n_steps"),
+            ("train", "gradient_accumulation_steps", "gradient_accumulation_steps"),
+            ("train", "lr_scheduler", "lr_scheduler"),
+        ):
+            if _nested(native, section, key) is not None:
+                protected.append(f"{section}.{key} (use backend.config.{field})")
         if protected:
             raise ValueError(
                 "AI-Toolkit backend.config.native_config overrides Kura-owned field(s): "
@@ -1473,9 +1481,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         if any(process.get(key) for key in ("embedding", "adapter", "decorator")) or ema_config.get("use_ema") or _nested(process, "train", "merge_network_on_save"):
             raise ValueError("AI-Toolkit training-state capture does not support embedding, adapter, decorator, EMA, or merge_network_on_save")
     if continuation is not None:
-        scheduler = str(_nested(process, "train", "lr_scheduler") or "constant").lower()
-        if scheduler != "constant":
-            raise ValueError("AI-Toolkit State Resume initially requires the constant scheduler")
+        require_constant_scheduler_for_resume("AI-Toolkit", override.get("lr_scheduler"))
         process["train"]["steps"] = resume_steps(run, contract=state_contract)["native_end"]
     atomic_write_yaml(destination.with_suffix(".yaml"), config)
     return command_ai_toolkit(run)

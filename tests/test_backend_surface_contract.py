@@ -415,6 +415,34 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, re.escape(message)):
                     validate_backend_config({"backend": {"name": backend, "config": config}})
 
+    def test_decided_integers_have_one_form_on_every_backend(self) -> None:
+        for backend, base in (("sd-scripts", {"architecture": "sd15"}), ("musubi-tuner", {"architecture": "wan"}), ("ai-toolkit", {"model_arch": "sdxl"})):
+            for value in (2.5, "250", 0, True):
+                with self.subTest(backend=backend, value=value):
+                    with self.assertRaisesRegex(ValueError, "save_every_n_steps must be an integer of at least 1"):
+                        validate_backend_config({"backend": {"name": backend, "config": {**base, "save_every_n_steps": value}}})
+        validate_backend_config({"backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "save_last_n_steps": 0}}, "model": {"base": "x/y"}})
+        with self.assertRaisesRegex(ValueError, "save_last_n_steps must be an integer of at least 1"):
+            validate_backend_config({"backend": {"name": "sd-scripts", "config": {"architecture": "sd15", "save_last_n_steps": 0}}})
+
+    def test_capabilities_list_the_fields_kura_decides_from(self) -> None:
+        for backend in BACKENDS:
+            with self.subTest(backend=backend):
+                decided = backend_capabilities(backend)["decided_fields"]
+                self.assertTrue({"save_every_n_steps", "gradient_accumulation_steps", "lr_scheduler"} <= set(decided))
+
+    def test_ai_toolkit_native_config_cannot_set_what_kura_decides_from(self) -> None:
+        for section, key in (("save", "save_every"), ("save", "max_step_saves_to_keep"), ("train", "gradient_accumulation_steps"), ("train", "lr_scheduler")):
+            with self.subTest(key=f"{section}.{key}"), tempfile.TemporaryDirectory() as directory:
+                destination = Path(directory)
+                run = {
+                    "id": "native-owned", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "native_config": {section: {key: 1}}}},
+                    "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                }
+                self._write_ai_toolkit_projection(run, destination)
+                with self.assertRaisesRegex(ValueError, f"overrides Kura-owned field.*{section}.{key}"):
+                    BACKENDS["ai-toolkit"].compile(run, destination)
+
     def test_model_arch_is_not_a_musubi_field(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported key\\(s\\): 'model_arch'"):
             validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"model_arch": "flux2"}}})

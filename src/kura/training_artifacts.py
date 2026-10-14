@@ -917,14 +917,26 @@ def missing_training_state_error(capture_required: bool, *, trainer_completed: b
     return MISSING_STATE_SYNC_ERROR if capture_required and trainer_completed else None
 
 
-# Native save flags that count epochs; managed state is retained by steps, so they are refused.
+# Native save flags that count epochs. Kura names, counts, and budgets saves by steps, so every
+# accelerate backend owns them and refuses them in extra_args.
 EPOCH_SAVE_FLAGS = frozenset({"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"})
+
+
+def require_constant_scheduler_for_resume(backend_label: str, scheduler: Any) -> None:
+    """A Resume restores a scheduler's state only for a constant schedule; every backend asks here.
+
+    `scheduler` is the backend's authored lr_scheduler; omitted is the trainers' default, constant.
+    """
+    if scheduler is not None and scheduler != "constant":
+        raise ValueError(
+            f"{backend_label} State Resume initially requires lr_scheduler: constant, not {scheduler!r}; "
+            "create a Fork from Weight to change the schedule"
+        )
 
 
 def managed_state_save_args(
     run: dict[str, Any],
     configured_cadence: int | None,
-    extra_args: list[str],
     *,
     contract: dict[str, Any] | None = None,
 ) -> list[str]:
@@ -936,13 +948,6 @@ def managed_state_save_args(
     backend's validated `save_every_n_steps`; a backend building its own command passes its
     training-state contract.
     """
-    epoch_flags = sorted({arg.split("=", 1)[0] for arg in extra_args} & EPOCH_SAVE_FLAGS)
-    if epoch_flags:
-        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-        raise ValueError(
-            f"{backend.get('name')} epoch save flags are incompatible with managed training-state retention; "
-            "use backend.config.save_every_n_steps instead: " + ", ".join(epoch_flags)
-        )
     cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
     if not isinstance(cadence, int):
         cadence = None

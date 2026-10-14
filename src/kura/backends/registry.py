@@ -54,6 +54,14 @@ class BackendSurface:
     nested_config_fields: dict[str, dict[str, dict[str, Any]]] | None = None
     # Selector fields Kura decides from, with their one accepted spelling each; checked first.
     config_value_choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # Integer fields Kura decides from and the least value each accepts; anything else is refused.
+    integer_minimums: tuple[tuple[str, int], ...] = ()
+    # Other fields Kura decides from, besides the selectors above; escape hatches may not set them.
+    decided: frozenset[str] = frozenset()
+
+    @property
+    def decided_fields(self) -> frozenset[str]:
+        return self.decided | {field for field, _ in self.config_value_choices} | {field for field, _ in self.integer_minimums}
 
     def __post_init__(self) -> None:
         if self.boolean_fields - self.fields:
@@ -67,6 +75,8 @@ class BackendSurface:
             raise ValueError("conditional backend fields are not declared: " + ", ".join(sorted(unknown)))
         if len(conditional) != len(set(conditional)):
             raise ValueError("conditional backend fields must be declared exactly once")
+        if self.decided_fields - self.fields:
+            raise ValueError("decided backend fields are not declared: " + ", ".join(sorted(self.decided_fields - self.fields)))
         choice_fields = [field for field, _ in self.config_value_choices]
         if len(choice_fields) != len(set(choice_fields)) or set(choice_fields) - self.fields:
             raise ValueError("backend config value choices must name distinct declared fields")
@@ -140,6 +150,9 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         **AI_TOOLKIT_DATASET_OPTION_CAPABILITIES,
     },
     config_value_choices=(("model_arch", tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *tagged_entries()}))),),
+    # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer.
+    integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 0), ("gradient_accumulation_steps", 1)),
+    decided=frozenset({"lr_scheduler"}),
 )
 
 MUSUBI_SURFACE = BackendSurface(
@@ -170,6 +183,8 @@ MUSUBI_SURFACE = BackendSurface(
         "one_frame_no_2x", "one_frame_no_4x", "precache", "quantized_qwen", "remove_first_image_from_target",
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only",
     }),
+    integer_minimums=(("save_every_n_steps", 1), ("gradient_accumulation_steps", 1)),
+    decided=frozenset({"lr_scheduler"}),
     config_value_choices=(
         ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
         ("h3_loss_method", ("guidance", "teacher_matching", "training_adapter")),
@@ -261,6 +276,8 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     fields=frozenset(CONFIG_KEYS - {"command", "extra_args"}),
     escape_hatches=frozenset({"command", "extra_args"}),
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
+    integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 1), ("gradient_accumulation_steps", 1)),
+    decided=frozenset({"lr_scheduler"}),
     config_value_choices=(
         ("architecture", tuple(sorted({architecture for architecture, _ in ENTRYPOINTS}))),
         ("mode", tuple(sorted({mode for _, mode in ENTRYPOINTS}))),
@@ -389,6 +406,12 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             f"{adapter.name} backend.config field(s) must be true or false: "
             + ", ".join(f"{key}={native[key]!r}" for key in not_boolean)
         )
+    for field, minimum in adapter.surface.integer_minimums:
+        value = native.get(field)
+        if field in native and (isinstance(value, bool) or not isinstance(value, int) or value < minimum):
+            raise ValueError(
+                f"{adapter.name} backend.config.{field} must be an integer of at least {minimum}, not {value!r}"
+            )
     for field, choices in adapter.surface.config_value_choices:
         if field in native and native[field] not in choices:
             raise ValueError(
@@ -441,5 +464,7 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
         },
         "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
         "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
+        "integer_minimums": dict(adapter.surface.integer_minimums),
+        "decided_fields": sorted(adapter.surface.decided_fields),
         "boolean_fields": sorted(adapter.surface.boolean_fields),
     }

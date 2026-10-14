@@ -145,7 +145,7 @@ The plan's **Training state** block says what a run leaves to resume from:
 - `keep`: how many of the newest saved states are kept, 1 or 2
   (`recovery.training_state.keep_generations`, default 2).
 - `cadence`: steps between state saves, from `backend.config.save_every_n_steps`
-  (or AI-Toolkit's `native_config.save.save_every`). Every trainer counts a
+  (the only place it is set; escape hatches refuse it). Every trainer counts a
   Resume's steps from the step it resumes at, so a Resume keeps the cadence and
   saves on its multiples; it always saves state at its end too. When none is
   set, sd-scripts saves state once, at the end of the steps the run trains (the

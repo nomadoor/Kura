@@ -218,9 +218,9 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
                 owner.assert_called()
 
     def test_keep_last_zero_counts_every_save_in_plan_and_monitor_alike(self) -> None:
-        # AI-Toolkit max_step_saves_to_keep 0 slices [:-0] and removes nothing: 1000 steps every 50 is 20 kept.
+        # AI-Toolkit save_last_n_steps 0 (max_step_saves_to_keep 0) slices [:-0] and removes nothing: 1000 steps every 50 is 20 kept.
         run = ai_toolkit_run()
-        run["backend"]["config"]["native_config"] = {"save": {"save_every": 50, "max_step_saves_to_keep": 0}}
+        run["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 0})
         checkpoint = plan._adapter_display(run)["checkpoint"]
         self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"})
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
@@ -232,7 +232,7 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         self.assertEqual(_monitor_expected(run, checkpoint), 20)
         # A positive keep-last leaves fewer: no count, no warning, no refusal, in both; the disk
         # estimate counts the peak (the kept saves plus the one written before the cleanup).
-        run["backend"]["config"]["native_config"]["save"]["max_step_saves_to_keep"] = 3
+        run["backend"]["config"]["save_last_n_steps"] = 3
         checkpoint = plan._adapter_display(run)["checkpoint"]
         self.assertEqual(plan._disk_warnings(run, checkpoint), [])
         self.assertEqual([record for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"], [])
@@ -271,7 +271,7 @@ class CheckpointRetentionTests(unittest.TestCase):
 
     def test_ai_toolkit_with_no_keep_last_is_pruned_by_the_trainer_default(self) -> None:
         # The pinned trainer keeps max_step_saves_to_keep (default 5) when the run sets none.
-        for config in ({"save_every_n_steps": 50}, {"native_config": {"save": {"save_every": 50}}}):
+        for config in ({"save_every_n_steps": 50},):
             run = ai_toolkit_run()
             run["backend"]["config"].update(config)
             with self.subTest(config=config):
@@ -282,7 +282,6 @@ class CheckpointRetentionTests(unittest.TestCase):
     def test_ai_toolkit_keep_last_zero_keeps_every_save(self) -> None:
         for config in (
             {"save_every_n_steps": 50, "save_last_n_steps": 0},
-            {"native_config": {"save": {"save_every": 50, "max_step_saves_to_keep": 0}}},
         ):
             run = ai_toolkit_run()
             run["backend"]["config"].update(config)
