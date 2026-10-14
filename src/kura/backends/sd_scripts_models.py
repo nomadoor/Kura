@@ -30,20 +30,14 @@ def sd_scripts_architecture(run: dict[str, Any]) -> str:
     value = sd_scripts_native(run).get("architecture")
     if not isinstance(value, str) or not value.strip():
         raise ValueError("sd-scripts backend.config.architecture is required")
-    normalized = value.lower().replace("-", "_").replace(".", "_")
-    aliases = {
-        "sd_1_5": "sd15", "stable_diffusion_1_5": "sd15", "stable_diffusion15": "sd15",
-        "sdxl_1_0": "sdxl", "flux": "flux1", "flux_1": "flux1",
-    }
-    return aliases.get(normalized, normalized)
+    return value
 
 
 def sd_scripts_mode(run: dict[str, Any]) -> str:
     value = sd_scripts_native(run).get("mode", "lora")
     if not isinstance(value, str) or not value.strip():
         raise ValueError("sd-scripts backend.config.mode must be a string")
-    normalized = value.lower().replace("-", "_")
-    return {"controlnet_lllite": "controlnet_lllite", "lllite": "controlnet_lllite"}.get(normalized, normalized)
+    return value
 
 
 def _component(value: str) -> str:

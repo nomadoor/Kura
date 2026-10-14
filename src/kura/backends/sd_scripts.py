@@ -18,7 +18,7 @@ from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_yaml
 from kura.secrets import is_secret_name
-from kura.training_artifacts import managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
+from kura.training_artifacts import EPOCH_SAVE_FLAGS, managed_state_save_args, require_constant_scheduler_for_resume, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, validated_recipe
 
 
@@ -82,7 +82,9 @@ ENTRYPOINTS = {
     ("anima", "controlnet_lllite"): "anima_train_control_net_lllite.py",
 }
 NETWORK_MODULES = {"sd15": "networks.lora", "sdxl": "networks.lora", "flux1": "networks.lora_flux", "anima": "networks.lora_anima"}
-OWNED_FLAGS = {
+# --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps
+# (library/optimizer.py:509 and train_network.py:1206 at 37a1cbb), so they are owned too.
+OWNED_FLAGS = EPOCH_SAVE_FLAGS | {"--lr_scheduler_type", "--max_train_epochs"} | {
     "--dataset_config", "--pretrained_model_name_or_path", "--clip_l", "--t5xxl", "--ae", "--qwen3", "--vae",
     "--llm_adapter_path", "--t5_tokenizer_path", "--network_module", "--network_dim", "--network_alpha",
     "--learning_rate", "--optimizer_type", "--lr_scheduler", "--mixed_precision", "--max_train_steps", "--seed",
@@ -273,8 +275,7 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
     if continuation is not None:
         if (architecture, mode) not in {("sd15", "lora"), ("sdxl", "lora"), ("flux1", "lora")}:
             raise ValueError(f"sd-scripts {architecture}/{mode} State Resume is not yet supported")
-        if str(native.get("lr_scheduler", "constant")).lower() != "constant":
-            raise ValueError("sd-scripts State Resume initially requires the constant scheduler")
+        require_constant_scheduler_for_resume("sd-scripts", native.get("lr_scheduler"))
         if native.get("gradient_accumulation_steps", 1) != 1:
             raise ValueError("sd-scripts State Resume initially requires gradient_accumulation_steps=1")
         native_steps = resume_steps(run, contract=training_state_contract_sd_scripts(run))["native_end"]
@@ -320,14 +321,10 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
         args.append("--network_train_unet_only")
     if architecture != "anima" and _truthy(native.get("fp8_base")):
         args.append("--fp8_base")
-    for key in ("save_every_n_steps", "save_last_n_steps"):
-        value = native.get(key)
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
-            raise ValueError(f"sd-scripts {key} must be a positive integer")
     save_args: list[str] = []
     if training_state_managed(run, training_state_contract_sd_scripts(run)):
         save_args = managed_state_save_args(
-            run, native.get("save_every_n_steps"), _extra_args(native), contract=training_state_contract_sd_scripts(run),
+            run, native.get("save_every_n_steps"), contract=training_state_contract_sd_scripts(run),
         )
     for key in ("save_every_n_steps", "save_last_n_steps"):
         if key == "save_every_n_steps" and save_args[:1] == ["--save_every_n_steps"]:

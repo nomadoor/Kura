@@ -134,7 +134,7 @@ class SdScriptsBackendTests(unittest.TestCase):
     def test_state_capture_rejects_epoch_save_escape_hatches(self) -> None:
         run = base_run("sd15", "lora")
         run["backend"]["config"]["extra_args"] = ["--save_every_n_epochs", "1"]
-        with self.assertRaisesRegex(ValueError, "epoch.*training-state"):
+        with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
             command_sd_scripts(run)
 
     def test_state_capture_is_on_by_default_and_resume_uses_logical_target(self) -> None:
@@ -172,7 +172,7 @@ class SdScriptsBackendTests(unittest.TestCase):
 
     def test_sd_scripts_resume_rejects_unsafe_initial_envelopes(self) -> None:
         for architecture, mode, change, message in (
-            ("sd15", "lora", {"lr_scheduler": "cosine"}, "constant scheduler"),
+            ("sd15", "lora", {"lr_scheduler": "cosine"}, "requires lr_scheduler: constant"),
             ("sd15", "lora", {"gradient_accumulation_steps": 2}, "gradient_accumulation_steps=1"),
             ("anima", "lora", {}, "not yet supported"),
             ("anima", "controlnet_lllite", {}, "not yet supported"),

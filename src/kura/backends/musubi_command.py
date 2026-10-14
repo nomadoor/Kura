@@ -23,7 +23,7 @@ from kura.backends.musubi_native_selectors import musubi_native_task, wan_native
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.secrets import is_secret_name
-from kura.training_artifacts import checkpoint_save_cadence, managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
+from kura.training_artifacts import EPOCH_SAVE_FLAGS, checkpoint_save_cadence, managed_state_save_args, require_constant_scheduler_for_resume, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import resume_intent, validated_recipe
 
 
@@ -63,7 +63,9 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
 # Flags Kura owns for every architecture. Flags Kura emits only for some
 # architectures (for example --timestep_sampling) are refused by
 # _reject_emitted_duplicates only where that architecture's command carries them.
-MUSUBI_OWNED_FLAGS = frozenset({
+# --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps, both
+# decided by Kura (trainer_base.py:373 and :1771 at v0.3.5), so they are owned too.
+MUSUBI_OWNED_FLAGS = EPOCH_SAVE_FLAGS | frozenset({"--lr_scheduler_type", "--max_train_epochs"}) | frozenset({
     "--audio_vae", "--base_weights", "--batch_size", "--block_swap_h2d_only",
     "--block_swap_ring_size", "--blocks_to_swap", "--byt5", "--cache_seed",
     "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config", "--dit",
@@ -99,23 +101,6 @@ def _extra_args(override: dict[str, Any]) -> list[str]:
     return values
 
 
-def _extra_arg_value(arguments: list[str], flag: str) -> str | None:
-    values: list[str] = []
-    for index, argument in enumerate(arguments):
-        if argument == flag:
-            if index + 1 >= len(arguments) or arguments[index + 1].startswith("--"):
-                raise ValueError(f"Musubi backend.config.extra_args {flag} requires a value")
-            values.append(arguments[index + 1])
-        elif argument.startswith(flag + "="):
-            value = argument.split("=", 1)[1]
-            if not value:
-                raise ValueError(f"Musubi backend.config.extra_args {flag} requires a value")
-            values.append(value)
-    if len(values) > 1:
-        raise ValueError(f"Musubi backend.config.extra_args duplicates {flag}")
-    return values[0] if values else None
-
-
 def _reject_emitted_duplicates(train: list[str], extra_args: list[str]) -> None:
     """Refuse an extra argument that repeats or abbreviates a flag Kura emitted for this architecture."""
     extra_flags = [argument.split("=", 1)[0] for argument in extra_args if argument.startswith("--")]
@@ -147,14 +132,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         target_index = train.index("--max_train_steps") + 1
         train[target_index] = str(steps["native_end"])
     if training_state_managed(run, training_state_contract_musubi(run)):
-        configured_cadence = override.get("save_every_n_steps")
-        if configured_cadence is not None and (
-            isinstance(configured_cadence, bool)
-            or not isinstance(configured_cadence, int)
-            or configured_cadence <= 0
-        ):
-            raise ValueError("Musubi backend.config.save_every_n_steps must be a positive integer")
-        save_args = managed_state_save_args(run, configured_cadence, _extra_args(override), contract=training_state_contract_musubi(run))
+        save_args = managed_state_save_args(run, override.get("save_every_n_steps"), contract=training_state_contract_musubi(run))
         if save_args[0] == "--save_every_n_steps":
             # Every Musubi command already names its default cadence; one Kura sets takes its place.
             cadence = save_args[1]
@@ -167,12 +145,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
                 train[cadence_index] = cadence
         train.extend(save_args)
     if continuation is not None:
-        extra_scheduler = _extra_arg_value(_extra_args(override), "--lr_scheduler")
-        if extra_scheduler is not None and override.get("lr_scheduler") is not None:
-            raise ValueError("Musubi backend.config.lr_scheduler duplicates backend.config.extra_args --lr_scheduler")
-        scheduler = str(override.get("lr_scheduler") or extra_scheduler or "constant").lower()
-        if scheduler != "constant":
-            raise ValueError("Musubi State Resume initially requires the constant scheduler")
+        require_constant_scheduler_for_resume("Musubi", override.get("lr_scheduler"))
         artifact_id = continuation["source"]["artifact_id"]
         train.extend(["--resume", training_state_payload(artifact_id)])
         commands.insert(
@@ -283,16 +256,11 @@ def _musubi_video_preflight_env(run: dict[str, Any], projection: dict[str, Any])
     }
 
 
-def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: Any) -> list[str] | None:
-    if before_step in (None, False):
+def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: int | None) -> list[str] | None:
+    """Delete step checkpoints before `before_step`, a positive integer validate_backend_config checked."""
+    if before_step is None:
         return None
-    try:
-        threshold = int(before_step)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Musubi Tuner prune_checkpoints_before_step must be an integer") from exc
-    if threshold <= 0:
-        return None
-    return ["python", "-c", script_source("prune_checkpoints.py"), output_dir, output_name, str(threshold)]
+    return ["python", "-c", script_source("prune_checkpoints.py"), output_dir, output_name, str(before_step)]
 
 
 def _musubi_start_commands(dataset_config: str, download_commands: list[list[str]]) -> list[list[str]]:
@@ -341,20 +309,12 @@ def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int
 
 
 def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any], architecture: str) -> None:
-    extra_args = _extra_args(override)
-    h2d_extra = any(arg == "--block_swap_h2d_only" or arg.startswith("--block_swap_h2d_only=") for arg in extra_args)
-    h2d_typed = _truthy(override.get("block_swap_h2d_only"))
-    if h2d_typed and h2d_extra:
-        raise ValueError(
-            "Musubi backend.config.block_swap_h2d_only duplicates backend.config.extra_args --block_swap_h2d_only"
-        )
-    h2d_only = h2d_typed or h2d_extra
-    checkpointing = _truthy(override.get("gradient_checkpointing")) or "--gradient_checkpointing" in extra_args
+    # Every flag read here is adapter-owned, so extra_args cannot carry it.
+    h2d_only = _truthy(override.get("block_swap_h2d_only"))
+    checkpointing = _truthy(override.get("gradient_checkpointing"))
     if h2d_only and not checkpointing:
         raise ValueError("Musubi H2D-only block swap requires explicit gradient_checkpointing")
     blocks = _int_or_none(override.get("blocks_to_swap"))
-    if blocks is None:
-        blocks = _int_or_none(_extra_arg_value(extra_args, "--blocks_to_swap"))
     if h2d_only and (blocks is None or blocks <= 0):
         raise ValueError("Musubi H2D-only block swap requires blocks_to_swap > 0")
     ring_size = override.get("block_swap_ring_size")
@@ -378,7 +338,7 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
     if micro_batch is None or micro_batch <= 1:
         max_resolution = _musubi_max_resolution(run, override)
         rank = _int_or_none(override.get("network_dim"))
-        checkpointing = _truthy(override.get("gradient_checkpointing")) or "--gradient_checkpointing" in extra_args
+        checkpointing = _truthy(override.get("gradient_checkpointing"))
         if max_resolution is not None and max_resolution >= 1024 and (rank is None or rank >= 32) and not checkpointing:
             if _truthy(override.get("allow_a40_uncheckpointed_9b")):
                 return
@@ -407,8 +367,7 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
 def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display and safety."""
     native = _musubi_backend_override(run)
-    extra_args = _extra_args(native)
-    gradient_accumulation = native.get("gradient_accumulation_steps") or _extra_arg_value(extra_args, "--gradient_accumulation_steps") or 1
+    gradient_accumulation = native.get("gradient_accumulation_steps") or 1
     memory = {
         key: native.get(key)
         for key in (
@@ -423,9 +382,9 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "use_pinned_memory_for_block_swap",
         )
     }
-    memory["blocks_to_swap"] = native.get("blocks_to_swap") or _extra_arg_value(extra_args, "--blocks_to_swap")
+    memory["blocks_to_swap"] = native.get("blocks_to_swap")
     return {
-        "architecture": native.get("architecture") or native.get("model_arch"),
+        "architecture": native.get("architecture"),
         "selector": native.get("task"),
         "rank": native.get("network_dim"),
         "alpha": native.get("network_alpha"),
@@ -666,11 +625,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         task = musubi_native_task(architecture, override.get("task"))
         if task not in {"t2va", "fl2va", "ref2va"}:
             raise ValueError("Musubi MiniMax-H3 task must be t2va, fl2va, or ref2va")
-        loss_method = str(override.get("h3_loss_method") or "guidance")
-        if loss_method not in {"guidance", "training_adapter", "teacher_matching"}:
-            raise ValueError(
-                "Musubi MiniMax-H3 h3_loss_method must be guidance, training_adapter, or teacher_matching"
-            )
+        loss_method = override.get("h3_loss_method", "guidance")
         one_frame = _truthy(override.get("one_frame"))
         if one_frame and not _truthy(override.get("video_only")):
             raise ValueError("Musubi MiniMax-H3 one_frame requires video_only=true")
@@ -813,15 +768,10 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with fp8_base or fp8_scaled")
         if convrot_int8 and _truthy(override.get("include_turbo_dit")):
             raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with include_turbo_dit")
-        if convrot_int8_bwd is not None:
-            if not isinstance(convrot_int8_bwd, str) or convrot_int8_bwd not in ("bf16", "int8"):
-                raise ValueError("Musubi Krea 2 convrot_int8_bwd must be one of: bf16, int8")
-            if not convrot_int8:
-                raise ValueError("Musubi Krea 2 convrot_int8_bwd requires convrot_int8=true")
-        if checkpoint_cpu_offload and not _truthy(override.get("gradient_checkpointing")):
-            raise ValueError(
-                "Musubi Krea 2 gradient_checkpointing_cpu_offload requires gradient_checkpointing=true"
-            )
+        # validate_backend_config refuses convrot_int8_bwd without convrot_int8 and the CPU
+        # offload without gradient_checkpointing.
+        if convrot_int8_bwd is not None and (not isinstance(convrot_int8_bwd, str) or convrot_int8_bwd not in ("bf16", "int8")):
+            raise ValueError("Musubi Krea 2 convrot_int8_bwd must be one of: bf16, int8")
         train_argv = [
             *common, "src/musubi_tuner/krea2_train_network.py",
             "--dit", dit, "--vae", vae,

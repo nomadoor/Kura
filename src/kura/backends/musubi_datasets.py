@@ -1258,7 +1258,7 @@ def _validate_musubi_architecture_requirements(
     """Apply model-local dataset requirements declared by architecture."""
 
     override = _musubi_backend_override(run)
-    if override.get("architecture") is None and override.get("model_arch") is None:
+    if override.get("architecture") is None:
         return
     architecture = _musubi_architecture(run)
     for field, requirement in MUSUBI_ARCHITECTURE_REQUIREMENTS.get(

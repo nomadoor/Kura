@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry
+from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry, tagged_entries, trained_arch
 from kura.backends.dataset_profiles import (
     caption_presence,
     classify_dataset_shape,
@@ -23,7 +23,7 @@ from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.provenance import artifact_pinning
-from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
+from kura.training_artifacts import require_constant_scheduler_for_resume, resume_steps, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 
 
@@ -52,6 +52,7 @@ AI_TOOLKIT_PINNED_COMMIT = "31ddc709c35d3d3b820c636745397561f806b246"
 # It is the union of
 # toolkit.util.get_model.LEGACY_ARCHS and the imported AI_TOOLKIT_MODELS archs.
 # Keep this backend-local and refresh it whenever the pinned image changes.
+MINIMAX_H3_ARCHS = frozenset({"minimax_h3", "minimax_h3_ref2va", "minimax_h3_vsa"})
 AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "ace_step_15", "ace_step_15_xl", "anima", "auraflow", "boogu_image", "boogu_image_edit",
     "chroma", "chroma_radiance", "cogview4", "ernie_image", "f-lite", "flex2", "flux",
@@ -442,8 +443,13 @@ def _resolve_ai_toolkit_projection_blocks(
     ]
 
 
-def _normalize_ai_toolkit_architecture(value: str) -> str:
-    architecture = value.split(":", 1)[0].lower().replace("-", "_")
+def _native_config_architecture(value: str) -> str:
+    """The architecture the pinned trainer runs for a native_config.model.arch value.
+
+    ModelConfig strips a display tag and maps flex1 to flux (toolkit/config_modules.py:768-775 at
+    31ddc709). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
+    """
+    architecture = value.split(":", 1)[0]
     return "flux" if architecture == "flex1" else architecture
 
 
@@ -453,9 +459,9 @@ def _ai_toolkit_projection_architecture(
     override = _ai_toolkit_backend_override(run)
     native_config = override.get("native_config")
     native_model = native_config.get("model") if isinstance(native_config, dict) else None
-    authored = override.get("model_arch") or (
-        native_model.get("arch") if isinstance(native_model, dict) else None
-    )
+    if isinstance(override.get("model_arch"), str):
+        return trained_arch(override["model_arch"])
+    authored = native_model.get("arch") if isinstance(native_model, dict) else None
     if not isinstance(authored, str) or not authored:
         if required:
             raise ValueError(
@@ -463,7 +469,7 @@ def _ai_toolkit_projection_architecture(
                 "the pinned trainer resolves an omitted architecture only after runtime model inspection"
             )
         return None
-    return _normalize_ai_toolkit_architecture(authored)
+    return _native_config_architecture(authored)
 
 
 def _validate_ai_toolkit_architecture_requirements(
@@ -976,19 +982,6 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
             "AI-Toolkit trains from model.base; set model.base to a Hugging Face repository or a model path before compile"
         )
     native = backend_config(run, "ai-toolkit")
-    authored_arch = native.get("model_arch")
-    if authored_arch is not None:
-        if not isinstance(authored_arch, str) or not authored_arch:
-            raise ValueError("AI-Toolkit backend.config.model_arch must be a nonempty upstream selector")
-        # ModelConfig strips a display tag and maps flex1 to the legacy flux
-        # implementation before get_model_class consults the model registry.
-        resolved_arch = _normalize_ai_toolkit_architecture(authored_arch)
-        if resolved_arch not in AI_TOOLKIT_PINNED_MODEL_ARCHS:
-            correction = "; use 'sd1' for Stable Diffusion 1.x" if authored_arch == "sd15" else ""
-            raise ValueError(
-                f"AI-Toolkit backend.config.model_arch {authored_arch!r} is not registered in the pinned image"
-                f"{correction}; use backend.config.native_config.model.arch for a reviewed custom-image selector"
-            )
     native_config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
     native_model_kwargs = native_model.get("model_kwargs") if isinstance(native_model, dict) else None
@@ -1009,7 +1002,7 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
     gradient_checkpointing = native.get(
         "gradient_checkpointing", native_train.get("gradient_checkpointing", False)
     )
-    if (model_arch.startswith("minimax_h3") or model_arch.startswith("minimaxh3")) and gradient_checkpointing is True:
+    if model_arch in MINIMAX_H3_ARCHS and gradient_checkpointing is True:
         raise ValueError(
             "AI-Toolkit MiniMax-H3 requires gradient_checkpointing=false with the pinned runtime; "
             "real A40 probes observed non-reentrant checkpoint recomputation tensor-count mismatches"
@@ -1061,8 +1054,9 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     native = backend_config(run, "ai-toolkit")
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     train = config.get("train") if isinstance(config.get("train"), dict) else {}
-    accumulation = native.get("gradient_accumulation_steps", train.get("gradient_accumulation_steps", 1))
-    optimizer = str(native.get("optimizer_type", train.get("optimizer", "adamw8bit"))).lower()
+    accumulation = native.get("gradient_accumulation_steps", 1)
+    # Every pinned baseline entry fills adamw8bit when optimizer_type is unset.
+    optimizer = native.get("optimizer_type", "adamw8bit")
     limitations = []
     if accumulation != 1:
         limitations.append("AI-Toolkit Resume initially requires gradient_accumulation_steps=1")
@@ -1151,9 +1145,9 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "rank": native.get("network_dim") or _nested(config, "network", "linear"),
         "alpha": native.get("network_alpha") or _nested(config, "network", "linear_alpha"),
         "learning_rate": native.get("learning_rate") or _nested(config, "train", "lr") or filled["train"].get("lr"),
-        "scheduler": native.get("lr_scheduler") or _nested(config, "train", "lr_scheduler"),
+        "scheduler": native.get("lr_scheduler"),
         "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
-        "gradient_accumulation_steps": native.get("gradient_accumulation_steps") or _nested(config, "train", "gradient_accumulation_steps"),
+        "gradient_accumulation_steps": native.get("gradient_accumulation_steps"),
         "bypass_guidance_embedding": (
             native.get("bypass_guidance_embedding")
             if "bypass_guidance_embedding" in native
@@ -1176,9 +1170,9 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "quantize_te": native.get("quantize_te") if "quantize_te" in native else _nested(config, "model", "quantize_te") if _nested(config, "model", "quantize_te") is not None else filled["model"].get("quantize_te"),
         },
         "checkpoint": {
-            "save_every_n_steps": native.get("save_every_n_steps") or _nested(config, "save", "save_every"),
+            "save_every_n_steps": native.get("save_every_n_steps"),
             # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
-            "keep_last": native["save_last_n_steps"] if native.get("save_last_n_steps") is not None else _nested(config, "save", "max_step_saves_to_keep"),
+            "keep_last": native.get("save_last_n_steps"),
             "unset_keep_last": "trainer_default",
         },
     }
@@ -1266,7 +1260,7 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
     native = override.get("native_config") if isinstance(override.get("native_config"), dict) else {}
     arch = override.get("model_arch")
     selected = (
-        select_baseline_entry(arch, _normalize_ai_toolkit_architecture(arch), (run.get("model") or {}).get("base"))
+        select_baseline_entry(arch, trained_arch(arch), (run.get("model") or {}).get("base"))
         if isinstance(arch, str) else None
     )
     if selected is None:
@@ -1397,6 +1391,16 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         native_model_kwargs = native_model.get("model_kwargs") if isinstance(native_model, dict) else None
         if isinstance(native_model_kwargs, dict) and "edit" in native_model_kwargs:
             protected.append("model.model_kwargs.edit (use backend.config.model_edit)")
+        # Kura names, counts, and resumes saves from these, so only their typed fields set them.
+        for section, key, field in (
+            ("save", "save_every", "save_every_n_steps"), ("save", "max_step_saves_to_keep", "save_last_n_steps"),
+            ("train", "gradient_accumulation_steps", "gradient_accumulation_steps"),
+            # The real accumulation in the pinned trainer (config_modules.py:462-465).
+            ("train", "gradient_accumulation", "gradient_accumulation_steps"),
+            ("train", "lr_scheduler", "lr_scheduler"), ("train", "optimizer", "optimizer_type"),
+        ):
+            if _nested(native, section, key) is not None:
+                protected.append(f"{section}.{key} (use backend.config.{field})")
         if protected:
             raise ValueError(
                 "AI-Toolkit backend.config.native_config overrides Kura-owned field(s): "
@@ -1480,9 +1484,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         if any(process.get(key) for key in ("embedding", "adapter", "decorator")) or ema_config.get("use_ema") or _nested(process, "train", "merge_network_on_save"):
             raise ValueError("AI-Toolkit training-state capture does not support embedding, adapter, decorator, EMA, or merge_network_on_save")
     if continuation is not None:
-        scheduler = str(_nested(process, "train", "lr_scheduler") or "constant").lower()
-        if scheduler != "constant":
-            raise ValueError("AI-Toolkit State Resume initially requires the constant scheduler")
+        require_constant_scheduler_for_resume("AI-Toolkit", override.get("lr_scheduler"))
         process["train"]["steps"] = resume_steps(run, contract=state_contract)["native_end"]
     atomic_write_yaml(destination.with_suffix(".yaml"), config)
     return command_ai_toolkit(run)
@@ -1530,10 +1532,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "state_root": f"/workspace/runs/{run['id']}/outputs",
             "keep_generations": policy["keep_generations"],
         }
-        native_config = override.get("native_config") if isinstance(override.get("native_config"), dict) else {}
-        native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
-        model_arch = str(override.get("model_arch") or native_model.get("arch") or "").lower().replace("-", "_")
-        if model_arch.startswith("minimax_h3") or model_arch.startswith("minimaxh3"):
+        if _ai_toolkit_projection_architecture(run, required=False) in MINIMAX_H3_ARCHS:
             spec["require_nonzero_lora_b"] = True
         runner = ["python", "-c", script_source("ai_toolkit_state.py"), json.dumps(spec, ensure_ascii=False, separators=(",", ":"))]
         if continuation is None:

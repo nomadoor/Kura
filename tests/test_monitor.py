@@ -131,12 +131,12 @@ class MonitorProjectionTests(unittest.TestCase):
             current = root / "runs" / "current"
             rejected.mkdir(parents=True)
             current.mkdir(parents=True)
-            run = {"id": "rejected", "type": "train", "recipe": {"steps": 1, "seed": 1}, "backend": {"name": "musubi-tuner", "config": {"architecture": "hunyuan_video", "extra_args": ["--blocks_to_swap", "36"]}}}
+            run = {"id": "rejected", "type": "train", "recipe": {"steps": 1, "seed": 1}, "backend": {"name": "retired-trainer", "config": {}}}
             (rejected / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (current / "run.yaml").write_text("id: current\ntype: train\nrecipe: {steps: 1, seed: 1}\n", encoding="utf-8")
             summaries = {item.id: item for item in KuraMonitorApp(root).collect_summaries_cached()}
         self.assertEqual(summaries["rejected"].state, "unreadable")
-        self.assertIn("--blocks_to_swap", summaries["rejected"].activity)
+        self.assertIn("unsupported backend", summaries["rejected"].activity)
         self.assertNotEqual(summaries["current"].state, "unreadable")
 
     def test_sparkline_tracks_increasing_values(self) -> None:

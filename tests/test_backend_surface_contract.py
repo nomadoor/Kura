@@ -362,18 +362,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
             musubi["conditional_fields"]["timestep_boundary"]["when_any"],
             [{"architecture": ["wan"]}],
         )
-        self.assertEqual(
-            musubi["selector_aliases"]["architecture"]["fields"],
-            ["model_arch"],
-        )
-        self.assertEqual(
-            musubi["selector_aliases"]["architecture"]["values"]["flux_2"],
-            "flux2",
-        )
-        self.assertIn(
-            "case-insensitive",
-            musubi["selector_aliases"]["architecture"]["normalization"],
-        )
+        self.assertNotIn("selector_aliases", musubi)
+        self.assertIn("flux2", musubi["config_value_choices"]["architecture"])
         sd_scripts = backend_capabilities("sd-scripts")
         self.assertEqual(
             sd_scripts["conditional_fields"]["cond_emb_dim"]["when_any"],
@@ -406,39 +396,93 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertIn("qwen_image_2", model_arch_choices)
         self.assertNotIn("sd15", model_arch_choices)
 
-    def test_musubi_surface_normalizes_architecture_before_conditions(self) -> None:
-        for selector, architecture in (
-            ("architecture", "flux-2"),
-            ("architecture", "Flux2"),
-            ("model_arch", "flux_2"),
-        ):
-            with self.subTest(selector=selector, architecture=architecture, accepted=True):
-                validate_backend_config({
-                    "backend": {
-                        "name": "musubi-tuner",
-                        "config": {selector: architecture, "fp8_base": True},
-                    },
-                })
-            with self.subTest(selector=selector, architecture=architecture, accepted=False):
-                with self.assertRaisesRegex(ValueError, "f1.*not applicable"):
-                    validate_backend_config({
-                        "backend": {
-                            "name": "musubi-tuner",
-                            "config": {selector: architecture, "f1": True},
-                        },
-                    })
+    def test_selector_values_have_one_spelling_and_are_refused_first(self) -> None:
+        cases = (
+            ("sd-scripts", {"architecture": "flux", "guidance_scale": 1.0}, "architecture 'flux' is not accepted; use one of: anima, flux1, sd15, sdxl"),
+            ("sd-scripts", {"architecture": "Anima", "attn_mode": "torch"}, "architecture 'Anima' is not accepted"),
+            ("sd-scripts", {"architecture": "anima", "mode": "lllite", "lllite_cond_dim": 32}, "mode 'lllite' is not accepted; use one of: controlnet_lllite, lora"),
+            ("musubi-tuner", {"architecture": "flux_2", "fp8_base": True}, "architecture 'flux_2' is not accepted"),
+            ("musubi-tuner", {"architecture": "Flux2", "f1": True}, "architecture 'Flux2' is not accepted"),
+            ("musubi-tuner", {"architecture": 5, "fp8_base": True}, "architecture 5 is not accepted"),
+            ("musubi-tuner", {"architecture": "unknownarch", "fp8": True}, "architecture 'unknownarch' is not accepted"),
+            ("ai-toolkit", {"model_arch": "FLUX"}, "model_arch 'FLUX' is not accepted"),
+            ("ai-toolkit", {"model_arch": "flex1"}, "model_arch 'flex1' is not accepted"),
+            ("ai-toolkit", {"model_arch": "sd1:portrait"}, "model_arch 'sd1:portrait' is not accepted"),
+            ("ai-toolkit", {"model_arch": "Flex2", "bypass_guidance_embedding": True}, "model_arch 'Flex2' is not accepted"),
+        )
+        for backend, config, message in cases:
+            with self.subTest(backend=backend, config=config):
+                with self.assertRaisesRegex(ValueError, re.escape(message)):
+                    validate_backend_config({"backend": {"name": backend, "config": config}})
 
-    def test_musubi_surface_rejects_non_string_architecture_cleanly(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError,
-            r"musubi-tuner backend\.config\.architecture must be a string",
-        ):
-            validate_backend_config({
-                "backend": {
-                    "name": "musubi-tuner",
-                    "config": {"architecture": 5, "fp8_base": True},
-                },
-            })
+    def test_decided_integers_have_one_form_on_every_backend(self) -> None:
+        for backend, base in (("sd-scripts", {"architecture": "sd15"}), ("musubi-tuner", {"architecture": "wan"}), ("ai-toolkit", {"model_arch": "sdxl"})):
+            for value in (2.5, "250", 0, True):
+                with self.subTest(backend=backend, value=value):
+                    with self.assertRaisesRegex(ValueError, "save_every_n_steps must be an integer of at least 1"):
+                        validate_backend_config({"backend": {"name": backend, "config": {**base, "save_every_n_steps": value}}})
+        validate_backend_config({"backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "save_last_n_steps": 0}}, "model": {"base": "x/y"}})
+        with self.assertRaisesRegex(ValueError, "save_last_n_steps must be an integer of at least 1"):
+            validate_backend_config({"backend": {"name": "sd-scripts", "config": {"architecture": "sd15", "save_last_n_steps": 0}}})
+
+    def test_capabilities_list_the_fields_kura_decides_from(self) -> None:
+        for backend in BACKENDS:
+            with self.subTest(backend=backend):
+                decided = backend_capabilities(backend)["decided_fields"]
+                self.assertTrue({"save_every_n_steps", "gradient_accumulation_steps", "lr_scheduler"} <= set(decided))
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_native_config_cannot_set_what_kura_decides_from(self) -> None:
+        for section, key in (("save", "save_every"), ("save", "max_step_saves_to_keep"), ("train", "gradient_accumulation_steps"), ("train", "gradient_accumulation"), ("train", "lr_scheduler"), ("train", "optimizer")):
+            with self.subTest(key=f"{section}.{key}"), tempfile.TemporaryDirectory() as directory:
+                destination = Path(directory)
+                run = {
+                    "id": "native-owned", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "native_config": {section: {key: 1}}}},
+                    "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                }
+                self._write_ai_toolkit_projection(run, destination)
+                with self.assertRaisesRegex(ValueError, f"overrides Kura-owned field.*{section}.{key}"):
+                    BACKENDS["ai-toolkit"].compile(run, destination)
+
+    def test_escape_hatches_cannot_change_the_schedule_or_the_steps(self) -> None:
+        from kura.backends import musubi_command, sd_scripts
+
+        for flags in (musubi_command.MUSUBI_OWNED_FLAGS, sd_scripts.OWNED_FLAGS):
+            self.assertLessEqual({"--lr_scheduler_type", "--max_train_epochs"}, flags)
+
+    def test_musubi_pruning_takes_a_positive_integer_only(self) -> None:
+        for value in ("1500", 2.5, True, 0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "prune_checkpoints_before_step must be an integer of at least 1"):
+                validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "prune_checkpoints_before_step": value}}})
+
+    def test_an_unknown_selector_is_reported_before_other_value_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "architecture 'flux' is not accepted"):
+            validate_backend_config({"backend": {"name": "sd-scripts", "config": {"architecture": "flux", "save_every_n_steps": "x", "cache_latents": "yes"}}})
+
+    def test_model_arch_is_not_a_musubi_field(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported key\\(s\\): 'model_arch'"):
+            validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"model_arch": "flux2"}}})
+
+    def test_listed_ai_toolkit_values_are_accepted_as_written(self) -> None:
+        for arch in ("f-lite", "ltx2.5", "flex2", "zimage:turbo"):
+            with self.subTest(arch=arch):
+                validate_backend_config({"backend": {"name": "ai-toolkit", "config": {"model_arch": arch}}, "model": {"base": "example/model"}})
+        validate_backend_config({"backend": {"name": "ai-toolkit", "config": {"model_arch": "krea2:turbo", "model_edit": True}}, "model": {"base": "example/model"}})
+
+    def test_a_conditional_field_is_refused_when_its_selector_is_omitted(self) -> None:
+        cases = (
+            {"architecture": "wan", "convrot_int8_bwd": True},
+            {"architecture": "wan", "gradient_checkpointing_cpu_offload": True},
+            {"architecture": "krea2", "convrot_int8_bwd": True},
+            {"architecture": "krea2", "gradient_checkpointing_cpu_offload": True},
+        )
+        for config in cases:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(ValueError, "not applicable"):
+                    validate_backend_config({"backend": {"name": "musubi-tuner", "config": config}})
+        validate_backend_config({"backend": {"name": "musubi-tuner", "config": {
+            "architecture": "krea2", "convrot_int8": True, "convrot_int8_bwd": True,
+        }}})
 
     def test_ai_toolkit_legacy_dataset_selectors_name_manifest_migrations(self) -> None:
         base = {
@@ -633,13 +677,20 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     first_clause = condition.when_any[0]
                     booleans = adapter.surface.boolean_fields
                     # Values of the right type, so only applicability can refuse them.
-                    config = {condition.field: True if condition.field in booleans else "sentinel"}
+                    field_choices = dict(adapter.surface.config_value_choices).get(condition.field)
+                    config = {condition.field: True if condition.field in booleans else field_choices[0] if field_choices else "sentinel"}
                     for selector, allowed in first_clause:
                         config[selector] = allowed[0]
                     candidates = [selector for selector, _ in first_clause if selector not in conditional_names]
                     self.assertTrue(candidates, f"{name}.{condition.field} needs an independently selectable condition")
                     off = candidates[-1]
-                    config[off] = (not config[off]) if off in booleans else "not-a-supported-selector"
+                    choices = dict(adapter.surface.config_value_choices).get(off)
+                    # The off value is a valid selector value, so only applicability can refuse the field.
+                    config[off] = (
+                        (not config[off]) if off in booleans
+                        else next(choice for choice in choices if all(choice not in allowed for selector, allowed in first_clause if selector == off))
+                        if choices else "not-a-supported-selector"
+                    )
                     run = {"backend": {"name": name, "config": config}}
                     with self.assertRaisesRegex(ValueError, rf"{condition.field}.*not applicable"):
                         validate_backend_config(run)
@@ -651,14 +702,14 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertIn('"optimizer_type"', output.getvalue())
         self.assertIn('"validation": "unverified"', output.getvalue())
 
-    def test_capabilities_cli_prints_musubi_selector_aliases(self) -> None:
+    def test_capabilities_cli_prints_musubi_selector_values(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "musubi-tuner", "json": False})()), 0)
         rendered = output.getvalue()
-        self.assertIn("selector aliases:", rendered)
-        self.assertIn("architecture: fields=model_arch", rendered)
-        self.assertIn("flux_2->flux2", rendered)
+        self.assertNotIn("aliases", rendered)
+        self.assertIn("selector values (spelled exactly as listed", rendered)
+        self.assertIn("architecture: flux2, flux_kontext", rendered)
 
     def test_capabilities_cli_prints_sd_scripts_nested_dataset_fields(self) -> None:
         output = io.StringIO()
@@ -781,20 +832,6 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertEqual(process["model"]["arch"], "sd1")
 
     @posix_only(DATASET_IO)
-    def test_ai_toolkit_preserves_upstream_arch_tag_and_flex1_alias(self) -> None:
-        for arch in ("sd1:portrait", "flex1"):
-            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
-                destination = Path(directory)
-                run = {
-                    "id": "upstream-alias", "backend": {"name": "ai-toolkit", "config": {"model_arch": arch}},
-                    "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}],
-                    "recipe": {"steps": 1, "seed": 1},
-                }
-                self._write_ai_toolkit_projection(run, destination)
-                BACKENDS["ai-toolkit"].compile(run, destination)
-                process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
-                self.assertEqual(process["model"]["arch"], arch)
-
     def test_ai_toolkit_cli_reports_sd15_correction_before_dataset_resolution(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:

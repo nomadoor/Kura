@@ -116,9 +116,6 @@ class ManagedStateCadenceTests(unittest.TestCase):
                 self.assertEqual(shown(as_resume(run, additional=200)), resumed[name])
                 run["backend"]["config"]["save_every_n_steps"] = 100
                 self.assertEqual(shown(run), 100)
-        native = ai_toolkit_run()
-        native["backend"]["config"]["native_config"] = {"save": {"save_every": 250}}
-        self.assertEqual(shown(native), 250)
 
     def test_a_fresh_sd_scripts_run_keeps_its_save_flags_where_they_were(self) -> None:
         # A fresh run's argv stays byte-identical: a configured cadence keeps its place
@@ -156,9 +153,16 @@ class ManagedStateCadenceTests(unittest.TestCase):
                 command(as_resume(build()))
                 owner.assert_called()
 
-    def test_epoch_save_flags_are_refused_by_the_shared_rule(self) -> None:
-        with self.assertRaisesRegex(ValueError, "epoch.*training-state"):
-            managed_state_save_args(sd_scripts_run(), None, ["--save_every_n_epochs", "1"])
+    def test_epoch_save_flags_are_owned_by_every_accelerate_trainer(self) -> None:
+        from kura.training_artifacts import EPOCH_SAVE_FLAGS
+
+        self.assertLessEqual(EPOCH_SAVE_FLAGS, musubi_command.MUSUBI_OWNED_FLAGS)
+        self.assertLessEqual(EPOCH_SAVE_FLAGS, sd_scripts.OWNED_FLAGS)
+        for build, command in ((musubi_run, musubi_command.command_musubi_tuner), (sd_scripts_run, sd_scripts.command_sd_scripts)):
+            run = build()
+            run["backend"]["config"]["extra_args"] = ["--save_every_n_epochs", "1"]
+            with self.subTest(backend=run["backend"]["name"]), self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                command(run)
 
 
 class StatePublicationParityTests(unittest.TestCase):

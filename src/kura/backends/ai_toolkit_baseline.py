@@ -32,6 +32,18 @@ BASELINE_KEYS = {
 }
 
 
+def trained_arch(model_arch: str) -> str:
+    """The arch AI-Toolkit trains for a listed model_arch: a tagged UI entry such as
+    ``zimage:turbo`` names its own (``zimage``); any other value is the arch itself."""
+    entry = load_baseline()["entries"].get(model_arch) if ":" in model_arch else None
+    return entry["arch"] if isinstance(entry, dict) else model_arch
+
+
+def tagged_entries() -> tuple[str, ...]:
+    """The UI entries whose name carries a tag; each is a model_arch value of its own."""
+    return tuple(sorted(name for name in load_baseline()["entries"] if ":" in name))
+
+
 @lru_cache(maxsize=1)
 def load_baseline() -> dict[str, Any]:
     payload = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))

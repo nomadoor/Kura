@@ -32,6 +32,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolk
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import _musubi_model_lock, musubi_model_download_specs, requirements_musubi
+from kura.backends.registry import validate_backend_config
 from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_launch, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_status
 from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
@@ -1642,6 +1643,7 @@ class RunPlanTests(unittest.TestCase):
                         "recipe": {"steps": 1500, "seed": 42},
                         "sampling": {"cadence_steps": 100},
                         "backend": {"name": "musubi-tuner", "config": {
+                            "architecture": "flux2",
                             "network_dim": 16,
                             "network_alpha": 1024,
                             "learning_rate": "0.00005",
@@ -4206,7 +4208,7 @@ class AiToolkitBackendTests(unittest.TestCase):
 class MusubiBackendTests(unittest.TestCase):
     def _write_frozen_projection(self, run: dict[str, Any], destination: Path) -> None:
         architecture = str(run.get("backend", {}).get("config", {}).get("architecture") or "")
-        target = "sample.mp4" if architecture in {"minimax_h3", "minimaxh3"} else "sample.png"
+        target = "sample.mp4" if architecture in {"minimax_h3"} else "sample.png"
         destination.parent.mkdir(parents=True, exist_ok=True)
         freeze_fixture(run, destination.parent, target=target)
 
@@ -4260,7 +4262,7 @@ class MusubiBackendTests(unittest.TestCase):
     def test_musubi_state_capture_rejects_epoch_save_escape_hatches(self) -> None:
         run = self._run()
         run["backend"]["config"]["extra_args"] = ["--save_every_n_epochs", "1"]
-        with self.assertRaisesRegex(ValueError, "epoch.*training-state"):
+        with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
             command_musubi_tuner(run)
 
     def test_musubi_resume_rejects_finite_scheduler(self) -> None:
@@ -4274,7 +4276,7 @@ class MusubiBackendTests(unittest.TestCase):
             "target_step": 40,
             "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
         }
-        with self.assertRaisesRegex(ValueError, "constant scheduler"):
+        with self.assertRaisesRegex(ValueError, "requires lr_scheduler: constant"):
             command_musubi_tuner(run)
 
     def test_musubi_resume_rejects_finite_scheduler_from_extra_args(self) -> None:
@@ -4342,8 +4344,8 @@ class MusubiBackendTests(unittest.TestCase):
                     "target_step": 40,
                     "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
                 }
-                with self.assertRaisesRegex(ValueError, "save_every_n_steps must be a positive integer"):
-                    command_musubi_tuner(run)
+                with self.assertRaisesRegex(ValueError, "save_every_n_steps must be an integer of at least 1"):
+                    validate_backend_config(run)
 
     @posix_only(DATASET_IO)
     def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
@@ -4918,7 +4920,6 @@ class MusubiBackendTests(unittest.TestCase):
             ({"h3_loss_method": "training_adapter"}, "base_weights"),
             ({"h3_loss_method": "teacher_matching", "task": "ref2va", "h3_teacher_conditions": "ref"}, "requires task t2va"),
             ({"h3_loss_method": "teacher_matching", "one_frame": True, "video_only": True, "h3_teacher_conditions": "ref"}, "one_frame.*subject_ref"),
-            ({"h3_loss_method": "plain"}, "h3_loss_method"),
         )
         for changes, message in cases:
             with self.subTest(changes=changes):
@@ -5620,9 +5621,7 @@ class MusubiBackendTests(unittest.TestCase):
         }}
         cases = (
             ({"convrot_int8": True, "fp8_base": True}, "cannot be combined with fp8"),
-            ({"convrot_int8_bwd": "int8"}, "requires convrot_int8=true"),
             ({"convrot_int8": True, "include_turbo_dit": True}, "cannot be combined with include_turbo_dit"),
-            ({"gradient_checkpointing_cpu_offload": True}, "requires gradient_checkpointing=true"),
         )
         for changes, expected in cases:
             with self.subTest(changes=changes):
