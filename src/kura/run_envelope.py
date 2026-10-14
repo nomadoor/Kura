@@ -101,6 +101,14 @@ def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The run's datasets[] entries, which every reader takes here; anything but a list of mappings is refused."""
+    datasets = run.get("datasets", [])
+    if not isinstance(datasets, list) or not all(isinstance(item, dict) for item in datasets):
+        raise ValueError(f"run.yaml datasets must be a list of mappings such as [{{id: my-dataset}}], not {datasets!r}")
+    return datasets
+
+
 def backend_name(run: dict[str, Any]) -> str | None:
     backend = run.get("backend")
     name = backend.get("name") if isinstance(backend, dict) else None

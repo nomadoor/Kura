@@ -74,6 +74,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import migrate_workspace_config
 from kura.run_commands.common import _backend_image_name
+from kura.run_envelope import run_datasets as _run_datasets
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -96,15 +97,6 @@ def _dataset_digest(dataset_id: str) -> str:
         hasher.update(path.name.encode("utf-8") + b"\0")
         hasher.update(path.read_bytes() + b"\0")
     return "sha256:" + hasher.hexdigest()
-
-
-def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
-    datasets = run.get("datasets")
-    if isinstance(datasets, list):
-        return [item for item in datasets if isinstance(item, dict)]
-    if "dataset" in run:
-        raise ValueError("training run dataset is not supported; use datasets[]")
-    return []
 
 
 def _check_train_run_keys(run: dict[str, Any]) -> None:
@@ -372,11 +364,12 @@ def _create_resume_derived_run(
             "parent_run": source_id,
         }
     )
-    compute = deepcopy(source_run.get("compute") if isinstance(source_run.get("compute"), dict) else {})
+    compute = derived.get("compute") if isinstance(derived.get("compute"), dict) else {}
     if args.executor is not None:
         compute["executor"] = args.executor
         if args.executor != "runpod":
             compute.pop("capacity", None)
+            compute.pop("gpu", None)
     if args.gpu is not None:
         compute["gpu"] = [args.gpu]
     derived["compute"] = compute

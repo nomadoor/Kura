@@ -9,15 +9,7 @@ from typing import Any, Callable
 
 from kura.container_scripts import script_source
 from kura.fsio import atomic_write_text
-
-
-def _datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
-    datasets = run.get("datasets")
-    if isinstance(datasets, list):
-        return [item for item in datasets if isinstance(item, dict)]
-    if "dataset" in run:
-        raise ValueError("training run dataset is not supported; use datasets[]")
-    return []
+from kura.run_envelope import run_datasets as _datasets
 
 
 def _toml_scalar(value: Any) -> str:

@@ -204,6 +204,18 @@ class SurfaceContractTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, f"{key.split('.')[-1]} is not a training run setting"):
                 validate_train_run_fields(run)
 
+    def test_every_datasets_reader_refuses_an_entry_that_is_not_a_mapping(self) -> None:
+        from kura.backends import shared
+        from kura.run_commands import common
+        from kura import cli
+        from kura.run_envelope import run_datasets
+
+        for reader in (run_datasets, shared._datasets, common._run_datasets, cli._run_datasets):
+            self.assertIs(reader, run_datasets)
+        self.assertEqual(run_datasets({"datasets": [{"id": "new"}]}), [{"id": "new"}])
+        with self.assertRaisesRegex(ValueError, "datasets must be a list of mappings"):
+            run_datasets({"datasets": ["old-id", {"id": "new"}]})
+
     def test_run_envelope_values_have_one_form(self) -> None:
         validate_train_run_fields({"compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]}, "safety": {"allow_storage_risk": True, "checkpoint_estimate_gb": 2.5}})
         for run, message in (

@@ -93,6 +93,8 @@ def _run_remote_locked(
     run_dir = _run_path(run_id)
     try:
         max_lease_sec = max_lease_seconds(max_lease)
+        # Read before any Pod exists: an error after the Pod starts would leave it billing.
+        remote_notify = "ntfy" in _notification_channels(notify_channels)
     except ValueError as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -138,7 +140,7 @@ def _run_remote_locked(
                 run_dir,
                 ssh_timeout_sec=upload_timeout,
                 job_timeout_sec=job_timeout,
-                remote_notify="ntfy" in _notification_channels(notify_channels),
+                remote_notify=remote_notify,
                 max_lease_sec=max_lease_sec,
                 unattended_wait_sec=unattended_wait_sec,
                 notify_channels=notify_channels,
