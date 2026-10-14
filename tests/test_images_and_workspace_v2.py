@@ -14,6 +14,7 @@ import yaml
 from kura.cli import cmd_image_build, cmd_image_publish, cmd_init, cmd_run_status, cmd_workspace_migrate
 from kura.images import IMAGE_CUDA_VERSIONS, NEWEST_KNOWN_CUDA, PINNED_IMAGES, effective_image, image_cuda_version, runpod_min_cuda_version, launch_image, launch_image_warnings, mutable_override_warning
 from kura.run_commands.plan import _image_preflight_report
+from kura.yamlio import load_yaml_text
 from kura.workspace import WORKSPACE_SCHEMA_VERSION, migrate_workspace_config, require_workspace, validate_workspace_config
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,7 +134,7 @@ class LaunchImageTests(unittest.TestCase):
             effective_image({"images": {"comfyui": " "}}, "comfyui")
         from kura.workspace import validate_workspace_config
 
-        with self.assertRaisesRegex(ValueError, "images.comfyui must name an image"):
+        with self.assertRaisesRegex(ValueError, "images.comfyui is empty; delete the line to leave it unset"):
             validate_workspace_config({"schema_version": 2, "images": {"comfyui": ""}})
         from kura.cli import cmd_doctor_workspace
 
@@ -142,7 +143,7 @@ class LaunchImageTests(unittest.TestCase):
             stdout = io.StringIO()
             with patch("sys.stdout", stdout):
                 self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 1)
-            self.assertIn("images.comfyui must name an image", stdout.getvalue())
+            self.assertIn("images.comfyui is empty; delete the line to leave it unset", stdout.getvalue())
 
 
 class WorkspaceSchemaTests(unittest.TestCase):
@@ -272,6 +273,36 @@ class WorkspaceSchemaTests(unittest.TestCase):
         dropped, notes = migrate_workspace_config({"schema_version": 2, "docker": {"workspace_target": "/ws"}})
         self.assertEqual(dropped, {"schema_version": 2, "docker": {}})
         self.assertIn("dropped docker.workspace_target", "\n".join(notes))
+
+    def test_an_empty_setting_is_refused_and_migrated_away(self) -> None:
+        empty = (
+            ({"storage": {"host_drive": ""}}, "storage.host_drive"),
+            ({"docker": {"hf_cache": " "}}, "docker.hf_cache"),
+            ({"comfyui": {"endpoint": ""}}, "comfyui.endpoint"),
+            ({"comfyui": {"lora_dir": ""}}, "comfyui.lora_dir"),
+            ({"comfyui": {"model_patches_dir": ""}}, "comfyui.model_patches_dir"),
+        )
+        for section, name in empty:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, f"{name} is empty; delete the line to leave it unset"):
+                    validate_workspace_config({"schema_version": 2, **section})
+        migrated, notes = migrate_workspace_config({
+            "schema_version": 2, "storage": {"host_drive": ""}, "comfyui": {"lora_dir": "", "lora_stage_subdir": "Kura_tmp"},
+        })
+        self.assertEqual(migrated, {"schema_version": 2, "storage": {}, "comfyui": {"lora_stage_subdir": "Kura_tmp"}})
+        self.assertIn("dropped comfyui.lora_dir: it was empty; an unset setting is omitted", notes)
+        listed, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"ports": ["22/tcp", ""]}})
+        self.assertEqual(listed, {"schema_version": 2, "runpod": {"ports": ["22/tcp"]}})
+        self.assertIn("dropped runpod.ports[1]: it was empty; an unset setting is omitted", notes)
+
+    def test_kura_init_writes_a_workspace_with_no_empty_setting(self) -> None:
+        from kura.cli import cmd_init
+
+        with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
+            self.assertEqual(cmd_init(argparse.Namespace()), 0)
+            text = (Path(directory) / "workspace.yaml").read_text(encoding="utf-8")
+            self.assertNotIn("''", text)
+            validate_workspace_config(load_yaml_text(text))
 
     def test_migrate_previews_then_applies_only_when_confirmed(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):

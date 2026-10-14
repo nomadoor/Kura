@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
+from kura.yamlio import YAMLError, load_yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,8 +152,8 @@ def main() -> int:
     warnings: list[str] = []
     for path in candidate_paths(include_workspace_runs=not args.repository_only):
         try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as exc:
+            payload = load_yaml(path)
+        except (OSError, YAMLError) as exc:
             errors.append(f"{path.relative_to(ROOT)} cannot be inspected: {exc}")
             continue
         if not isinstance(payload, dict) or "evaluation" not in payload:

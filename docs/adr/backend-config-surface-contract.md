@@ -26,6 +26,11 @@ configuration surface.
 
 ## Decision
 
+`authored-input-one-form.md` (2026-10-14) refines this decision: membership
+and applicability stay as below; values Kura only forwards pass through
+untouched, and values Kura decides from have one accepted form.
+
+
 Every registered adapter owns a machine-readable surface contract.  The
 registry requires the contract, so a newly registered backend cannot omit it.
 The contract divides authored input into:

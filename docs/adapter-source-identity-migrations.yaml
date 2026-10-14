@@ -8,6 +8,152 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: one-yaml-reader-sd-scripts-2026-10-14
+    backend: sd-scripts
+    reason: YAML is read and written through one module (kura.yamlio) that follows the
+      YAML 1.2 core schema and quotes any string a YAML 1.1 or 1.2 reader would retype,
+      and the duplicate load_yaml and dump_yaml wrappers are removed. The recorded smokes'
+      run files were written by the smoke harnesses from Python values, which PyYAML writes
+      in forms YAML 1.1 and 1.2 read alike (floats always carry a dot), so the run.yaml,
+      locks, native configs, and argv they produced read and write the same values.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 5e9f853d27a2d11030cca0ceb9809f414518e01ef0864662cfd63f0967544ffe
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8211fce450afc572114059330882fd89f157d3ce6c673a1d4edc869c28d8ebaf
+  - id: one-yaml-reader-musubi-tuner-2026-10-14
+    backend: musubi-tuner
+    reason: YAML is read and written through one module (kura.yamlio) that follows the
+      YAML 1.2 core schema and quotes any string a YAML 1.1 or 1.2 reader would retype,
+      and the duplicate load_yaml and dump_yaml wrappers are removed. The recorded smokes'
+      run files were written by the smoke harnesses from Python values, which PyYAML writes
+      in forms YAML 1.1 and 1.2 read alike (floats always carry a dot), so the run.yaml,
+      locks, native configs, and argv they produced read and write the same values.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 7a2a2ce33f57880d7d63176d6ff43758e5bd7c13a6020849bc7d7ca65914d3d6
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: cf9b19b3fb54a18630954d8a507eff63af281b52f0c152a75a64fe37e1ad90e1
+  - id: one-yaml-reader-ai-toolkit-2026-10-14
+    backend: ai-toolkit
+    reason: YAML is read and written through one module (kura.yamlio) that follows the
+      YAML 1.2 core schema and quotes any string a YAML 1.1 or 1.2 reader would retype,
+      and the duplicate load_yaml and dump_yaml wrappers are removed. The recorded smokes'
+      run files were written by the smoke harnesses from Python values, which PyYAML writes
+      in forms YAML 1.1 and 1.2 read alike (floats always carry a dot), so the run.yaml,
+      locks, native configs, and argv they produced read and write the same values.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 4487b34c14664a45614039b8aab50445ceff0d8425a609cf0674a432b978b569
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 0b5197fc1c39b605c0bc4b6c72978a1b08dfadfb8788335b70b5f8e4a6ba0a77
+  - id: one-yaml-reader-runpod-executor-2026-10-14
+    executor: runpod
+    reason: YAML is read and written through one module (kura.yamlio) that follows the
+      YAML 1.2 core schema and quotes any string a YAML 1.1 or 1.2 reader would retype,
+      and the duplicate load_yaml and dump_yaml wrappers are removed. The recorded smokes'
+      run files were written by the smoke harnesses from Python values, which PyYAML writes
+      in forms YAML 1.1 and 1.2 read alike (floats always carry a dot), so the run.yaml,
+      locks, native configs, and argv they produced read and write the same values.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: da6759776b28cef1d4cfc0b4c47d8e9185ba90bf189257cd7ebeafce9d888583
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 66e15bcbc01e468e847c06f98d43a2c19cb65a14d18d7e0a893c11bab9c5eb58
   - id: state-runner-accumulation-sd-scripts-2026-10-11
     backend: sd-scripts
     reason: >-

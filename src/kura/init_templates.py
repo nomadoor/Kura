@@ -9,7 +9,8 @@ from pathlib import Path
 
 from kura.doctor import readiness_gaps
 from kura.managed import created_once, is_kura_checkout, plan_restore, record_created_once, sync
-from kura.workspace import WORKSPACE_SCHEMA_VERSION, dump_yaml, require_workspace
+from kura.fsio import atomic_write_yaml as dump_yaml
+from kura.workspace import WORKSPACE_SCHEMA_VERSION, require_workspace
 
 DIRECTORIES = (
     "datasets", "runs", "artifacts/training-state", "workflows", "promptsets",
@@ -60,7 +61,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
-        dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "storage": {"host_drive": ""}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "auto", "lora_stage_cleanup": "remove_after_render", "model_patches_dir": "", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "auto", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
+        dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "auto", "lora_stage_cleanup": "remove_after_render", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "auto", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
     # Written once each; a file the user deleted after that stays deleted.
     already = created_once(root)
     once = list(USER_KNOWLEDGE)

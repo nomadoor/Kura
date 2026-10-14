@@ -8,22 +8,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from kura.fsio import atomic_write_yaml
+from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
 from kura.images import PINNED_IMAGES
 from kura.paths import DEFAULT_HF_CACHE, HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH, overlaps_hf_cache
-
-
-def dump_yaml(path: Path, value: Any) -> None:
-    atomic_write_yaml(path, value)
-
-
-def load_yaml(path: Path) -> dict[str, Any]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a YAML mapping")
-    return data
 
 
 def workspace(start: Path | None = None) -> Path:
@@ -54,8 +41,8 @@ def require_workspace(*, check_schema: bool = True) -> Path:
 @lru_cache(maxsize=8)
 def _schema_version(path: Path, _mtime_ns: int) -> Any:
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        data = load_yaml(path)
+    except (OSError, YAMLError) as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
     return data.get("schema_version") if isinstance(data, dict) else None
 
@@ -220,6 +207,8 @@ def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str
         value_type = schema["type"]
         if not _workspace_value_matches(value, value_type):
             raise _workspace_schema_error(source, path, f"must be {value_type}, not {type(value).__name__}")
+        if isinstance(value, str) and not value.strip():
+            raise _workspace_schema_error(source, path, "is empty; delete the line to leave it unset")
         choices = schema.get("choices")
         if choices and value not in choices:
             raise _workspace_schema_error(source, path, "must be one of " + ", ".join(repr(choice) for choice in choices))
@@ -292,10 +281,6 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     if not isinstance(config, dict):
         raise ValueError(f"{source} must contain a YAML mapping")
     _validate_workspace_value(config, WORKSPACE_SCHEMA, source=source, path="")
-    images = config.get("images")
-    for name, reference in (images.items() if isinstance(images, dict) else ()):
-        if not reference.strip():
-            raise ValueError(f"{source} images.{name} must name an image; delete the line to use the pinned image")
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     for index, mount in enumerate(docker.get("mounts") or []):
         if overlaps_hf_cache(mount.get("target", "")):
@@ -309,12 +294,12 @@ def comfyui_endpoint(config: dict[str, Any]) -> str:
     """The ComfyUI endpoint a new render starts from and the doctor checks."""
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
     value = comfyui.get("endpoint")
-    return (value if isinstance(value, str) and value.strip() else "http://127.0.0.1:8188").strip().rstrip("/")
+    return (value if isinstance(value, str) else "http://127.0.0.1:8188").strip().rstrip("/")
 
 
 def workspace_config() -> dict[str, Any]:
     path = require_workspace() / "workspace.yaml"
-    config = load_yaml(path)
+    config = load_yaml_mapping(path)
     validate_workspace_config(config)
     return config
 
@@ -368,6 +353,21 @@ def _drop_obsolete_keys(config: dict[str, Any]) -> list[str]:
     return notes
 
 
+def _drop_empty_strings(config: dict[str, Any] | list[Any], path: str = "") -> list[str]:
+    """Remove settings and list items written as an empty string, in place; an unset setting is omitted."""
+    notes: list[str] = []
+    keys = list(config) if isinstance(config, dict) else list(range(len(config)))[::-1]
+    for key in keys:
+        value = config[key]
+        dotted = f"{path}[{key}]" if isinstance(config, list) else f"{path}.{key}" if path else str(key)
+        if isinstance(value, (dict, list)):
+            notes.extend(_drop_empty_strings(value, dotted))
+        elif isinstance(value, str) and not value.strip():
+            del config[key]
+            notes.append(f"dropped {dotted}: it was empty; an unset setting is omitted")
+    return notes
+
+
 def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
     """Turn a docker.mounts entry for the Hugging Face cache into docker.hf_cache, in place.
 
@@ -417,7 +417,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     version = config.get("schema_version")
     if version in (WORKSPACE_SCHEMA_VERSION, str(WORKSPACE_SCHEMA_VERSION)):
         fixed = deepcopy(config)
-        notes = [*_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed)]
+        notes = [*_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed), *_drop_empty_strings(fixed)]
         if version != WORKSPACE_SCHEMA_VERSION:
             fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
             notes.insert(0, "schema_version was the string '2'; it is now the integer 2")
@@ -426,7 +426,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     if version not in (None, 1):
         raise ValueError(f"cannot migrate workspace schema {version!r}; this Kura migrates schema 1 to {WORKSPACE_SCHEMA_VERSION}")
     migrated = deepcopy(config)
-    notes: list[str] = [*_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated)]
+    notes: list[str] = [*_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated), *_drop_empty_strings(migrated)]
     candidates: dict[str, list[tuple[str, str]]] = {}
 
     docker = migrated.get("docker") if isinstance(migrated.get("docker"), dict) else None

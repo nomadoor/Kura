@@ -13,9 +13,8 @@ import stat as stat_module
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
-
 from kura.dataset_jsonl import items_jsonl_rows
+from kura.yamlio import load_yaml, load_yaml_text
 from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_MEDIA_SUFFIXES
 
 
@@ -270,7 +269,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
     manifest_bytes, manifest_stat = _read_authored_file(manifest, "dataset.yaml")
     items_bytes, items_stat = _read_authored_file(items, "items.jsonl")
     try:
-        metadata = yaml.safe_load(manifest_bytes.decode("utf-8"))
+        metadata = load_yaml_text(manifest_bytes.decode("utf-8"))
         items_text = items_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
@@ -451,7 +450,7 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     metadata_path = directory / "dataset.yaml"
     if not metadata_path.is_file():
         raise ValueError("missing dataset.yaml")
-    metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
+    metadata = load_yaml(metadata_path)
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
     # Propose a dataset.yaml only when the authored one does not declare v2 yet.

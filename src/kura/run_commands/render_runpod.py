@@ -9,15 +9,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.executors import launch_runpod_session, runpod_gpu_availability
+from kura.yamlio import YAMLError
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop
 from kura.executors.runpod import confirm_runpod_billing, format_cost_ceiling, runpod_cost_ceiling, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
 from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases
-from kura.workspace import load_yaml as _load_yaml
+from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -397,7 +396,7 @@ def launch_render_runpod(
         _settle_unfinished(run_dir, "interrupted")
         print("runpod render interrupted; stopping pod now", file=sys.stderr)
         return 130
-    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, YAMLError, subprocess.TimeoutExpired) as exc:
         if ssh_details is not None:
             try:
                 _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)

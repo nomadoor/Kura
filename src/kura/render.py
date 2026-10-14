@@ -17,13 +17,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.install_source import kura_provenance
+from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
 from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
 from kura.records import record as as_record
-from kura.workspace import dump_yaml
+from kura.fsio import atomic_write_yaml as dump_yaml
+from kura.workspace import validate_workspace_config
 
 
 # Promptset keys Kura owns directly. Every other key in a promptset item must be
@@ -55,17 +55,10 @@ def digest(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def load_yaml(path: Path) -> dict[str, Any]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a YAML mapping")
-    return data
-
-
 def load_optional_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    return load_yaml(path)
+    return load_yaml_mapping(path)
 
 
 def _validate_train_run_reference(workspace: Path, value: Any) -> str | None:
@@ -79,7 +72,7 @@ def _validate_train_run_reference(workspace: Path, value: Any) -> str | None:
     source_path = workspace / "runs" / train_run / "run.yaml"
     if not source_path.is_file():
         raise ValueError(f"render inputs.train_run does not exist: {train_run}")
-    source = load_yaml(source_path)
+    source = load_yaml_mapping(source_path)
     if source.get("type") != "train":
         raise ValueError(f"render inputs.train_run must reference a train run: {train_run}")
     if source.get("id") not in (None, train_run):
@@ -100,10 +93,6 @@ def _validated_checkpoint(value: Any, *, context: str, require_id: bool) -> dict
     unknown = sorted(str(key) for key in value if key not in CHECKPOINT_KEYS)
     if unknown:
         raise ValueError(f"{context} has unsupported keys: {', '.join(unknown)}")
-    # `kura render new` historically authors this empty placeholder. It means
-    # that the workflow supplies its own model, not that a path was omitted.
-    if not value or (value.get("path") in (None, "") and value.get("id") in (None, "") and value.get("hash") is None):
-        return None
     checkpoint_id = value.get("id")
     if (require_id or checkpoint_id is not None) and not is_safe_component(checkpoint_id):
         raise ValueError(f"{context}.id must be a single safe file name, not a path: {checkpoint_id!r}")
@@ -180,7 +169,7 @@ def _workflow_sidecar(path: Path) -> dict[str, Any]:
     sidecar = path.with_suffix(".kura.yaml")
     if not sidecar.is_file():
         return {}
-    return load_yaml(sidecar)
+    return load_yaml_mapping(sidecar)
 
 
 def event(run_dir: Path, payload: dict[str, Any]) -> None:
@@ -837,8 +826,8 @@ def remove_leftover_stages(workspace: Path, run_dir: Path) -> list[str]:
     a stage kind set to `keep` is left alone.
     """
     try:
-        frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+        frozen = load_yaml(run_dir / "resolved" / "manifest.lock.yaml") or {}
+    except (OSError, YAMLError):
         return []
     if not isinstance(frozen, dict):
         return []
@@ -1299,8 +1288,10 @@ def _render_lora_strength(value: Any) -> float | None:
 
 
 def compile_render(workspace: Path, run_dir: Path) -> None:
-    run = load_yaml(run_dir / "run.yaml")
+    run = load_yaml_mapping(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
+    if workspace_config:
+        validate_workspace_config(workspace_config)
     compiled_only = [key for key in COMPILED_RENDER_KEYS if key in run]
     if compiled_only:
         hint = "; to change the inserted LoRA's strength, set render.lora_strength" if "lora_insert" in compiled_only else ""
@@ -1484,7 +1475,7 @@ def launch_render(
     workflow_used_path = run_dir / "resolved" / "workflow_used.json"
     if not manifest_path.is_file() or not workflow_used_path.is_file():
         raise ValueError("render is not compiled; run kura render compile first")
-    frozen = load_yaml(manifest_path)
+    frozen = load_yaml_mapping(manifest_path)
     resolved_executor = executor_name or frozen.get("executor", {}).get("name")
     if frozen.get("generator", {}).get("name") != "comfyui" or resolved_executor not in ("local", "runpod"):
         raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")

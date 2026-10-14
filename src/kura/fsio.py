@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import yaml
+from kura.yamlio import dump_yaml
 
 
 class FileLockBusy(ValueError):
@@ -170,4 +170,4 @@ def atomic_write_json(path: Path, value: Any) -> None:
 
 
 def atomic_write_yaml(path: Path, value: Any) -> None:
-    atomic_write_text(path, yaml.safe_dump(value, allow_unicode=True, sort_keys=False))
+    atomic_write_text(path, dump_yaml(value))

@@ -12,9 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
+from kura.yamlio import YAMLError
 from kura.executors.runpod import RunPodAPIError
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
@@ -22,7 +21,7 @@ from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.render import launch_render
-from kura.workspace import load_yaml as _load_yaml
+from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -288,7 +287,7 @@ def execute_run(
 
     try:
         locked = _load_yaml(_run_path(run_id) / "resolved" / "manifest.lock.yaml")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot execute run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
     executor = run_executor(locked)
@@ -377,7 +376,7 @@ def launch_run(
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
         run_type = locked.get("type", "train")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot launch run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
     try:
@@ -406,7 +405,7 @@ def launch_run(
                 state_word = "completed" if code == 0 else "failed"
                 _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"Render {run_id} {state_word} with exit code {code}.", priority="3")
             return code
-        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
             message = _safe_error(exc)
             print(f"cannot launch render: {message}", file=sys.stderr)
             if not dry_run:
@@ -467,7 +466,7 @@ def launch_run(
                 "input_sha256": input_lock.get("input_sha256"),
                 "runpod_transfer_preflight": None,
             }
-    except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     try:
@@ -479,7 +478,7 @@ def launch_run(
         image_name = _backend_image_name(backend_name)
         try:
             env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
-        except (OSError, ValueError, yaml.YAMLError):
+        except (OSError, ValueError, YAMLError):
             env_lock = {}
         selected = launch_image(config, image_name, env_lock)
         if executor == "docker":
@@ -542,7 +541,7 @@ def launch_run(
                     unattended_wait=unattended_wait,
                     controlled_by=controlled_by,
                 )
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     if dry_run:
@@ -654,7 +653,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
     elif not in_progress:
         try:
             launch_render(workspace, run_dir, executor_name="local", check_only=True)
-        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, http.client.HTTPException) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, YAMLError, http.client.HTTPException) as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1
         try:
@@ -769,7 +768,7 @@ def cmd_render_launch(args: argparse.Namespace) -> int:
     """Start a compiled render run; `kura run execute` starts a training run."""
     try:
         run_type = _load_yaml(_run_path(args.run_id) / "resolved" / "manifest.lock.yaml").get("type", "train")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot launch render: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
     if run_type != "render":

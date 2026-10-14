@@ -155,7 +155,8 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
                 self.assertNotIn("images", workspace)
-                self.assertEqual(workspace["comfyui"]["lora_dir"], "")
+                self.assertNotIn("lora_dir", workspace["comfyui"])
+                self.assertNotIn("storage", workspace)
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
             finally:
                 os.chdir(previous)
@@ -232,6 +233,7 @@ class InitCommandTests(unittest.TestCase):
             run = yaml.safe_load((Path(directory) / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
             self.assertIn("cases", run["inputs"])
             self.assertNotIn("promptset", run["inputs"])
+            self.assertNotIn("checkpoint", run["inputs"])
             self.assertEqual(run["generator"]["endpoint"], "http://127.0.0.1:8188")
             status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
             self.assertIsNone(status["last_step"])
@@ -2274,7 +2276,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2304,7 +2306,7 @@ class RenderNotificationTests(unittest.TestCase):
                 path.mkdir(parents=True)
             (output_run.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
             (root / "workspace.yaml").write_text(
-                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  model_registry: {{checkpoints: {{base.safetensors: {{repo: example/repo}}}}}}\n  runpod: {{container_disk_gb: 200}}\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
+                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  model_registry: {{checkpoints: {{base.safetensors: {{repo: example/repo}}}}}}\n  runpod: {{container_disk_gb: 200}}\n",
                 encoding="utf-8",
             )
             checkpoint = output_run / "example.safetensors"
@@ -2399,7 +2401,6 @@ class RenderNotificationTests(unittest.TestCase):
                     "type": "render",
                     "inputs": {
                         "train_run": "missing-train",
-                        "checkpoint": {"path": ""},
                         "workflow": {"path": "workflows/wf.json"},
                         "promptset": {"path": "promptsets/prompts.jsonl"},
                     },
@@ -2529,7 +2530,6 @@ class RenderNotificationTests(unittest.TestCase):
                 "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                 "executor": {"name": "local"},
                 "inputs": {
-                    "checkpoint": {"path": "", "hash": None},
                     "workflow": {"path": "workflows/wf.json", "digest": "sha256:workflow"},
                     "promptset": {"path": "promptsets/prompts.jsonl", "digest": "sha256:prompts"},
                 },
@@ -2593,7 +2593,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
                     "workflow_patches": {},
@@ -2730,7 +2730,7 @@ class RenderNotificationTests(unittest.TestCase):
             output_run = root / "runs" / "train-1" / "outputs"
             for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
                 path.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("comfyui:\n  lora_dir: ''\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("comfyui: {}\n", encoding="utf-8")
             checkpoint = output_run / "example.safetensors"
             checkpoint.write_bytes(b"fake-lora")
             (workflow_dir / "wf.json").write_text(
@@ -2802,7 +2802,6 @@ class RenderNotificationTests(unittest.TestCase):
                     "schema_version": 1,
                     "type": "render",
                     "inputs": {
-                        "checkpoint": {"path": "", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
                         "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
                     },
@@ -2848,7 +2847,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2882,7 +2881,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2921,7 +2920,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2971,7 +2970,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy_text2image_api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy_text2image_api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -3023,7 +3022,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -3070,7 +3069,7 @@ class RenderNotificationTests(unittest.TestCase):
                 (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
-                        "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                         "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                         "executor": {"name": "runpod"},
                         "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
@@ -3295,7 +3294,7 @@ class RenderNotificationTests(unittest.TestCase):
                 (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
-                        "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                         "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                         "executor": {"name": "local"},
                         "workflow_patches": {},

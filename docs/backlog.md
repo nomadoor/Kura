@@ -39,3 +39,8 @@ why, so it is not raised again.
 ## Rejected
 
 - 2026-10-11 | capabilities | REJECTED: declare field types in `kura run capabilities`; typed fields would break runs that give `learning_rate` as a string | deferred before this backlog existed; source not recorded | -
+- 2026-10-14 | YAML reader | `kura.yamlio` keeps the last value of a duplicate mapping key; YAML 1.2 requires unique keys, so a repeated setting should be refused instead of one copy silently winning | CodeRabbit on the authored-input foundation pull request | P9
+- 2026-10-14 | YAML reader | `kura.yamlio` still accepts the YAML 1.1 merge key `<<: *anchor`, a second way to write a mapping | CodeRabbit on the authored-input foundation pull request | -
+- 2026-10-14 | release gate | The one-YAML-reader check looks only for `import yaml`; another YAML library (for example `ruamel.yaml`) would pass it | CodeRabbit on the authored-input foundation pull request | -
+- 2026-10-14 | workspace migrate | `kura workspace migrate` drops an empty `docker.mounts[].source` string but keeps the rest of that mount, which validation then refuses for its missing source | CodeRabbit on the authored-input foundation pull request | P11
+- 2026-10-14 | conformance | A conformance workspace on a Windows drive (`/mnt/d`, drvfs) leaves the staged dataset directory unreadable after `rename`, so `ensure_dataset` fails; the harness should refuse a non-ext4 workspace up front or say where to put it | found running conformance for the authored-input foundation pull request | P11

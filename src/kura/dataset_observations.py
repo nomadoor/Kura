@@ -7,9 +7,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.dataset_inspect import _image_size
+from kura.yamlio import load_yaml
 from kura.dataset_jsonl import items_jsonl_rows
 from kura.dataset_manifest import caption_is_empty, captions_by_stem, declares_items_v2
 from kura.media_types import KNOWN_IMAGE_SUFFIXES
@@ -99,7 +98,7 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
 def _mapping_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    value = load_yaml(path) or {}
     return value if isinstance(value, dict) else {}
 
 

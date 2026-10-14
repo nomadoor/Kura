@@ -23,9 +23,8 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
-
 from kura.secrets import declared_secret
+from kura.yamlio import YAMLError
 from kura.storage import ensure_free_bytes
 from kura.container_scripts import script_source
 from kura.executors.runpod import project_runpod_dataset_handoff
@@ -37,7 +36,7 @@ from kura.executors import _materialize_stdout_progress, _redact_secret_text, _r
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell, format_cost_ceiling, pod_cost_ceiling
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
-from kura.workspace import load_yaml as _load_yaml
+from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import training_state_policy
@@ -458,7 +457,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         downloaded_run = destination / run_id
         try:
             manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        except (OSError, ValueError, yaml.YAMLError):
+        except (OSError, ValueError, YAMLError):
             manifest = {}
         if not isinstance(manifest, dict):
             manifest = {}
@@ -952,7 +951,7 @@ def _pull_remote_training_state_items(
     # it as the training-state sync error rather than pulling nothing silently.
     try:
         run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-    except yaml.YAMLError as exc:
+    except YAMLError as exc:
         raise ValueError("cannot read the frozen run manifest for training-state sync") from exc
     contract = compiled_training_state_contract(run_dir, run)
     output_name = run_output_name(run)
@@ -1226,7 +1225,7 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
                     state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id, marker=marker)
                     training_states = _pull_remote_training_state_items(run_dir, details, workspace=workspace, items=state_items)
                     _record_pulled_training_states(run_dir, training_states)
-                except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, subprocess.TimeoutExpired) as exc:
+                except (OSError, ValueError, json.JSONDecodeError, YAMLError, subprocess.TimeoutExpired) as exc:
                     state_error = _safe_error(exc)
                     try:
                         _mutate_run_status(
@@ -2034,7 +2033,7 @@ def _prepare_remote_upload(run_dir: Path) -> dict[str, Any]:
         return _prepare_remote_upload_unchecked(run_dir)
     except TransferRefused:
         raise
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, YAMLError) as error:
         raise TransferRefused(f"remote job preparation failed before upload: {_safe_error(error)}") from error
 
 

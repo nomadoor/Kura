@@ -12,9 +12,8 @@ import re
 import shutil
 from typing import Any, Callable
 
-import yaml
-
 from kura.container_scripts.runpod_input_verify import view_changes
+from kura.yamlio import YAMLError, load_yaml
 from kura.dataset_manifest import measure_manifest
 from kura.fsio import atomic_write_json
 from kura.media_types import KNOWN_MEDIA_SUFFIXES
@@ -1502,8 +1501,8 @@ def _local_model_requirements(run_dir: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
     try:
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        document = load_yaml(path)
+    except (OSError, YAMLError) as exc:
         raise ValueError("cannot read the frozen model requirements") from exc
     requirements = document.get("requirements") if isinstance(document, dict) else None
     if not isinstance(requirements, list):

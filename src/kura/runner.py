@@ -543,11 +543,11 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
 
 
 def _local_slots(workspace: Path) -> int:
-    import yaml
+    from kura.yamlio import YAMLError, load_yaml
 
     try:
-        config = yaml.safe_load((workspace / "workspace.yaml").read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+        config = load_yaml(workspace / "workspace.yaml") or {}
+    except (OSError, YAMLError):
         return 1
     value = (config.get("runner") or {}).get("local_slots") if isinstance(config, dict) else None
     # Values below 1 would stop all local training; they count as 1.
@@ -796,11 +796,11 @@ COLLECTION_ATTEMPTS = 3
 
 
 def _runpod_config(workspace: Path) -> dict[str, Any]:
-    import yaml
+    from kura.yamlio import YAMLError, load_yaml
 
     try:
-        config = yaml.safe_load((workspace / "workspace.yaml").read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+        config = load_yaml(workspace / "workspace.yaml") or {}
+    except (OSError, YAMLError):
         return {}
     runpod = config.get("runpod") if isinstance(config, dict) else None
     return runpod if isinstance(runpod, dict) else {}

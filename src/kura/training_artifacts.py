@@ -14,9 +14,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
-import yaml
-
 from kura.fsio import atomic_write_json, file_lock
+from kura.yamlio import YAMLError, load_yaml, load_yaml_1_1
 from kura.install_source import kura_continuity
 from kura.run_envelope import common_recipe, final_step, resume_intent, training_state_policy, validated_recipe
 
@@ -232,10 +231,10 @@ def _protected_artifact_ids(workspace: Path) -> set[str]:
     protected: set[str] = set()
     for path in (workspace / "runs").glob("*/run.yaml"):
         try:
-            import yaml
+            from kura.yamlio import YAMLError, load_yaml
 
-            run = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            run = load_yaml(path)
+        except (OSError, UnicodeError, YAMLError) as exc:
             raise _ReferenceInspectionError(f"cannot safely inspect training-state reference: {path}") from exc
         continuation = run.get("continuation") if isinstance(run, dict) else None
         source = continuation.get("source") if isinstance(continuation, dict) else None
@@ -698,6 +697,22 @@ def resume_artifact_directory(workspace: Path, run: dict[str, Any]) -> Path | No
     return _artifact_dir(workspace, run["continuation"]["source"]["artifact_id"])
 
 
+def _recorded_recipe_matches(workspace: Path, run: dict[str, Any], recorded: Any) -> bool:
+    """Whether a recipe fingerprint recorded for the parent run still describes this run's recipe.
+
+    A fingerprint recorded before Kura read YAML 1.2 hashed a value such as `1e-6`
+    as the string PyYAML's YAML 1.1 reading gave; it matches when the parent's
+    frozen manifest read that way gives it and reads today as this run's recipe.
+    """
+    current = recipe_fingerprint(run)
+    if recorded == current:
+        return True
+    parent = workspace / "runs" / str(run.get("parent_run")) / "resolved" / "manifest.lock.yaml"
+    if not parent.is_file():
+        return False
+    return recorded == recipe_fingerprint(load_yaml_1_1(parent)) and recipe_fingerprint(load_yaml(parent)) == current
+
+
 def compile_resume_lock(
     workspace: Path,
     run: dict[str, Any],
@@ -710,8 +725,7 @@ def compile_resume_lock(
     if continuation is None:
         return None
     source = continuation["source"]
-    current_fingerprint = recipe_fingerprint(run)
-    if current_fingerprint != source["recipe_sha256"]:
+    if not _recorded_recipe_matches(workspace, run, source["recipe_sha256"]):
         raise ValueError("Resume training recipe changed after the derived run was created; create a Fork from Weight instead")
     manifest = verified_resume_source(workspace, run)
     if manifest.get("source_run") != run.get("parent_run"):
@@ -723,7 +737,7 @@ def compile_resume_lock(
         raise ValueError("Resume artifact observed step does not match authored intent")
     compatibility = manifest.get("compatibility") if isinstance(manifest.get("compatibility"), dict) else {}
     expected_recipe = compatibility.get("recipe_sha256")
-    if isinstance(expected_recipe, str) and expected_recipe != current_fingerprint:
+    if isinstance(expected_recipe, str) and not _recorded_recipe_matches(workspace, run, expected_recipe):
         raise ValueError("Resume artifact recipe changed from the published compatibility fingerprint")
     dataset_input: dict[str, Any] | None = None
     if target_input_lock is not None:
@@ -799,8 +813,8 @@ def compile_resume_lock(
 
 def _kura_continuity(source_env_lock: Path) -> dict[str, Any]:
     try:
-        loaded = yaml.safe_load(source_env_lock.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        loaded = load_yaml(source_env_lock)
+    except (OSError, YAMLError):
         loaded = None
     return kura_continuity(loaded if isinstance(loaded, dict) else {})
 
@@ -1006,8 +1020,8 @@ def training_state_capture_required(run_dir: Path) -> bool:
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
     try:
-        run = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        run = load_yaml(manifest_path)
+    except (OSError, YAMLError) as exc:
         raise ValueError(f"cannot inspect training-state candidates for {run_dir.name}") from exc
     if not isinstance(run, dict):
         raise ValueError(f"cannot inspect training-state candidates for {run_dir.name}")
@@ -1019,8 +1033,8 @@ def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any
     env_lock = run_dir / "resolved" / "env.lock"
     if env_lock.is_file():
         try:
-            loaded = yaml.safe_load(env_lock.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
+            loaded = load_yaml(env_lock)
+        except (OSError, YAMLError):
             loaded = None
         if isinstance(loaded, dict):
             runtime_identity = loaded
