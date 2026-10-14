@@ -632,25 +632,23 @@ def _stage_mode(value: Any, name: str, endpoint: str | None) -> str:
 
 
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any], endpoint: str | None = None) -> dict[str, Any] | None:
-    if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
-        return None
-    if str(frozen.get("render", {}).get("lora_stage", "auto")).strip().lower() in ("0", "false", "off", "none", "no"):
+    """Where a checkpoint is staged so ComfyUI loads it as a LoRA; None when the workflow takes no LoRA.
+
+    A checkpoint path is always a file path: one Kura cannot stage is refused, never passed on as a LoRA name.
+    """
+    if not checkpoint or ("lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert")):
         return None
     source = _workspace_path(workspace, checkpoint.get("path"))
     if source is None or not source.is_file() or source.suffix != ".safetensors":
-        return None
-    comfyui = frozen.get("comfyui", {})
-    if not isinstance(comfyui, dict):
-        return None
-    stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
-    if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
-        raise ValueError("comfyui.lora_stage_subdir must be a safe relative directory name")
-    cleanup = str(comfyui.get("lora_stage_cleanup") or "remove_after_render").strip().lower()
-    if cleanup not in ("remove_after_render", "keep"):
-        raise ValueError("comfyui.lora_stage_cleanup must be remove_after_render or keep")
+        raise ValueError(f"a LoRA render needs each checkpoint to be a .safetensors file; {checkpoint.get('path')!r} is not")
+    comfyui = frozen.get("comfyui") if isinstance(frozen.get("comfyui"), dict) else {}
     lora_dir = _workspace_path(workspace, comfyui.get("lora_dir"))
     if lora_dir is None:
-        return None
+        raise ValueError("a local LoRA render stages each checkpoint into ComfyUI's LoRA folder; set comfyui.lora_dir in workspace.yaml")
+    stage_subdir = comfyui.get("lora_stage_subdir", "Kura_tmp")
+    if Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
+        raise ValueError("comfyui.lora_stage_subdir must be a safe relative directory name")
+    cleanup = comfyui.get("lora_stage_cleanup", "remove_after_render")
     stage_dir = (lora_dir / stage_subdir).resolve()
     mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", endpoint)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
@@ -668,21 +666,19 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
 def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any], endpoint: str | None = None) -> dict[str, Any] | None:
     if "model_patch" not in frozen.get("workflow_patches", {}):
         return None
+    if not checkpoint:
+        return None
     source = _workspace_path(workspace, checkpoint.get("path"))
     if source is None or not source.is_file() or source.suffix != ".safetensors":
-        return None
-    comfyui = frozen.get("comfyui", {})
-    if not isinstance(comfyui, dict):
-        return None
+        raise ValueError(f"a model_patch render needs each checkpoint to be a .safetensors file; {checkpoint.get('path')!r} is not")
+    comfyui = frozen.get("comfyui") if isinstance(frozen.get("comfyui"), dict) else {}
     directory = _workspace_path(workspace, comfyui.get("model_patches_dir"))
     if directory is None:
-        raise ValueError("comfyui.model_patches_dir is required to stage a model_patch checkpoint")
-    stage_subdir = str(comfyui.get("model_patch_stage_subdir") or "Kura_tmp").strip("/\\")
-    if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
+        raise ValueError("a local model_patch render stages each checkpoint into ComfyUI's model patch folder; set comfyui.model_patches_dir in workspace.yaml")
+    stage_subdir = comfyui.get("model_patch_stage_subdir", "Kura_tmp")
+    if Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.model_patch_stage_subdir must be a safe relative directory name")
-    cleanup = str(comfyui.get("model_patch_stage_cleanup") or "remove_after_render").strip().lower()
-    if cleanup not in ("remove_after_render", "keep"):
-        raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
+    cleanup = comfyui.get("model_patch_stage_cleanup", "remove_after_render")
     stage_dir = (directory / stage_subdir).resolve()
     mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", endpoint)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
@@ -1102,10 +1098,15 @@ def _freeze_case_checkpoints(workspace: Path, cases: list[dict[str, Any]]) -> No
         if not isinstance(checkpoint, dict):
             continue
         candidate = _workspace_path(workspace, checkpoint.get("path"))
-        if candidate is not None and candidate.is_file():
-            checkpoint["hash"] = digest(candidate)
-        elif not checkpoint.get("hash"):
-            print(f"warning: checkpoint hash is unavailable for case {case['id']}", flush=True)
+        if candidate is None or not candidate.is_file():
+            raise ValueError(f"case {case['id']} checkpoint {checkpoint.get('path')!r} is not a file; a checkpoint path names a file Kura can hash")
+        observed = digest(candidate)
+        if checkpoint.get("hash") is not None and checkpoint["hash"] != observed:
+            raise ValueError(
+                f"case {case['id']} checkpoint hash {checkpoint['hash']!r} does not match {checkpoint['path']} ({observed}); "
+                "fix the hash or the path, or remove the hash to record the file's"
+            )
+        checkpoint["hash"] = observed
         checkpoint_id = checkpoint.get("id")
         if not isinstance(checkpoint_id, str):
             continue
@@ -1276,7 +1277,7 @@ class ComfyUIClient:
 # Facts compile writes into the run lock. In run.yaml they would be copied and
 # then overwritten, so a value there would be silently ignored.
 COMPILED_RENDER_KEYS = ("lora_insert", "comfyui", "comfyui_models", "comfyui_model_registry", "comfyui_endpoint_identity", "comfyui_required_models", "promptset_images", "_kura")
-RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength", "lora_stage")
+RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength")
 
 
 def _render_lora_strength(value: Any) -> float | None:
@@ -1411,11 +1412,11 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["comfyui_model_registry"] = registry
         frozen["comfyui_models"] = specs
     else:
-        if "model_patch" in frozen.get("workflow_patches", {}):
-            for case in cases:
-                checkpoint = case.get("checkpoint")
-                if checkpoint and _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) is None:
-                    raise ValueError("local model_patch render requires every checkpoint to be a readable .safetensors file and configured comfyui.model_patches_dir")
+        # A local render stages every checkpoint; each plan refuses one it cannot stage.
+        for case in cases:
+            checkpoint = case.get("checkpoint") if isinstance(case.get("checkpoint"), dict) else {}
+            _lora_stage_plan(workspace, run_dir, frozen, checkpoint)
+            _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint)
         endpoint = run.get("generator", {}).get("endpoint")
         if isinstance(endpoint, str) and endpoint:
             try:
@@ -1559,8 +1560,9 @@ def launch_render(
             model_patch_stage = model_patch_stages.setdefault(str(model_patch_stage["target"]), model_patch_stage)
         checkpoint_id = checkpoint.get("id")
         case_override = lora_name_overrides.get(checkpoint_id) if lora_name_overrides and isinstance(checkpoint_id, str) else None
-        lora_name = case_override or lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
-        model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
+        # A RunPod render names its remotely staged files; a local one names what it staged here.
+        lora_name = case_override or lora_name_override or (lora_stage["lora_name"] if lora_stage else None)
+        model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else None
         runtime_cases.append({
             "case": case,
             "checkpoint": checkpoint,

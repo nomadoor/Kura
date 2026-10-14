@@ -416,6 +416,43 @@ class RenderCasesCompileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "inputs.checkpoint.path must be a non-empty path"):
                     compile_render(root, run_dir)
 
+    def test_a_render_evaluates_the_checkpoint_its_record_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            row["checkpoint"]["hash"] = "sha256:" + "0" * 64
+            run_dir = _workspace(root, cases=[row])
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            with self.assertRaisesRegex(ValueError, "checkpoint hash .* does not match"):
+                compile_render(root, run_dir)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            with self.assertRaisesRegex(ValueError, "is not a file"):
+                compile_render(root, run_dir)
+
+    def test_a_checkpoint_kura_cannot_stage_is_refused_not_passed_as_a_lora_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            (root / "workspace.yaml").write_text("comfyui:\n  input_dir: comfyui/input\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "set comfyui.lora_dir"):
+                compile_render(root, run_dir)
+
+    def test_render_lora_stage_is_not_a_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run.setdefault("render", {})["lora_stage"] = "off"
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "render has unsupported keys: lora_stage"):
+                compile_render(root, run_dir)
+
     def test_compile_refuses_an_empty_workspace_setting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

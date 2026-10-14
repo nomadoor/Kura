@@ -393,8 +393,11 @@ that strength for the run: Kura sets it on the LoRA node bound by
 from the sidecar's `lora_insert`, where a strength written in the sidecar is
 otherwise kept. A strength bound per case in `workflow_patches` wins over both.
 The `render:` mapping accepts only `output_dir`, `timeout_sec`, `default_seed`,
-`workflow_fixed`, `lora_strength`, and `lora_stage`, and run.yaml may not set
-facts compile writes itself, such as `lora_insert`.
+`workflow_fixed`, and `lora_strength`, and run.yaml may not set facts compile
+writes itself, such as `lora_insert`. A local render stages every checkpoint
+into ComfyUI's LoRA or model-patch folder (`comfyui.lora_dir`,
+`comfyui.model_patches_dir`); a checkpoint it cannot stage is refused, and an
+authored checkpoint hash must match its file.
 
 ## Checks
 

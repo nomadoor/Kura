@@ -192,7 +192,7 @@ class ComfyUIModelPatchTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_bytes(b"weights")
             frozen = {"workflow_patches": {"model_patch": {"node": "4", "field": "inputs.name"}}, "comfyui": {"model_patches_dir": ""}}
-            with self.assertRaisesRegex(ValueError, "model_patches_dir is required"):
+            with self.assertRaisesRegex(ValueError, "set comfyui.model_patches_dir"):
                 _model_patch_stage_plan(workspace, workspace / "runs" / "render", frozen, {"path": "runs/train/outputs/lllite.safetensors"})
 
     def test_runpod_model_patch_fails_before_using_host_checkpoint_path(self) -> None:
