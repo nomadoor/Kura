@@ -204,6 +204,12 @@ class SurfaceContractTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, f"{key.split('.')[-1]} is not a training run setting"):
                 validate_train_run_fields(run)
 
+    def test_copying_an_older_provider_only_runpod_run_keeps_runpod(self) -> None:
+        from kura.run_envelope import without_retired_train_run_keys
+
+        copied = without_retired_train_run_keys({"compute": {"provider": "runpod", "gpu": "NVIDIA A40"}})
+        self.assertEqual(copied["compute"], {"executor": "runpod", "gpu": ["NVIDIA A40"]})
+
     def test_every_datasets_reader_refuses_an_entry_that_is_not_a_mapping(self) -> None:
         from kura.backends import shared
         from kura.run_commands import common
@@ -226,6 +232,8 @@ class SurfaceContractTests(unittest.TestCase):
             ({"compute": {"gpu": ["NVIDIA A40"]}}, "a Docker run uses the local GPU"),
             ({"safety": {"allow_storage_risk": "yes"}}, "safety.allow_storage_risk must be true or false"),
             ({"safety": {"checkpoint_estimate_gb": "25"}}, "safety.checkpoint_estimate_gb must be a positive number"),
+            ({"safety": {"checkpoint_estimate_gb": float("nan")}}, "safety.checkpoint_estimate_gb must be a positive number"),
+            ({"compute": {"executor": "rnupod"}}, "compute.executor must be docker or runpod"),
         ):
             with self.subTest(run=run), self.assertRaisesRegex(ValueError, message):
                 validate_train_run_fields(run)

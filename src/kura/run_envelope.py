@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -67,8 +68,10 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
     for key, value in safety.items():
         if key.startswith("allow_") and not isinstance(value, bool):
             problems.append(f"safety.{key} must be true or false, not {value!r}")
-        elif key.endswith("_gb") and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+        elif key.endswith("_gb") and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
             problems.append(f"safety.{key} must be a positive number of GiB, not {value!r}")
+    if isinstance(compute, dict) and "executor" in compute and compute["executor"] not in ("docker", "runpod"):
+        problems.append(f"compute.executor must be docker or runpod, not {compute['executor']!r}")
     if isinstance(compute, dict) and "gpu" in compute:
         gpu = compute["gpu"]
         if not isinstance(gpu, list) or not gpu or not all(isinstance(item, str) and item.strip() for item in gpu):
@@ -84,6 +87,10 @@ def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
     from copy import deepcopy
 
     copied = deepcopy(run)
+    # An older Kura named a RunPod run by compute.provider alone; keep that executor.
+    legacy = copied.get("compute") if isinstance(copied.get("compute"), dict) else {}
+    if legacy.get("provider") == "runpod" and not legacy.get("executor"):
+        legacy["executor"] = "runpod"
     for path in RETIRED_TRAIN_RUN_KEYS:
         parent, _, key = path.rpartition(".")
         holder = copied.get(parent) if parent else copied

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import posixpath
 import re
@@ -278,7 +279,7 @@ def _configured_gib(value: Any, *, default: int) -> float:
     """A GiB setting as written (a positive number); omitted is the default. It is never truncated."""
     if value is None:
         return default
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
         raise ValueError(f"a GiB setting must be a positive number, not {value!r}")
     return value
 

@@ -161,7 +161,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 00b1e1d0d3baf2055961b8429cca7c75997b7498634ca37dca46ba80d4908cab
+      value: 3c5f9ff4e8ed5f7834087b9374f1126ffb05bb58b9d8c1cc9a3b298e6f36a110
   - id: one-spelling-selectors-sd-scripts-2026-10-14
     backend: sd-scripts
     reason: Selector values are accepted in one spelling each and checked first (aliases,
