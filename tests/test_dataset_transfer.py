@@ -378,7 +378,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 patch("kura.storage.shutil.disk_usage", return_value=SimpleNamespace(free=900 * 1024**3, total=1000 * 1024**3)),
                 self.assertRaisesRegex(ValueError, "RunPod stage needs about .* on D:"),
             ):
-                stage_runpod(workspace=root, run_dir=run_dir, config={**self._workspace_config(), "storage": {"host_drive": "D"}})
+                stage_runpod(workspace=root, run_dir=run_dir, config={**self._workspace_config(), "storage": {"host_drive": "D:"}})
             self.assertFalse(any((run_dir / "transfer").iterdir()))
 
 

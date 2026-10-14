@@ -125,7 +125,7 @@ class PlanShowsCeilingAndCapacityChoicesTests(unittest.TestCase):
             (root / "workspace.yaml").write_text(
                 "runpod:\n  gpu_type_ids: [NVIDIA RTX A5000, NVIDIA A40]\n  cloud_types: [COMMUNITY]\n", encoding="utf-8",
             )
-            compute: dict[str, object] = {"executor": "runpod", "gpu": "NVIDIA A40"}
+            compute: dict[str, object] = {"executor": "runpod", "gpu": ["NVIDIA A40"]}
             if capacity is not None:
                 compute["capacity"] = capacity
             (run_dir / "run.yaml").write_text(yaml.safe_dump({

@@ -87,7 +87,7 @@ record a bounded foreground wait in `run.yaml` before compiling:
 ```yaml
 compute:
   executor: runpod
-  gpu: NVIDIA RTX A5000
+  gpu: [NVIDIA RTX A5000]   # a list of RunPod GPU type IDs; only on RunPod runs
   capacity:
     mode: wait
     timeout: 6h

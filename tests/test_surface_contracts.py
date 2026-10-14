@@ -191,11 +191,52 @@ class SurfaceContractTests(unittest.TestCase):
                     validate_train_run_fields(run)
                 self.assertIn(SENTINEL, str(caught.exception))
 
-    def test_train_run_names_the_fix_for_a_misspelling_and_for_a_retired_key(self) -> None:
+    def test_train_run_names_the_fix_for_a_misspelling_and_refuses_unread_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "did you mean 'digest'"):
             validate_train_run_fields({"datasets": [{"id": "tiny", "digets": "sha256:x"}]})
-        with self.assertRaisesRegex(ValueError, "created_by is no longer used; remove it.*backend.version is no longer used"):
+        with self.assertRaisesRegex(ValueError, "created_by is not a training run setting.*backend.version is not a training run setting"):
             validate_train_run_fields({"created_by": "human", "backend": {"version": None}})
+        for run, key in (
+            ({"backend": {"adapter_version": 1}}, "backend.adapter_version"),
+            ({"datasets": [{"id": "tiny", "path": "datasets/tiny"}]}, "datasets[].path"),
+            ({"compute": {"provider": "runpod"}}, "compute.provider"),
+        ):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, f"{key.split('.')[-1]} is not a training run setting"):
+                validate_train_run_fields(run)
+
+    def test_copying_an_older_provider_only_runpod_run_keeps_runpod(self) -> None:
+        from kura.run_envelope import without_retired_train_run_keys
+
+        copied = without_retired_train_run_keys({"compute": {"provider": "runpod", "gpu": "NVIDIA A40"}})
+        self.assertEqual(copied["compute"], {"executor": "runpod", "gpu": ["NVIDIA A40"]})
+
+    def test_every_datasets_reader_refuses_an_entry_that_is_not_a_mapping(self) -> None:
+        from kura.backends import shared
+        from kura.run_commands import common
+        from kura import cli
+        from kura.run_envelope import run_datasets
+
+        for reader in (run_datasets, shared._datasets, common._run_datasets, cli._run_datasets):
+            self.assertIs(reader, run_datasets)
+        self.assertEqual(run_datasets({"datasets": [{"id": "new"}]}), [{"id": "new"}])
+        with self.assertRaisesRegex(ValueError, "datasets must be a list of mappings"):
+            run_datasets({"datasets": ["old-id", {"id": "new"}]})
+
+    def test_run_envelope_values_have_one_form(self) -> None:
+        validate_train_run_fields({"compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]}, "safety": {"allow_storage_risk": True, "checkpoint_estimate_gb": 2.5}})
+        for run, message in (
+            ({"compute": {"executor": "runpod", "gpu": "NVIDIA A40"}}, "compute.gpu must be a list"),
+            ({"compute": {"executor": "runpod", "gpu": "gpu"}}, "compute.gpu must be a list"),
+            ({"compute": {"executor": "runpod", "gpu": True}}, "compute.gpu must be a list"),
+            ({"compute": {"executor": "docker", "gpu": ["NVIDIA A40"]}}, "a Docker run uses the local GPU"),
+            ({"compute": {"gpu": ["NVIDIA A40"]}}, "a Docker run uses the local GPU"),
+            ({"safety": {"allow_storage_risk": "yes"}}, "safety.allow_storage_risk must be true or false"),
+            ({"safety": {"checkpoint_estimate_gb": "25"}}, "safety.checkpoint_estimate_gb must be a positive number"),
+            ({"safety": {"checkpoint_estimate_gb": float("nan")}}, "safety.checkpoint_estimate_gb must be a positive number"),
+            ({"compute": {"executor": "rnupod"}}, "compute.executor must be docker or runpod"),
+        ):
+            with self.subTest(run=run), self.assertRaisesRegex(ValueError, message):
+                validate_train_run_fields(run)
 
     def test_compile_names_a_misspelled_key_before_reporting_its_intended_key_missing(self) -> None:
         from kura.cli import _validate_train_compile_intent

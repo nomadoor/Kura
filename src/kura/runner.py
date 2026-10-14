@@ -542,16 +542,18 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
         sleep(poll_sec)
 
 
-def _local_slots(workspace: Path) -> int:
-    from kura.yamlio import YAMLError, load_yaml
+def _local_slots(workspace: Path) -> int | None:
+    """runner.local_slots from the validated workspace.yaml; None when the file is not valid."""
+    from kura.workspace import validate_workspace_config
+    from kura.yamlio import YAMLError, load_yaml_mapping
 
     try:
-        config = load_yaml(workspace / "workspace.yaml") or {}
-    except (OSError, YAMLError):
-        return 1
-    value = (config.get("runner") or {}).get("local_slots") if isinstance(config, dict) else None
-    # Values below 1 would stop all local training; they count as 1.
-    return value if isinstance(value, int) and value > 0 else 1
+        config = load_yaml_mapping(workspace / "workspace.yaml")
+        validate_workspace_config(config)
+    except (OSError, YAMLError, ValueError) as exc:
+        _log(f"local launches wait: workspace.yaml is not valid ({exc})")
+        return None
+    return (config.get("runner") or {}).get("local_slots", 1)
 
 
 def _request_executor(request: Path | None) -> str | None:
@@ -567,8 +569,10 @@ def _active_local_runs(workspace: Path) -> int:
 
 
 def local_slots_full(workspace: Path) -> bool:
-    """Whether every local training slot is taken, so a new local request waits."""
-    return _active_local_runs(workspace) >= _local_slots(workspace)
+    """Whether every local training slot is taken, so a new local request waits; an invalid
+    workspace.yaml holds every local request until it is fixed."""
+    slots = _local_slots(workspace)
+    return slots is None or _active_local_runs(workspace) >= slots
 
 
 def threading_main() -> bool:

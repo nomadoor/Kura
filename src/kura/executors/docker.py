@@ -473,7 +473,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "output_baseline": output_baseline,
         **({"dataset_view": dataset_view} if dataset_view is not None else {}),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": True,
-        "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
+        "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"},
         "platform": platform.platform(), "host": platform.node(), **kura_provenance(), "preflight": preflight,
     }
     with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):

@@ -18,8 +18,11 @@ class MaxLeaseRequiredTests(unittest.TestCase):
         self.assertEqual(max_lease_seconds(None), DEFAULT_MAX_LEASE_SEC)
         self.assertEqual(max_lease_seconds("3h"), 3 * 3600)
         self.assertEqual(max_lease_seconds(600), 600)
-        for value in (0, "0", "0s", "0h", -5, ""):
+        for value in (0, "0", "0s", "0h"):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "--max-lease must be a positive duration"):
+                max_lease_seconds(value)
+        for value in (-5, "", True, "3H", " 3h", "3 h", 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "must be whole seconds or a whole number with an s, m, h, or d suffix"):
                 max_lease_seconds(value)
 
     def test_training_refuses_a_zero_lease_before_staging_or_creating_a_pod(self) -> None:

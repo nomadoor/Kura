@@ -452,13 +452,14 @@ def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, ste
         config["dataset_options"] = json.loads(json.dumps(smoke.dataset_options))
     return {
         "intent": intent or f"Real one-step {smoke.backend} smoke of {smoke.architecture} through the manifest-v2 handoff ({smoke_id}). Not a quality run.",
-        "backend": {"name": smoke.backend, "adapter_version": 1, "config": config},
+        "backend": {"name": smoke.backend, "config": config},
         "model": {"base": smoke.model_base, "revision": None},
         "datasets": [{"id": smoke.dataset}],
         "recipe": {"steps": steps, "seed": 1},
         "compute": {
             "executor": smoke.executor,
-            "gpu": gpu or smoke.gpu,
+            # A Docker run uses the local GPU; only a RunPod run names one.
+            **({"gpu": [gpu or smoke.gpu]} if smoke.executor == "runpod" else {}),
             # Wait for the recorded GPU instead of failing or silently switching it.
             **({"capacity": {"mode": "wait", "timeout": "30m", "poll_interval": "30s"}} if smoke.executor == "runpod" else {}),
         },
@@ -476,7 +477,7 @@ def prepare(workspace: Path, smoke_id: str, *, gpu: str | None = None) -> str:
 
 def _create_run(workspace: Path, experiment: str, slug: str, smoke: Smoke, fields: dict[str, Any]) -> str:
     """Create a run with `kura run new`, set the fields the harness owns, and compile it."""
-    created = _kura(workspace, "run", "new", "--experiment", experiment, "--slug", slug, "--backend", smoke.backend, "--executor", smoke.executor, "--gpu", smoke.gpu)
+    created = _kura(workspace, "run", "new", "--experiment", experiment, "--slug", slug, "--backend", smoke.backend, "--executor", smoke.executor, *(["--gpu", smoke.gpu] if smoke.executor == "runpod" else []))
     match = re.search(r"([0-9]{8}-[0-9]{4}_[a-z0-9-]+_[0-9a-f]{4})", created.stdout + created.stderr)
     if created.returncode or match is None:
         raise SystemExit(f"kura run new failed for {slug}:\n{created.stdout}{created.stderr}")

@@ -11,6 +11,7 @@ from kura.executors.common import _redact_secret_text
 from kura.backends import get_backend
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace_config as _workspace_config
+from kura.run_envelope import run_datasets as _run_datasets
 
 
 def _safe_error(exc: BaseException | str) -> str:
@@ -22,15 +23,17 @@ def _effective_image(name: str) -> dict[str, str]:
 
 
 def requested_gpu_types(compute: Any) -> list[str] | None:
-    """The GPU types a run names in `compute.gpu` (one or a list); None when it names none.
+    """The RunPod GPU types a run names in `compute.gpu`; None when it names none.
 
-    Training launches, render launches, and the plan all read the choice here.
+    Training launches, render launches, and the plan all read the choice here. A training
+    run.yaml lists them (validate_train_run_fields); a run compiled by an older Kura may
+    hold one name as a string, which is read as that one name.
     """
     gpu = compute.get("gpu") if isinstance(compute, dict) else None
-    if isinstance(gpu, str) and gpu and gpu.lower() not in {"true", "false", "gpu", "cpu"}:
-        return [gpu]
     if isinstance(gpu, list) and gpu and all(isinstance(item, str) and item for item in gpu):
         return list(gpu)
+    if isinstance(gpu, str) and gpu not in {"", "true", "false", "gpu", "cpu"}:
+        return [gpu]
     return None
 
 
@@ -69,15 +72,6 @@ def _load_frozen_command(run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec.get("adapter_source"), dict):
         raise ValueError("resolved/backend-command.lock.json has no adapter source identity; recompile the run")
     return spec
-
-
-def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
-    datasets = run.get("datasets")
-    if isinstance(datasets, list):
-        return [item for item in datasets if isinstance(item, dict)]
-    if "dataset" in run:
-        raise ValueError("training run dataset is not supported; use datasets[]")
-    return []
 
 
 def _workspace_display_path(path: Path) -> str:

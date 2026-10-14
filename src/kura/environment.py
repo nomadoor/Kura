@@ -14,16 +14,11 @@ from dataclasses import dataclass
 class UserVariable:
     name: str
     purpose: str
-    aliases: tuple[str, ...] = ()
 
 
 USER_VARIABLES: tuple[UserVariable, ...] = (
     UserVariable("RUNPOD_API_KEY", "Required for RunPod training and renders. Get it from the RunPod console."),
-    UserVariable(
-        "HF_TOKEN",
-        "Only for models that need authenticated Hugging Face access (gated or private).",
-        aliases=("HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"),
-    ),
+    UserVariable("HF_TOKEN", "Only for models that need authenticated Hugging Face access (gated or private)."),
     UserVariable("KURA_NTFY_TOPIC", "Optional: ntfy topic for completion and failure notifications; pick a long, unguessable name."),
     UserVariable("KURA_NTFY_SERVER", "Optional: your own ntfy server URL; ntfy.sh is used when empty."),
     UserVariable("KURA_NTFY_TOKEN", "Optional: access token for a protected ntfy topic."),

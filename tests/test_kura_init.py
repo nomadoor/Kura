@@ -121,8 +121,7 @@ class EnvironmentDeclarationTests(unittest.TestCase):
                         for group in looped.findall(nearby):
                             read.update(name.findall(group))
         declared = {variable.name for variable in USER_VARIABLES}
-        aliases = {alias for variable in USER_VARIABLES for alias in variable.aliases}
-        self.assertEqual(read - declared - aliases - INTERNAL_VARIABLES, set())
+        self.assertEqual(read - declared - INTERNAL_VARIABLES, set())
 
 
 if __name__ == "__main__":

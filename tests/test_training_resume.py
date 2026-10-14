@@ -2322,7 +2322,7 @@ class ResumeRunTests(unittest.TestCase):
             "model": {"base": "example/model", "revision": "fixed"},
             "datasets": [{"id": "tiny", "digest": "sha256:data", "role": None}],
             "recipe": {"steps": 2000, "seed": 1},
-            "compute": {"executor": "runpod", "gpu": "NVIDIA A40", "capacity": {"mode": "immediate"}},
+            "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"], "capacity": {"mode": "immediate"}},
             "sampling": {"prompts": [], "cadence_steps": None},
             "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
         }
@@ -2414,6 +2414,22 @@ class ResumeRunTests(unittest.TestCase):
 
             validate_train_run_fields(derived)
             self.assertNotIn("created_by", derived)
+            self.assertNotIn("adapter_version", derived["backend"])
+            self.assertEqual(derived["compute"]["gpu"], ["NVIDIA A40"])
+            # The fingerprint recorded of the old frozen run still matches the copy without its retired keys.
+            from kura.training_artifacts import _recorded_recipe_matches
+
+            self.assertTrue(_recorded_recipe_matches(root, derived, derived["continuation"]["source"]["recipe_sha256"]))
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    code = cmd_run_resume(argparse.Namespace(source_run="source", additional_steps=1000, to_step=None, artifact=None, slug="local", executor="docker", gpu=None))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            local = yaml.safe_load((root / "runs" / stdout.getvalue().strip() / "run.yaml").read_text(encoding="utf-8"))
+            self.assertNotIn("gpu", local["compute"])
+            validate_train_run_fields(local)
 
     def test_runpod_stage_contains_only_selected_resume_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

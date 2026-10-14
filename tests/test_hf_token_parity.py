@@ -1,4 +1,4 @@
-"""Every place that sends the Hugging Face token reads it the same way, whichever declared name holds it."""
+"""Every place that sends or records the Hugging Face token reads it under its one name, HF_TOKEN."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kura.environment import USER_VARIABLES
 from kura.executors.docker import docker_command
+from kura.secrets import declared_secret
 from kura.run_commands.plan import _hf_file_size_probe
 from kura.run_commands.runpod_ssh import _runpod_secret_env_payload
 
-HF_NAMES = ("HF_TOKEN", *next(variable.aliases for variable in USER_VARIABLES if variable.name == "HF_TOKEN"))
+HF_NAMES = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN")
 
 
 def _environment_with(name: str) -> dict[str, str]:
@@ -22,8 +22,14 @@ def _environment_with(name: str) -> dict[str, str]:
 
 
 class HfTokenParityTests(unittest.TestCase):
-    def test_docker_runpod_and_plan_all_see_the_token_under_any_declared_name(self) -> None:
-        for name in HF_NAMES:
+    def test_another_name_for_the_token_is_not_read(self) -> None:
+        for name in HF_NAMES[1:]:
+            with self.subTest(name=name), patch.dict(os.environ, _environment_with(name), clear=True):
+                self.assertIsNone(declared_secret("HF_TOKEN"))
+                self.assertIsNone(_runpod_secret_env_payload())
+
+    def test_docker_runpod_and_plan_all_see_the_token(self) -> None:
+        for name in HF_NAMES[:1]:
             with self.subTest(name=name), patch.dict(os.environ, _environment_with(name), clear=True), tempfile.TemporaryDirectory() as directory:
                 workspace = Path(directory)
                 _, docker_env, _ = docker_command(workspace, workspace / "runs" / "r", {"cwd": "/opt", "argv": ["x"], "env": {}}, "image", [], "r1")

@@ -179,7 +179,7 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(run["backend"]["name"], "musubi-tuner")
             self.assertEqual(run["schema_version"], 2)
             self.assertEqual(run["compute"]["executor"], "runpod")
-            self.assertEqual(run["compute"]["gpu"], "NVIDIA RTX A5000")
+            self.assertEqual(run["compute"]["gpu"], ["NVIDIA RTX A5000"])
             # No capacity policy is written: a RunPod run waits for a GPU by default.
             self.assertNotIn("capacity", run["compute"])
             status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
@@ -385,7 +385,7 @@ class InitCommandTests(unittest.TestCase):
             self.assertIn("path must stay inside the dataset directory", stderr.getvalue())
 
     @posix_only(DATASET_IO)
-    def test_provider_only_manifest_v2_runpod_compiles_and_plans_the_selected_transfer(self) -> None:
+    def test_runpod_manifest_v2_compiles_and_plans_the_selected_transfer(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -412,7 +412,7 @@ class InitCommandTests(unittest.TestCase):
                 run["backend"]["config"]["model_arch"] = "sdxl"
                 run["datasets"] = [{"id": "tiny"}]
                 run["recipe"] = {"steps": 1, "seed": 1}
-                run["compute"] = {"provider": "runpod", "gpu": "NVIDIA A40"}
+                run["compute"] = {"executor": "runpod", "gpu": ["NVIDIA A40"]}
                 run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
                 (dataset / "unselected.bin").write_bytes(b"x" * 4096)
                 stderr = io.StringIO()
@@ -1638,7 +1638,7 @@ class RunPlanTests(unittest.TestCase):
                         "id": "plan-example",
                         "type": "train",
                                                 "model": {"base": "black-forest-labs/FLUX.2-klein-base-9B", "revision": "main"},
-                        "compute": {"executor": "runpod", "gpu": "NVIDIA RTX A5000"},
+                        "compute": {"executor": "runpod", "gpu": ["NVIDIA RTX A5000"]},
                         "datasets": [{"id": "tiny", "role": "target", "digest": "sha256:abc"}],
                         "recipe": {"steps": 1500, "seed": 42},
                         "sampling": {"cadence_steps": 100},
@@ -1968,9 +1968,11 @@ class RunPlanTests(unittest.TestCase):
         self.assertIsNone(_as_positive_int(True))
         self.assertIsNone(_as_positive_int(False))
         self.assertEqual(_as_positive_int("2"), 2)
-        with self.assertRaisesRegex(ValueError, "integer GiB"):
-            _configured_gib(True, default=50)
-        with self.assertRaisesRegex(ValueError, "integer GiB"):
+        for value in (True, "25", 0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "a GiB setting must be a positive number"):
+                _configured_gib(value, default=50)
+        self.assertEqual(_configured_gib(2.5, default=50), 2.5)
+        with self.assertRaisesRegex(ValueError, "a GiB setting must be a positive number"):
             _configured_gib(False, default=50)
 
     def test_musubi_download_estimate_handles_malformed_overrides(self) -> None:
@@ -2141,9 +2143,12 @@ class NotificationTests(unittest.TestCase):
         with patch.dict(os.environ, {"KURA_NOTIFY": "none", "KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.notifications.shutil.which", return_value="/usr/bin/notify-send"):
             self.assertEqual(_notification_channels(None), [])
 
-    def test_notification_channels_list_none_disables_auto_detection(self) -> None:
-        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.notifications.shutil.which", return_value="/usr/bin/notify-send"):
-            self.assertEqual(_notification_channels(["desktop", "none", "ntfy"]), [])
+    def test_notification_channels_take_one_spelling_each(self) -> None:
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True):
+            self.assertEqual(_notification_channels("desktop,ntfy"), ["desktop", "ntfy"])
+            for value in (["desktop", "none", "ntfy"], "NONE", "off", "false", "0", "Desktop", "desktop, ntfy", "slack"):
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, "none or a comma-separated list of desktop and ntfy"):
+                    _notification_channels(value)
 
     def test_ntfy_notification_posts_to_topic(self) -> None:
         class Response:
@@ -4110,9 +4115,9 @@ class AiToolkitBackendTests(unittest.TestCase):
             "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
         })
 
-    def test_provider_only_runpod_command_uses_runpod_working_directory(self) -> None:
+    def test_runpod_command_uses_runpod_working_directory(self) -> None:
         run = self._run()
-        run["compute"] = {"provider": "runpod"}
+        run["compute"] = {"executor": "runpod"}
 
         command = command_ai_toolkit(run)
 
@@ -4526,15 +4531,6 @@ class MusubiBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     command_musubi_tuner(run)
 
-    def test_command_musubi_rejects_a40_flux2_9b_large_micro_batch(self) -> None:
-        run = self._run()
-        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
-        run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["backend"]["config"].update({"model_version": "klein-base-9b", "batch_size": 4, "resolution": [512, 512]})
-
-        with self.assertRaisesRegex(ValueError, "batch_size=4 has been observed to OOM"):
-            command_musubi_tuner(run)
-
     def test_command_musubi_allows_a40_flux2_9b_accumulated_effective_batch(self) -> None:
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
@@ -4549,15 +4545,6 @@ class MusubiBackendTests(unittest.TestCase):
 
         self.assertIn("--gradient_checkpointing", script)
         self.assertIn("--gradient_accumulation_steps 4", script)
-
-    def test_command_musubi_rejects_a40_flux2_9b_1024_without_checkpointing(self) -> None:
-        run = self._run()
-        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
-        run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["backend"]["config"].update({"model_version": "klein-base-9b", "network_dim": 32, "batch_size": 1, "resolution": [1024, 1024]})
-
-        with self.assertRaisesRegex(ValueError, "observed to OOM even with batch_size=1"):
-            command_musubi_tuner(run)
 
     def test_command_musubi_rejects_secret_explicit_env(self) -> None:
         run = self._run()
@@ -5474,18 +5461,6 @@ class MusubiBackendTests(unittest.TestCase):
         }}
         self.assertEqual(musubi_model_download_specs(run)[0], [])
         self.assertEqual(_musubi_flux2_model_version(run), "klein-9b")
-
-    def test_musubi_flux2_a40_rule_reads_the_variant_wherever_it_was_named(self) -> None:
-        from kura.backends.musubi_command import _validate_musubi_resource_flags
-
-        for config, base in (({"model_version": "klein-9b"}, None), ({"model_bundle": "bfl-flux2-klein-9b"}, None), ({}, "black-forest-labs/FLUX.2-klein-9B")):
-            run = self._run()
-            run["model"] = {"base": base} if base else {}
-            run["compute"] = {"executor": "runpod", "gpu": "NVIDIA A40"}
-            override = {"architecture": "flux2", "batch_size": 2, **config}
-            run["backend"] = {"name": "musubi-tuner", "config": override}
-            with self.subTest(config=config, base=base), self.assertRaisesRegex(ValueError, "9B on NVIDIA A40 treats batch_size"):
-                _validate_musubi_resource_flags(run, override, "flux2")
 
     @posix_only(DATASET_IO)
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
@@ -7083,7 +7058,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 {
                     "id": "example",
                     "type": "train",
-                    "compute": {"executor": "runpod", "gpu": "NVIDIA A40"},
+                    "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
                     "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
                 }
             ),
@@ -7095,7 +7070,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         )
         (root / "workspace.yaml").write_text(
             yaml.safe_dump(
-                {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA A40'], 'cloud_type': 'COMMUNITY'}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
+                {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA A40'], 'cloud_types': ['COMMUNITY']}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
             ),
             encoding="utf-8",
         )
@@ -8149,7 +8124,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     {
                         "id": "example",
                         "type": "train",
-                                                "compute": {"executor": "runpod", "gpu": "NVIDIA A40"},
+                                                "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
                         "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
                     }
                 ),
@@ -8158,7 +8133,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (root / "runs" / "example" / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/app/ai-toolkit", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA RTX A5000', 'NVIDIA A40'], 'cloud_type': 'COMMUNITY'}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
+                    {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA RTX A5000', 'NVIDIA A40'], 'cloud_types': ['COMMUNITY']}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
                 ),
                 encoding="utf-8",
             )

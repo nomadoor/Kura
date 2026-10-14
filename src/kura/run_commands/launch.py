@@ -96,6 +96,16 @@ def _run_remote_locked(
     except ValueError as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
+    # Read before any Pod exists: an error after the Pod starts would leave it billing. A
+    # reattach follows a job that is already running, so it goes on without notifications.
+    try:
+        remote_notify = "ntfy" in _notification_channels(notify_channels)
+    except ValueError as exc:
+        if not reattach:
+            print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        print(f"warning: notifications are off for this reattach: {_safe_error(exc)}", file=sys.stderr)
+        remote_notify = False
     launched = False
     safe_to_stop = False
     exit_code = 1
@@ -138,7 +148,7 @@ def _run_remote_locked(
                 run_dir,
                 ssh_timeout_sec=upload_timeout,
                 job_timeout_sec=job_timeout,
-                remote_notify="ntfy" in _notification_channels(notify_channels),
+                remote_notify=remote_notify,
                 max_lease_sec=max_lease_sec,
                 unattended_wait_sec=unattended_wait_sec,
                 notify_channels=notify_channels,

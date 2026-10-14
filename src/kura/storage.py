@@ -86,12 +86,7 @@ def _config_drive(config: dict[str, Any] | None, key: str) -> str | None:
     if not isinstance(storage, dict):
         return None
     value = storage.get(key)
-    if not isinstance(value, str):
-        return None
-    drive = value.strip().upper()
-    if len(drive) == 1 and drive.isalpha():
-        drive = f"{drive}:"
-    return drive
+    return value if isinstance(value, str) else None
 
 
 def _normalize_drive(value: str | None) -> str | None:

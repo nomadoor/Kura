@@ -26,7 +26,7 @@ from kura.backends.ai_toolkit import (
     compile_ai_toolkit,
     project_ai_toolkit_dataset,
 )
-from kura.backends.musubi_command import _musubi_max_resolution, _musubi_video_preflight_env as _musubi_video_preflight_env_impl
+from kura.backends.musubi_command import _musubi_video_preflight_env as _musubi_video_preflight_env_impl
 from kura.backends.musubi_datasets import (
     MUSUBI_PROJECTION_PROFILES,
     _musubi_h3_effective_task,
@@ -4461,35 +4461,6 @@ class DatasetHandoffTests(unittest.TestCase):
                 }}
                 with self.assertRaisesRegex(ValueError, message):
                     project_musubi_dataset(run, {"datasets": []})
-
-    def test_musubi_resource_resolution_includes_typed_control_resolution(self) -> None:
-        run = {
-            "id": "control-resolution",
-            "datasets": [{"id": "tiny"}],
-            "backend": {"name": "musubi-tuner", "config": {
-                "architecture": "flux_kontext",
-                "resolution": [512, 512],
-                "dataset_options": {"tiny": {"control_resolution": [768, 1024]}},
-            }},
-        }
-
-        self.assertEqual(_musubi_max_resolution(run, run["backend"]["config"]), 1024)
-
-    def test_musubi_resource_resolution_includes_every_block_resolution(self) -> None:
-        run = {
-            "id": "block-resolution",
-            "datasets": [{"id": "tiny"}],
-            "backend": {"name": "musubi-tuner", "config": {
-                "architecture": "flux2", "resolution": [512, 512],
-                "dataset_options": {"tiny": {"blocks": [
-                    {"group": "small", "resolution": [512, 512]},
-                    {"group": "large", "resolution": [768, 1024],
-                     "control_resolution": [1280, 720]},
-                ]}},
-            }},
-        }
-
-        self.assertEqual(_musubi_max_resolution(run, run["backend"]["config"]), 1280)
 
     def test_musubi_projects_minimax_h3_one_frame_fl2va_control_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

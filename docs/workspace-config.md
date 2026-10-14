@@ -26,7 +26,7 @@ change, applies it only when confirmed, and keeps the previous file as
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `storage.host_drive` | Optional override for the Windows drive that backs the WSL2 workspace VHDX, for example `F:`. Kura tries to auto-detect this from the WSL registry first. | `""` |
+| `storage.host_drive` | Optional override for the Windows drive that backs the WSL2 workspace VHDX, written as a drive letter and colon such as `F:`. Kura tries to auto-detect this from the WSL registry first. | unset |
 
 On native Linux and macOS, Kura trusts normal filesystem free space. On WSL2,
 large local Docker launches need the Windows backing drive as well as the Linux
@@ -74,7 +74,7 @@ digest moves only after compatibility checks.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `runner.local_slots` | How many local Docker training runs the job runner runs at once; later launches wait in the order they were requested. Values below 1 count as 1 | `1` |
+| `runner.local_slots` | How many local Docker training runs the job runner runs at once; later launches wait in the order they were requested. At least 1 | `1` |
 
 Model downloads for local Docker runs go to the Hugging Face cache, by default
 `./cache/huggingface`, which stays outside Git and is reused across runs. To keep
@@ -207,7 +207,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.download_min_free_gb` | Minimum local free space required before RunPod download | `50` |
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
-| `runpod.cloud_type` / `runpod.cloud_types` | RunPod cloud preference; `ANY` tries community then secure | `ANY` |
+| `runpod.cloud_types` | RunPod clouds to try, a list of `COMMUNITY` and `SECURE` in order; omit it for both | `[COMMUNITY, SECURE]` |
 | `runpod.gpu_type_priority` | GPU candidate ordering: `custom` uses the listed order; `availability` is accepted only for one GPU because the GraphQL control plane cannot preserve availability ordering across fallback attempts | `custom` |
 | `runpod.data_center_ids` | Ordered RunPod data-center candidates; Kura tries each configured data center in order | unset |
 | `runpod.data_center_priority` | Data-center ordering: `custom` uses the listed order; `availability` is accepted only for one data center because the GraphQL control plane cannot preserve availability ordering across fallback attempts | unset |
@@ -225,7 +225,7 @@ RunPod capacity behavior belongs to the run intent, not `workspace.yaml`:
 ```yaml
 compute:
   executor: runpod
-  gpu: NVIDIA RTX A5000
+  gpu: [NVIDIA RTX A5000]   # a list of RunPod GPU type IDs; only on RunPod runs
   capacity:          # optional; this is the default
     mode: wait         # or immediate: fail at once when the GPU is taken
     timeout: 24h       # for wait

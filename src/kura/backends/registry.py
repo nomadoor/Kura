@@ -158,7 +158,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
 
 MUSUBI_SURFACE = BackendSurface(
     fields=frozenset({
-        "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "architecture", "batch_size",
+        "architecture", "batch_size",
         "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "dataset_options", "discrete_flow_shift",
         "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "flatten_groups", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
         "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing", "gradient_checkpointing_cpu_offload",
@@ -178,7 +178,7 @@ MUSUBI_SURFACE = BackendSurface(
     }),
     escape_hatches=frozenset({"command", "extra_args"}),
     boolean_fields=frozenset({
-        "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "block_swap_h2d_only", "convrot_int8", "f1",
+        "block_swap_h2d_only", "convrot_int8", "f1",
         "flatten_groups", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te", "fp8_text_encoder", "fp8_vl",
         "gradient_checkpointing", "gradient_checkpointing_cpu_offload", "include_turbo_dit", "one_frame",
         "one_frame_no_2x", "one_frame_no_4x", "precache", "quantized_qwen", "remove_first_image_from_target",
@@ -196,8 +196,6 @@ MUSUBI_SURFACE = BackendSurface(
     ),
     unavailable=(("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),),
     conditions=(
-        _when("allow_a40_large_micro_batch", architecture=("flux2",)),
-        _when("allow_a40_uncheckpointed_9b", architecture=("flux2",)),
         _when("convrot_int8_bwd", architecture=("krea2",), convrot_int8=(True,)),
         _when("convrot_int8", architecture=("krea2",)),
         _when("discrete_flow_shift", architecture=("wan",)),

@@ -700,17 +700,23 @@ def resume_artifact_directory(workspace: Path, run: dict[str, Any]) -> Path | No
 def _recorded_recipe_matches(workspace: Path, run: dict[str, Any], recorded: Any) -> bool:
     """Whether a recipe fingerprint recorded for the parent run still describes this run's recipe.
 
-    A fingerprint recorded before Kura read YAML 1.2 hashed a value such as `1e-6`
-    as the string PyYAML's YAML 1.1 reading gave; it matches when the parent's
-    frozen manifest read that way gives it and reads today as this run's recipe.
+    The fingerprint was taken of the parent's frozen manifest as Kura read it then:
+    with keys an older Kura wrote and Resume no longer copies, and, before Kura
+    read YAML 1.2, with a value such as `1e-6` as the string YAML 1.1 gave. It
+    matches when the parent's manifest, read either way, gives it, and that
+    manifest without those keys is this run's recipe.
     """
+    from kura.run_envelope import without_retired_train_run_keys
+
     current = recipe_fingerprint(run)
     if recorded == current:
         return True
     parent = workspace / "runs" / str(run.get("parent_run")) / "resolved" / "manifest.lock.yaml"
     if not parent.is_file():
         return False
-    return recorded == recipe_fingerprint(load_yaml_1_1(parent)) and recipe_fingerprint(load_yaml(parent)) == current
+    frozen = load_yaml(parent)
+    taken_then = {recipe_fingerprint(frozen), recipe_fingerprint(load_yaml_1_1(parent))}
+    return recorded in taken_then and recipe_fingerprint(without_retired_train_run_keys(frozen)) == current
 
 
 def compile_resume_lock(
