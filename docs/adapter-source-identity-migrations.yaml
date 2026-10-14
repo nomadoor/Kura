@@ -8,6 +8,160 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: one-form-envelope-sd-scripts-2026-10-14
+    backend: sd-scripts
+    reason: 'Run, compute, workspace, and environment settings are read in one form
+      each: compute.gpu is a list (an older run''s string is read as one name), runpod.cloud_types
+      is the one cloud setting (omitted means both, as cloud_type ANY did), the Hugging
+      Face token is read only from HF_TOKEN, durations and GiB settings are checked
+      without coercion, datasets[] has one reader, and the Musubi A40 guard is removed.
+      The settings of a recorded smoke still build the same launch: a one-string gpu
+      reads as that one name, cloud_type ANY and an omitted cloud_types both try COMMUNITY
+      then SECURE, and no smoke set an allow_a40 override.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: e2ce5be1f957ea918775ec0230bdf6ee9a5424853d7e46c34e68e930c305c91b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: a5551b769a28b1551c64e8306b1ad7077d0077bef087093e276e444d34901bac
+  - id: one-form-envelope-musubi-tuner-2026-10-14
+    backend: musubi-tuner
+    reason: 'Run, compute, workspace, and environment settings are read in one form
+      each: compute.gpu is a list (an older run''s string is read as one name), runpod.cloud_types
+      is the one cloud setting (omitted means both, as cloud_type ANY did), the Hugging
+      Face token is read only from HF_TOKEN, durations and GiB settings are checked
+      without coercion, datasets[] has one reader, and the Musubi A40 guard is removed.
+      The settings of a recorded smoke still build the same launch: a one-string gpu
+      reads as that one name, cloud_type ANY and an omitted cloud_types both try COMMUNITY
+      then SECURE, and no smoke set an allow_a40 override.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 75a98200eefd221c88731d07b5ce90930cda2fdfe4d67345f72ac9f336531879
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 0b779b915c33b21afc5e31c65869b7b7635452ddb95cd7cca468dc28d77ca7b1
+  - id: one-form-envelope-ai-toolkit-2026-10-14
+    backend: ai-toolkit
+    reason: 'Run, compute, workspace, and environment settings are read in one form
+      each: compute.gpu is a list (an older run''s string is read as one name), runpod.cloud_types
+      is the one cloud setting (omitted means both, as cloud_type ANY did), the Hugging
+      Face token is read only from HF_TOKEN, durations and GiB settings are checked
+      without coercion, datasets[] has one reader, and the Musubi A40 guard is removed.
+      The settings of a recorded smoke still build the same launch: a one-string gpu
+      reads as that one name, cloud_type ANY and an omitted cloud_types both try COMMUNITY
+      then SECURE, and no smoke set an allow_a40 override.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 6436da7b2ae7627b394e68af84fa09171d4529d8160548fdefbe8f96330d01dd
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 3b07d9fece9c9f7fd6b133f10cbf4a474b726b24601190aa7dca81d8d5c5fd46
+  - id: one-form-envelope-runpod-executor-2026-10-14
+    executor: runpod
+    reason: 'Run, compute, workspace, and environment settings are read in one form
+      each: compute.gpu is a list (an older run''s string is read as one name), runpod.cloud_types
+      is the one cloud setting (omitted means both, as cloud_type ANY did), the Hugging
+      Face token is read only from HF_TOKEN, durations and GiB settings are checked
+      without coercion, datasets[] has one reader, and the Musubi A40 guard is removed.
+      The settings of a recorded smoke still build the same launch: a one-string gpu
+      reads as that one name, cloud_type ANY and an omitted cloud_types both try COMMUNITY
+      then SECURE, and no smoke set an allow_a40 override.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 66e15bcbc01e468e847c06f98d43a2c19cb65a14d18d7e0a893c11bab9c5eb58
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 00b1e1d0d3baf2055961b8429cca7c75997b7498634ca37dca46ba80d4908cab
   - id: one-spelling-selectors-sd-scripts-2026-10-14
     backend: sd-scripts
     reason: Selector values are accepted in one spelling each and checked first (aliases,
