@@ -321,6 +321,12 @@ class WorkspaceSchemaTests(unittest.TestCase):
             (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 1}\n", encoding="utf-8")
             self.assertFalse(local_slots_full(root))
 
+    def test_a_stage_subfolder_is_a_plain_relative_name(self) -> None:
+        validate_workspace_config({"schema_version": 2, "comfyui": {"lora_stage_subdir": "Kura_tmp/runs"}})
+        for value in ("Kura_tmp/", "/Kura_tmp", ".", "../x", "a/../b"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "comfyui.lora_stage_subdir must be a relative folder name"):
+                validate_workspace_config({"schema_version": 2, "comfyui": {"lora_stage_subdir": value}})
+
     def test_kura_init_writes_a_workspace_with_no_empty_setting(self) -> None:
         from kura.cli import cmd_init
 

@@ -287,6 +287,11 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     storage = config.get("storage") if isinstance(config.get("storage"), dict) else {}
     if "host_drive" in storage and not re.fullmatch(r"[A-Z]:", storage["host_drive"]):
         raise ValueError(f"{source} storage.host_drive must be a drive letter and colon such as D:, not {storage['host_drive']!r}")
+    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
+    for key in ("lora_stage_subdir", "model_patch_stage_subdir", "input_stage_subdir"):
+        value = comfyui.get(key)
+        if value is not None and (value != value.strip("/\\") or Path(value).is_absolute() or not Path(value).parts or set(Path(value).parts) & {".", ".."}):
+            raise ValueError(f"{source} comfyui.{key} must be a relative folder name such as Kura_tmp (no leading or trailing slash, . or ..), not {value!r}")
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     for index, mount in enumerate(docker.get("mounts") or []):
         if overlaps_hf_cache(mount.get("target", "")):

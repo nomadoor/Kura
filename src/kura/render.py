@@ -646,8 +646,6 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     if lora_dir is None:
         raise ValueError("a local LoRA render stages each checkpoint into ComfyUI's LoRA folder; set comfyui.lora_dir in workspace.yaml")
     stage_subdir = comfyui.get("lora_stage_subdir", "Kura_tmp")
-    if Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
-        raise ValueError("comfyui.lora_stage_subdir must be a safe relative directory name")
     cleanup = comfyui.get("lora_stage_cleanup", "remove_after_render")
     stage_dir = (lora_dir / stage_subdir).resolve()
     mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", endpoint)
@@ -676,8 +674,6 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     if directory is None:
         raise ValueError("a local model_patch render stages each checkpoint into ComfyUI's model patch folder; set comfyui.model_patches_dir in workspace.yaml")
     stage_subdir = comfyui.get("model_patch_stage_subdir", "Kura_tmp")
-    if Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
-        raise ValueError("comfyui.model_patch_stage_subdir must be a safe relative directory name")
     cleanup = comfyui.get("model_patch_stage_cleanup", "remove_after_render")
     stage_dir = (directory / stage_subdir).resolve()
     mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", endpoint)
@@ -743,9 +739,7 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     directory = _workspace_path(workspace, comfyui.get("input_dir"))
     if directory is None:
         raise ValueError("workspace.yaml comfyui.input_dir is required to render a promptset with image bindings")
-    stage_subdir = str(comfyui.get("input_stage_subdir") or "Kura_tmp").strip("/\\")
-    if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
-        raise ValueError("comfyui.input_stage_subdir must be a safe relative directory name")
+    stage_subdir = comfyui.get("input_stage_subdir", "Kura_tmp")
     # Copy, not symlink: ComfyUI resolves LoadImage paths and rejects one that
     # leaves its input directory, so a symlinked input fails validation at queue
     # time even though a symlinked model loads fine.
@@ -830,11 +824,11 @@ def remove_leftover_stages(workspace: Path, run_dir: Path) -> list[str]:
     comfyui = frozen.get("comfyui") if isinstance(frozen.get("comfyui"), dict) else {}
     removed = []
     for dir_key, subdir_key, cleanup_key in STAGE_KINDS:
-        if str(comfyui.get(cleanup_key) or "remove_after_render").strip().lower() == "keep":
+        if comfyui.get(cleanup_key, "remove_after_render") == "keep":
             continue
         base = _workspace_path(workspace, comfyui.get(dir_key))
-        subdir = str(comfyui.get(subdir_key) or "Kura_tmp").strip("/\\")
-        if base is None or not subdir or Path(subdir).is_absolute() or ".." in Path(subdir).parts:
+        subdir = comfyui.get(subdir_key, "Kura_tmp")
+        if base is None:
             continue
         # Run ids end in a random hex suffix (`<time>_<slug>_<hex>`), so `<id>-` never starts another run's id.
         for path in sorted((base / subdir).glob(f"{run_dir.name}-*")):
