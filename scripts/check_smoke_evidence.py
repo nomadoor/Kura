@@ -8,9 +8,8 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
-import yaml
-
 from kura.provenance import adapter_source_identity, executor_source_identity
+from kura.yamlio import load_yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,8 +100,8 @@ def _executor_identity_reaches_current(record_id: str, executor: str, value: str
 
 
 def main() -> int:
-    payload = yaml.safe_load(PATH.read_text(encoding="utf-8"))
-    migrations_payload = yaml.safe_load(MIGRATIONS_PATH.read_text(encoding="utf-8"))
+    payload = load_yaml(PATH)
+    migrations_payload = load_yaml(MIGRATIONS_PATH)
     migrations = migrations_payload.get("records", []) if isinstance(migrations_payload, dict) else []
     failures: list[str] = []
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
@@ -182,7 +181,7 @@ def main() -> int:
         if isinstance(artifact, str) and not artifact_path.is_file():
             failures.append(f"{label}.artifact does not exist: {artifact}")
         elif artifact_path is not None:
-            evidence = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
+            evidence = load_yaml(artifact_path)
             render = evidence.get("render") if isinstance(evidence, dict) else None
             if isinstance(render, dict):
                 workflow_path_value = render.get("workflow_path")

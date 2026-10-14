@@ -119,8 +119,8 @@ the pinned source and records it. Kura does not author these values.
 
 ## Scope
 
-This decision applies to AI-Toolkit first, the backend where the gap was
-observed. Musubi and sd-scripts adapters already emit per-architecture defaults
-by hand. Those hand-written values are existing debt under this decision. They
-move to extracted baselines when a pin upgrade or a failure touches them; this
-ADR does not require an immediate rewrite.
+This decision applies to AI-Toolkit, the backend where the gap was observed.
+Musubi and sd-scripts adapters emitted per-architecture defaults by hand.
+`authored-input-one-form.md` (2026-10-14) removes those hand-written values
+instead of moving them to extracted baselines: a quality-relevant value
+without an upstream baseline is required on those backends.

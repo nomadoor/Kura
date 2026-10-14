@@ -12,9 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
-
 from kura.secrets import is_secret_name, secret_values
+from kura.yamlio import YAMLError, load_yaml
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import record, without_record_fields
 from kura.run_envelope import final_step, resume_intent
@@ -783,8 +782,8 @@ def _configured_final_step(run_dir: Path) -> tuple[int | None, int | None]:
     """The step a finished run ends at by its frozen recipe (`final_step`) and, for a Resume,
     the source step it started from. An unreadable manifest or invalid continuation gives neither."""
     try:
-        run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+    except (OSError, YAMLError):
         return None, None
     if not isinstance(run, dict):
         return None, None

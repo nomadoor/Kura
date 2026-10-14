@@ -39,7 +39,7 @@ def local_hf_cache(workspace: Path, config: dict[str, Any]) -> Path:
     """Where a local Docker run's Hugging Face cache lives on the host."""
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     value = docker.get("hf_cache")
-    path = Path(value if isinstance(value, str) and value.strip() else DEFAULT_HF_CACHE).expanduser()
+    path = Path(value if isinstance(value, str) else DEFAULT_HF_CACHE).expanduser()
     if not path.is_absolute():
         path = workspace / path
     return path.resolve(strict=False)

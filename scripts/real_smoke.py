@@ -38,12 +38,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from kura.paths import local_hf_cache  # noqa: E402
+from kura.yamlio import dump_yaml, load_yaml
 from kura.provenance import image_reference_identity  # noqa: E402
 from kura.training_artifacts import checkpoint_files, checkpoint_step  # noqa: E402
 
@@ -329,7 +328,7 @@ def _png(width: int = 256, height: int = 256, *, variant: int = 0) -> bytes:
 
 def _write_manifest(root: Path, dataset_id: str, rows: list[dict[str, Any]]) -> None:
     (root / "dataset.yaml").write_text(
-        yaml.safe_dump({"id": dataset_id, "items_schema_version": 2, "description": "Generated real-smoke dataset; never rewritten by the harness."}, sort_keys=False),
+        dump_yaml({"id": dataset_id, "items_schema_version": 2, "description": "Generated real-smoke dataset; never rewritten by the harness."}),
         encoding="utf-8",
     )
     (root / "items.jsonl").write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows), encoding="utf-8")
@@ -483,9 +482,9 @@ def _create_run(workspace: Path, experiment: str, slug: str, smoke: Smoke, field
         raise SystemExit(f"kura run new failed for {slug}:\n{created.stdout}{created.stderr}")
     run_id = match.group(1)
     run_path = workspace / "runs" / run_id / "run.yaml"
-    run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+    run = load_yaml(run_path)
     run.update(fields)
-    run_path.write_text(yaml.safe_dump(run, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    run_path.write_text(dump_yaml(run), encoding="utf-8")
     _compile(workspace, run_id)
     return run_id
 
@@ -538,7 +537,7 @@ def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, 
     run_dir = workspace / "runs" / run_id
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
-    run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+    run = load_yaml(run_dir / "run.yaml")
     smoke = SMOKES[result["smoke"]]
     config = run["backend"]["config"]
     image = realization["image_identity"]["pinning"]["value"]
@@ -819,7 +818,7 @@ def recorded_weight_step(path: Path) -> int | None:
 
 def _env_lock(run_dir: Path) -> dict[str, Any]:
     path = run_dir / "resolved" / "env.lock"
-    return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else {}
+    return (load_yaml(path) or {}) if path.is_file() else {}
 
 
 def _image_digest(reference: Any) -> str | None:
@@ -903,7 +902,7 @@ def disk_problems(peak: dict[str, int], estimate: dict[str, Any]) -> list[str]:
 def _checkpoint_estimate(run_dir: Path) -> dict[str, Any]:
     from kura.run_commands.plan import _estimate_checkpoint_write_bytes
 
-    return _estimate_checkpoint_write_bytes(yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")))
+    return _estimate_checkpoint_write_bytes(load_yaml(run_dir / "resolved" / "manifest.lock.yaml"))
 
 
 def _sample_peak(run_dir: Path, peak: dict[str, int]) -> None:
@@ -965,7 +964,7 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
         raise SystemExit(f"{workspace} is not a Kura workspace; create it with `kura init`")
     if runpod and len(backends) != 1:
         raise SystemExit("the RunPod pass runs one backend; name it with --backend")
-    config = yaml.safe_load((workspace / "workspace.yaml").read_text(encoding="utf-8")) or {}
+    config = load_yaml(workspace / "workspace.yaml") or {}
     hf_cache = local_hf_cache(workspace, config)
     print(f"Conformance plan: workspace {workspace}, executor {'runpod (' + gpu + ')' if runpod else 'local Docker'}, Hugging Face cache {hf_cache}")
     for backend in backends:
@@ -1087,7 +1086,7 @@ def main() -> int:
         return 0
     if args.command == "evidence":
         pairs = [evidence(workspace, run_id, artifact=args.artifact) for run_id in args.run_id]
-        print(yaml.safe_dump({"records": [record for record, _ in pairs], "runs": {record["id"]: summary for record, summary in pairs}}, sort_keys=False, allow_unicode=True))
+        print(dump_yaml({"records": [record for record, _ in pairs], "runs": {record["id"]: summary for record, summary in pairs}}))
         return 0
     results = [verify(workspace, run_id) for run_id in args.run_id]
     print(json.dumps(results, indent=2))

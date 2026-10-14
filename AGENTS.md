@@ -98,6 +98,10 @@ promises it touches; breaking one is a bug.
   the host; renders call a ComfyUI endpoint.
 - Every surface a user or agent authors is closed: a key with no consumer is
   refused where the file is loaded, never accepted and ignored.
+- Authored input is read in one form (`docs/adr/authored-input-one-form.md`):
+  values Kura only forwards pass through untouched, values Kura decides from
+  have one accepted spelling, and no alias or coercion makes an error go away.
+  YAML is read and written only through `kura.yamlio`.
 - Record intent before any external effect (a Pod, a container, a remote job),
   and keep viewers read-only (`docs/adr/run-records-and-external-effects.md`).
 - Secrets come only from the environment and the secrets files; nothing writes

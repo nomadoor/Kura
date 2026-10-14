@@ -12,9 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
-import yaml
-
 from kura.training_artifacts import checkpoint_files, displayed_final_step, expected_checkpoints, trained_steps
+from kura.yamlio import YAMLError, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
@@ -141,7 +140,7 @@ def collect_run_summary(workspace: Path, run_id: str, *, loss_tail: int = 80, st
     run_dir = Path(workspace) / "runs" / run_id
     try:
         return _collect_one_run(workspace, run_dir, run_id, loss_tail=loss_tail, stale_after=stale_after)
-    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
         return RunSummary(
             id=run_id,
             experiment=None,
@@ -274,10 +273,10 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
 def _read_mapping(path: Path) -> dict[str, Any]:
     try:
         if path.suffix in {".yaml", ".yml", ".lock"} or path.name in {"env.lock"}:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            data = load_yaml(path)
         else:
             data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, yaml.YAMLError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, YAMLError, UnicodeDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
 

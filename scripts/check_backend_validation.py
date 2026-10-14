@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-import yaml
+from kura.yamlio import load_yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -468,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         help="fail the merge-readiness check while any support contract awaits migration",
     )
     args = parser.parse_args(argv)
-    smoke_payload = yaml.safe_load(SMOKE_PATH.read_text(encoding="utf-8"))
+    smoke_payload = load_yaml(SMOKE_PATH)
     smoke_records = smoke_payload.get("records", []) if isinstance(smoke_payload, dict) else []
     failures: list[str] = []
     if args.require_no_migration_pending:
@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         failures.append("docs/backend-validation must contain at least one YAML plan")
     for path in paths:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload = load_yaml(path)
         failures.extend(
             validate_backend_validation_plan(
                 payload,

@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import yaml
+from kura.yamlio import YAMLError, load_yaml, load_yaml_text
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +56,7 @@ def _frontmatter(path: Path) -> dict[str, Any]:
     pieces = text.split("---", 2)
     if len(pieces) != 3 or pieces[0].strip():
         raise ValueError(f"{path}: SKILL.md must start with YAML frontmatter")
-    value = yaml.safe_load(pieces[1])
+    value = load_yaml_text(pieces[1])
     if not isinstance(value, dict):
         raise ValueError(f"{path}: frontmatter must be a mapping")
     return value
@@ -82,7 +82,7 @@ def validate_skills(root: Path) -> list[str]:
             continue
         try:
             frontmatter = _frontmatter(skill_path)
-        except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+        except (OSError, UnicodeError, YAMLError, ValueError) as exc:
             errors.append(str(exc))
             continue
         # skill-creator deliberately defines this as a closed frontmatter
@@ -105,8 +105,8 @@ def validate_skills(root: Path) -> list[str]:
             errors.append(f"{skill_dir}: missing agents/openai.yaml")
             continue
         try:
-            metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            metadata = load_yaml(metadata_path)
+        except (OSError, UnicodeError, YAMLError) as exc:
             errors.append(f"{metadata_path}: cannot load metadata: {exc}")
             continue
         interface = metadata.get("interface") if isinstance(metadata, dict) else None

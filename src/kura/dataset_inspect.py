@@ -9,9 +9,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-import yaml
-
 from kura.dataset_jsonl import items_jsonl_rows
+from kura.yamlio import YAMLError, load_yaml
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty, declares_items_v2
 from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_VIDEO_SUFFIXES
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
@@ -154,8 +153,8 @@ def _load_dataset_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+        data = load_yaml(path) or {}
+    except (OSError, YAMLError):
         return {}
     return data if isinstance(data, dict) else {}
 

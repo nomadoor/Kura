@@ -16,9 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, can_start, start_refusal
+from kura.yamlio import YAMLError
 from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
@@ -37,7 +36,7 @@ from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
 from kura.paths import local_docker_mounts, local_hf_cache, to_host_path
 from kura.storage import probe_storages
-from kura.workspace import load_yaml as _load_yaml
+from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer
@@ -675,7 +674,7 @@ def _plan_launch_image(run: dict[str, Any], workspace_config: dict[str, Any], ru
     if run_dir is not None and (run_dir / "resolved" / "env.lock").is_file():
         try:
             env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
-        except (OSError, ValueError, yaml.YAMLError):
+        except (OSError, ValueError, YAMLError):
             env_lock = {}
     return launch_image(workspace_config, get_backend(backend.get("name")).image_name, env_lock)
 
@@ -1657,7 +1656,7 @@ def cmd_run_plan(args: argparse.Namespace) -> int:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
             print(format_run_plan(payload))
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot show run plan: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0
@@ -1841,7 +1840,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         if not dataset_ids:
             raise ValueError("compiled run has no dataset IDs")
         print(_stage_summary(run_dir, stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config())))
-    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
         print(f"cannot stage run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0

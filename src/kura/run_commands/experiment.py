@@ -9,9 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.training_artifacts import checkpoint_files, checkpoint_step, displayed_final_step
+from kura.yamlio import YAMLError, load_yaml
 from kura.executors.common import format_launch_phases, format_seconds, launch_phases
 from kura.run_envelope import run_executor
 
@@ -38,8 +37,8 @@ _FACT_ORDER = (
 
 def _load_mapping(path: Path) -> dict[str, Any] | None:
     try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
+        value = load_yaml(path)
+    except (OSError, UnicodeError, YAMLError):
         return None
     return value if isinstance(value, dict) else None
 

@@ -16,9 +16,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import yaml
-
 from kura import __version__
+from kura.yamlio import YAMLError, load_yaml
 from kura.images import runpod_min_cuda_version
 from kura.install_source import kura_provenance
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff, handoff_was_frozen
@@ -845,8 +844,8 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
     try:
-        run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+    except (OSError, YAMLError) as exc:
         raise ValueError("cannot stage invalid resolved manifest") from exc
     if not isinstance(run, dict):
         raise ValueError("cannot stage invalid resolved manifest")
@@ -1159,7 +1158,7 @@ def launch_runpod(
         if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
             if stage.get("transfer") != "selected-files":
                 raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
-            run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
             pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
             manifest_sha256 = pin_transfer_manifest(
                 run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,

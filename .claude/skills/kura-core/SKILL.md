@@ -35,6 +35,13 @@ new key adds it to that surface's declaration in the same change;
 into that registry too. A silently dropped setting makes `run.yaml` or
 `workspace.yaml` lie about what ran.
 
+Values are read in one form (`docs/adr/authored-input-one-form.md`). A value
+Kura only forwards reaches the trainer exactly as written; a value Kura decides
+from has one accepted spelling and is refused otherwise, naming that spelling.
+Never add an alias, case folding, a string-to-number or string-to-boolean
+coercion, or a `value or default` fallback; an empty string is not "unset".
+Read and write YAML only through `kura.yamlio`.
+
 ## Paths
 
 The rules are in `docs/adr/path-namespace-policy.md`. In short:

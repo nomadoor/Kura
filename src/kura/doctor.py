@@ -16,9 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.comfyui_models import endpoint_fingerprint, visible_model_refs
+from kura.yamlio import YAMLError, load_yaml
 from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
@@ -284,7 +283,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
         min_free_gib = local_min_free_gib(docker_config)
         build_cache_limit_gib = docker_build_cache_limit_gib(docker_config)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"disk: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
 
@@ -416,7 +415,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         workspace_root = _require_workspace()
         config = _workspace_config()
         image = _image_reference("ai-toolkit")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"docker: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     docker_path = shutil.which("docker")
@@ -496,7 +495,7 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
         image = args.image or _image_reference("musubi-tuner")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"musubi: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     docker = shutil.which("docker")
@@ -584,7 +583,7 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
         image = args.image or _image_reference("sd-scripts")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"sd-scripts: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     docker = shutil.which("docker")
@@ -651,7 +650,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         workspace_root = _require_workspace()
         workspace_config = _workspace_config()
         config = workspace_config.get("runpod", {})
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"runpod: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     api_key_present = bool(declared_secret("RUNPOD_API_KEY"))
@@ -785,7 +784,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
         config = _workspace_config()
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"comfyui: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
@@ -961,8 +960,8 @@ def _workspace_image_diagnostics(workspace: Path) -> tuple[dict[str, Any], list[
     """The image each Kura backend runs in this workspace, and warnings for mutable overrides."""
     workspace_yaml = workspace / "workspace.yaml"
     try:
-        config = yaml.safe_load(workspace_yaml.read_text(encoding="utf-8")) if workspace_yaml.is_file() else {}
-    except (OSError, yaml.YAMLError) as exc:
+        config = load_yaml(workspace_yaml) if workspace_yaml.is_file() else {}
+    except (OSError, YAMLError) as exc:
         return {}, [f"workspace.yaml could not be read: {_safe_error(exc)}"]
     if not isinstance(config, dict):
         return {}, ["workspace.yaml must contain a YAML mapping"]
@@ -989,8 +988,8 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
     if workspace_yaml.is_file():
         try:
             _require_workspace()
-            validate_workspace_config(yaml.safe_load(workspace_yaml.read_text(encoding="utf-8")))
-        except (OSError, ValueError, yaml.YAMLError) as exc:
+            validate_workspace_config(load_yaml(workspace_yaml))
+        except (OSError, ValueError, YAMLError) as exc:
             configuration_error = _safe_error(exc)
             warnings.append(configuration_error)
     from kura.runner import logout_stops_runner
@@ -1026,8 +1025,8 @@ def readiness_gaps(root: Path) -> list[str]:
             gaps.append(f"The Docker daemon is not reachable ({problem}): local training needs it; RunPod training does not. See `kura doctor docker`.")
     config_path = root / "workspace.yaml"
     try:
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
-    except (OSError, yaml.YAMLError):
+        config = load_yaml(config_path) if config_path.is_file() else {}
+    except (OSError, YAMLError):
         config = {}
     config = config if isinstance(config, dict) else {}
     if not declared_secret("RUNPOD_API_KEY"):

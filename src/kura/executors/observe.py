@@ -6,9 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.executors.common import OBSERVABLE_STATES, _OperationBusy, _load_status
+from kura.yamlio import YAMLError, load_yaml
 from kura.executors.docker import reconcile_docker
 from kura.executors.runpod import reconcile_runpod
 
@@ -16,7 +15,7 @@ from kura.executors.runpod import reconcile_runpod
 def _runpod_config(run_dir: Path, config: dict[str, Any] | None) -> dict[str, Any]:
     if config is not None:
         return config
-    workspace_config = yaml.safe_load((run_dir.parent.parent / "workspace.yaml").read_text(encoding="utf-8"))
+    workspace_config = load_yaml(run_dir.parent.parent / "workspace.yaml")
     if not isinstance(workspace_config, dict):
         return {}
     runpod = workspace_config.get("runpod")
@@ -92,7 +91,7 @@ def observe_run(
                 source="automatic",
             )
         return reconcile_docker(run_dir, timeout=timeout, blocking=False, source="automatic")
-    except (_OperationBusy, OSError, ValueError, json.JSONDecodeError, yaml.YAMLError):
+    except (_OperationBusy, OSError, ValueError, json.JSONDecodeError, YAMLError):
         return snapshot
 
 

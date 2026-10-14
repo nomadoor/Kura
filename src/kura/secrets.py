@@ -18,8 +18,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import platformdirs
-import yaml
 
+from kura.yamlio import YAMLError, load_yaml
 from kura.environment import USER_VARIABLES
 from kura.fsio import atomic_write_bytes, file_lock
 from kura.workspace import parse_env_file_line, workspace
@@ -138,8 +138,8 @@ def known_names() -> list[str]:
 def _configured_names() -> list[str]:
     """Secret names workspace.yaml chooses: the object-store keys."""
     try:
-        config = yaml.safe_load((workspace() / "workspace.yaml").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        config = load_yaml(workspace() / "workspace.yaml")
+    except (OSError, UnicodeDecodeError, YAMLError):
         return []
     runpod = config.get("runpod") if isinstance(config, dict) else None
     if not isinstance(runpod, dict):

@@ -14,9 +14,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
-import yaml
-
 from kura.fsio import atomic_write_json, file_lock
+from kura.yamlio import YAMLError, load_yaml
 from kura.install_source import kura_continuity
 from kura.run_envelope import common_recipe, final_step, resume_intent, training_state_policy, validated_recipe
 
@@ -232,10 +231,10 @@ def _protected_artifact_ids(workspace: Path) -> set[str]:
     protected: set[str] = set()
     for path in (workspace / "runs").glob("*/run.yaml"):
         try:
-            import yaml
+            from kura.yamlio import YAMLError, load_yaml
 
-            run = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            run = load_yaml(path)
+        except (OSError, UnicodeError, YAMLError) as exc:
             raise _ReferenceInspectionError(f"cannot safely inspect training-state reference: {path}") from exc
         continuation = run.get("continuation") if isinstance(run, dict) else None
         source = continuation.get("source") if isinstance(continuation, dict) else None
@@ -799,8 +798,8 @@ def compile_resume_lock(
 
 def _kura_continuity(source_env_lock: Path) -> dict[str, Any]:
     try:
-        loaded = yaml.safe_load(source_env_lock.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        loaded = load_yaml(source_env_lock)
+    except (OSError, YAMLError):
         loaded = None
     return kura_continuity(loaded if isinstance(loaded, dict) else {})
 
@@ -1006,8 +1005,8 @@ def training_state_capture_required(run_dir: Path) -> bool:
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
     try:
-        run = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        run = load_yaml(manifest_path)
+    except (OSError, YAMLError) as exc:
         raise ValueError(f"cannot inspect training-state candidates for {run_dir.name}") from exc
     if not isinstance(run, dict):
         raise ValueError(f"cannot inspect training-state candidates for {run_dir.name}")
@@ -1019,8 +1018,8 @@ def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any
     env_lock = run_dir / "resolved" / "env.lock"
     if env_lock.is_file():
         try:
-            loaded = yaml.safe_load(env_lock.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
+            loaded = load_yaml(env_lock)
+        except (OSError, YAMLError):
             loaded = None
         if isinstance(loaded, dict):
             runtime_identity = loaded

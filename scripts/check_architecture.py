@@ -87,6 +87,14 @@ def main() -> int:
         for symbol in semantic_taxonomy_symbols(path):
             failures.append(f"{path.relative_to(ROOT)} defines forbidden core semantic taxonomy symbol: {symbol}")
 
+    # One reader and writer owns how every YAML file is parsed and written. Container
+    # scripts run inside trainer images without Kura, so they keep their own loader.
+    for path in sorted([*SRC.rglob("*.py"), *(ROOT / "scripts").glob("*.py")]):
+        if path == SRC / "yamlio.py" or SRC / "container_scripts" in path.parents:
+            continue
+        if any(name == "yaml" or name.startswith("yaml.") for name in imports(path)):
+            failures.append(f"{path.relative_to(ROOT)} must read and write YAML through kura.yamlio")
+
     selector = "kura.backends.musubi_native_selectors"
     for path in sorted(SRC.rglob("*.py")):
         if path.parent == SRC / "backends":

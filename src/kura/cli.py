@@ -20,9 +20,8 @@ from pathlib import Path
 from typing import Any
 from copy import deepcopy
 
-import yaml
-
 from kura import __version__
+from kura.yamlio import YAMLError, dump_yaml, load_yaml_text
 from kura import checks
 from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image
 from kura.managed import ensure_current
@@ -38,6 +37,7 @@ from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
+from kura.fsio import atomic_write_yaml as _dump_yaml
 from kura.records import record
 from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
@@ -66,9 +66,8 @@ from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
 from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
-from kura.workspace import dump_yaml as _dump_yaml
+from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.secrets import MissingSecret, cmd_secrets_set, load_secrets as _load_secrets
-from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
@@ -156,7 +155,7 @@ def _now() -> datetime:
 def cmd_dataset_validate(args: argparse.Namespace) -> int:
     try:
         measured = measure_manifest(resolve_dataset_path(args.dataset_dir, workspace=_workspace()))
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"dataset validation failed: {_safe_error(exc)}", file=sys.stderr)
         return 1
     for warning in measured["warnings"]:
@@ -192,9 +191,7 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         adopt = dataset_v2 and not items_exist and not proposal["issues"]
         files: dict[Path, bytes] = {}
         if not dataset_v2:
-            files[directory / "dataset.v2.candidate.yaml"] = yaml.safe_dump(
-                proposal["dataset_yaml"], allow_unicode=True, sort_keys=False,
-            ).encode("utf-8")
+            files[directory / "dataset.v2.candidate.yaml"] = dump_yaml(proposal["dataset_yaml"]).encode("utf-8")
         items_path = directory / ("items.jsonl" if adopt else "items.v2.candidate.jsonl")
         files[items_path] = "".join(
             json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in proposal["items"]
@@ -221,7 +218,7 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         message = "; ".join([f"{name} already exists; review it before drafting again", *getattr(exc, "__notes__", [])])
         print(f"cannot draft dataset: {message}", file=sys.stderr)
         return 1
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         message = "; ".join([_safe_error(exc), *getattr(exc, "__notes__", [])])
         print(f"cannot draft dataset: {message}", file=sys.stderr)
         return 1
@@ -230,7 +227,7 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
 def cmd_dataset_inspect(args: argparse.Namespace) -> int:
     try:
         report = inspect_dataset(args.dataset, workspace=_workspace())
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot inspect dataset: {_safe_error(exc)}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
@@ -257,7 +254,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
             return 1
         try:
             source_run = _load_yaml(_run_path(source_id) / "run.yaml")
-        except (OSError, ValueError, yaml.YAMLError) as exc:
+        except (OSError, ValueError, YAMLError) as exc:
             print(f"cannot read the run to start from: {_safe_error(exc)}", file=sys.stderr)
             return 1
         if source_run.get("type", "train") != "train":
@@ -326,7 +323,7 @@ def cmd_run_resume(args: argparse.Namespace) -> int:
                 to_step=to_step,
                 safe_slug=safe_slug,
             )
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot create Resume run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     print(run_id)
@@ -481,11 +478,11 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     timestamp = _now(); run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
     try:
         endpoint = comfyui_endpoint(_workspace_config())
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot create render: {_safe_error(exc)}", file=sys.stderr)
         return 1
     run_dir.mkdir(parents=True, exist_ok=False)
-    run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": endpoint}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
+    run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "intent": "", "inputs": {"train_run": None, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": endpoint}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
     atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
@@ -497,7 +494,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     run_dir = _run_path(args.run_id)
     try:
         run = _load_yaml(run_dir / "run.yaml")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     try:
@@ -520,7 +517,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     if run.get("type", "train") == "render":
         try:
             compile_render(_workspace(), run_dir)
-        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
             print(f"cannot compile render: {_safe_error(exc)}", file=sys.stderr); return 1
         print(f"compiled render: {args.run_id}"); return 0
     try:
@@ -551,7 +548,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             locked_item["digest"] = actual_digest
             locked_datasets.append(locked_item)
         image = effective_image(_workspace_config(), _backend_image_name(backend.get("name")))
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     locked = deepcopy(run)
@@ -660,7 +657,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         status = json.loads(status_path.read_text(encoding="utf-8"))
         status["state"] = "compiled"
         atomic_write_json(status_path, record("run_status", status))
-    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
         shutil.rmtree(resolved, ignore_errors=True)
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -921,7 +918,7 @@ def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_art
         try:
             run = _load_yaml(run_dir / "run.yaml") if (run_dir / "run.yaml").exists() else {}
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8")) if (run_dir / "status.json").exists() else {}
-        except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError):
+        except (OSError, ValueError, YAMLError, json.JSONDecodeError):
             run = {}
             status = {}
         state = str(status.get("state") or "unknown")
@@ -1178,7 +1175,7 @@ def cmd_run_discard(args: argparse.Namespace) -> int:
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         _load_yaml(run_dir / "run.yaml")
-    except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot discard run: {_safe_error(exc)}", file=sys.stderr)
         return 1
 
@@ -1223,7 +1220,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         try:
             run = _load_yaml(run_file)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
             print(f"warning: skipped {run_dir.name}: {_safe_error(exc)}", file=sys.stderr)
             continue
         state = str(status.get("state") or "unknown")
@@ -1375,11 +1372,11 @@ def cmd_workspace_migrate(args: argparse.Namespace) -> int:
         root = _require_workspace(check_schema=False)
         path = root / "workspace.yaml"
         before = path.read_text(encoding="utf-8")
-        config = yaml.safe_load(before)
+        config = load_yaml_text(before)
         if not isinstance(config, dict):
             raise ValueError("workspace.yaml must contain a YAML mapping")
         migrated, notes = migrate_workspace_config(config)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot migrate workspace: {_safe_error(exc)}", file=sys.stderr)
         return 1
     if migrated == config:
@@ -1392,7 +1389,7 @@ def cmd_workspace_migrate(args: argparse.Namespace) -> int:
         if not backup.exists():
             break
         backup = path.with_name(f"workspace.yaml.{stamp}-{suffix}.bak")
-    after = yaml.safe_dump(migrated, sort_keys=False, allow_unicode=True)
+    after = dump_yaml(migrated)
     diff = difflib.unified_diff(before.splitlines(), after.splitlines(), "workspace.yaml", "workspace.yaml (migrated)", lineterm="")
     print("\n".join(diff))
     for note in notes:
@@ -1421,7 +1418,7 @@ def cmd_image_build(args: argparse.Namespace) -> int:
             config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
             docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
             limit_gib = docker_build_cache_limit_gib(docker_config)
-        except (OSError, ValueError, yaml.YAMLError) as exc:
+        except (OSError, ValueError, YAMLError) as exc:
             print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
             return 1
         storage = _docker_storage_summary()
@@ -1497,7 +1494,7 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
             entry = {"id": run.get("id"), "type": run.get("type", "train"), "experiment": run.get("experiment"), "created": run.get("created"), "state": status.get("state")}
             if run.get("type") == "render": entry["inputs"] = {"train_run": run.get("inputs", {}).get("train_run")}
             entries.append(entry)
-        except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
             print(f"warning: skipped {run_file.parent.name}: {_safe_error(exc)}", file=sys.stderr)
     atomic_write_text(
         _workspace() / "index.jsonl",

@@ -7,9 +7,8 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.executors.common import EXIT_CODE_FOR_STATE
+from kura.yamlio import YAMLError, load_yaml
 from kura.training_artifacts import checkpoint_step
 from kura.run_commands.experiment import _format_duration
 
@@ -18,8 +17,8 @@ from kura.run_commands.experiment import _format_duration
 
 def _mapping(path: Path) -> dict[str, Any]:
     try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
+        value = load_yaml(path)
+    except (OSError, UnicodeError, YAMLError):
         return {}
     return value if isinstance(value, dict) else {}
 
