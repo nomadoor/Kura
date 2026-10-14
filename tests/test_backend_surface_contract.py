@@ -431,6 +431,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 decided = backend_capabilities(backend)["decided_fields"]
                 self.assertTrue({"save_every_n_steps", "gradient_accumulation_steps", "lr_scheduler"} <= set(decided))
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_native_config_cannot_set_what_kura_decides_from(self) -> None:
         for section, key in (("save", "save_every"), ("save", "max_step_saves_to_keep"), ("train", "gradient_accumulation_steps"), ("train", "gradient_accumulation"), ("train", "lr_scheduler"), ("train", "optimizer")):
             with self.subTest(key=f"{section}.{key}"), tempfile.TemporaryDirectory() as directory:
