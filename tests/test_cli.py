@@ -1642,6 +1642,7 @@ class RunPlanTests(unittest.TestCase):
                         "recipe": {"steps": 1500, "seed": 42},
                         "sampling": {"cadence_steps": 100},
                         "backend": {"name": "musubi-tuner", "config": {
+                            "architecture": "flux2",
                             "network_dim": 16,
                             "network_alpha": 1024,
                             "learning_rate": "0.00005",
@@ -4206,7 +4207,7 @@ class AiToolkitBackendTests(unittest.TestCase):
 class MusubiBackendTests(unittest.TestCase):
     def _write_frozen_projection(self, run: dict[str, Any], destination: Path) -> None:
         architecture = str(run.get("backend", {}).get("config", {}).get("architecture") or "")
-        target = "sample.mp4" if architecture in {"minimax_h3", "minimaxh3"} else "sample.png"
+        target = "sample.mp4" if architecture in {"minimax_h3"} else "sample.png"
         destination.parent.mkdir(parents=True, exist_ok=True)
         freeze_fixture(run, destination.parent, target=target)
 
@@ -4918,7 +4919,6 @@ class MusubiBackendTests(unittest.TestCase):
             ({"h3_loss_method": "training_adapter"}, "base_weights"),
             ({"h3_loss_method": "teacher_matching", "task": "ref2va", "h3_teacher_conditions": "ref"}, "requires task t2va"),
             ({"h3_loss_method": "teacher_matching", "one_frame": True, "video_only": True, "h3_teacher_conditions": "ref"}, "one_frame.*subject_ref"),
-            ({"h3_loss_method": "plain"}, "h3_loss_method"),
         )
         for changes, message in cases:
             with self.subTest(changes=changes):

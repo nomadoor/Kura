@@ -183,17 +183,17 @@ class TrainingStateArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "non-finite lora_B values"):
                 namespace["lora_b_update_stats"](weight)
 
-    def test_sd_scripts_resume_contract_uses_normalized_selectors(self) -> None:
-        for architecture in ("flux", "SDXL", "sd-1.5"):
+    def test_sd_scripts_resume_contract_reads_each_selector(self) -> None:
+        for architecture in ("flux1", "sdxl", "sd15"):
             with self.subTest(architecture=architecture):
                 contract = training_state_contract_sd_scripts(
-                    {"backend": {"name": "sd-scripts", "config": {"architecture": architecture, "mode": "LORA"}}}
+                    {"backend": {"name": "sd-scripts", "config": {"architecture": architecture, "mode": "lora"}}}
                 )
                 self.assertEqual(contract["capability"], "best_effort_resume")
                 self.assertIn("kura-state-info.json", contract["required_files"])
 
         anima = training_state_contract_sd_scripts(
-            {"backend": {"name": "sd-scripts", "config": {"architecture": "Anima", "mode": "LORA"}}}
+            {"backend": {"name": "sd-scripts", "config": {"architecture": "anima", "mode": "lora"}}}
         )
         self.assertEqual(anima["capability"], "unsupported")
 

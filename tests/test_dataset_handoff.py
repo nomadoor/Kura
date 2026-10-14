@@ -51,7 +51,7 @@ from kura.backends.dataset_profiles import (
     resolve_projection_partitions,
     select_projection_profile,
 )
-from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architecture, musubi_native_dataset_architecture
+from kura.backends.common import _musubi_architecture, musubi_native_dataset_architecture
 from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, inspect_dataset_view, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views
@@ -263,25 +263,10 @@ def _musubi_semantic_block(projected: dict, index: int = 0) -> dict:
 
 @posix_only(DATASET_IO)
 class DatasetHandoffTests(unittest.TestCase):
-    def test_musubi_architecture_aliases_are_canonicalized_at_one_boundary(self) -> None:
-        for alias, canonical in MUSUBI_ARCHITECTURE_ALIASES.items():
-            run = {"backend": {"name": "musubi-tuner", "config": {"architecture": alias}}}
-            self.assertEqual(_musubi_architecture(run), canonical)
-
-        self.assertEqual(musubi_native_task("minimaxh3", None), "t2va")
-        self.assertEqual(musubi_native_task("hidream", None), "t2i")
-        self.assertEqual(musubi_native_task("kandinsky_5", None), "k5-pro-t2v-5s-sd")
-        for condition in MUSUBI_SURFACE.conditions:
-            for clause in condition.when_any:
-                selectors = dict(clause)
-                architectures = selectors.get("architecture")
-                if architectures is None:
-                    continue
-                for alias, canonical in MUSUBI_ARCHITECTURE_ALIASES.items():
-                    self.assertNotIn(alias, architectures)
-                    if canonical in architectures:
-                        self.assertIn(canonical, architectures)
-
+    def test_musubi_architecture_is_read_as_written(self) -> None:
+        run = {"backend": {"name": "musubi-tuner", "config": {"architecture": "minimax_h3"}}}
+        self.assertEqual(_musubi_architecture(run), "minimax_h3")
+        self.assertEqual(musubi_native_task("minimax_h3", None), "t2va")
         with self.assertRaisesRegex(
             ValueError,
             "no pinned native dataset architecture",
@@ -886,7 +871,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
     def test_musubi_task_table_is_the_single_source_for_defaults_and_dataset_properties(self) -> None:
         self.assertEqual(musubi_native_task("wan", None), "t2v-1.3B")
-        self.assertEqual(musubi_native_task("kandinsky_5", None), "k5-pro-t2v-5s-sd")
+        self.assertEqual(musubi_native_task("kandinsky5", None), "k5-pro-t2v-5s-sd")
         self.assertEqual(
             musubi_native_task_profile("wan", "t2v-14B-FC").dataset_kind,
             "video-control",
@@ -4315,7 +4300,7 @@ class DatasetHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
-            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux1_kontext"}}
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux_kontext"}}
             dataset = workspace / "datasets" / "tiny"
             (dataset / "control-1.png").write_bytes(b"control 1")
             (dataset / "control-2.png").write_bytes(b"control 2")
@@ -5196,7 +5181,7 @@ class DatasetHandoffTests(unittest.TestCase):
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
             run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "hunyuanvideo",
+                "architecture": "hunyuan_video",
                 "dataset_options": {"tiny": {"target_frames": [24]}},
             }}
             dataset = workspace / "datasets" / "tiny"
@@ -5956,34 +5941,6 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(
                 MUSUBI_PROJECTION_PROFILES["flux2-image-references"]["role_limits"]["control"],
                 (1, None),
-            )
-
-    def test_musubi_video_projection_uses_the_command_architecture_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            run, resolved = self.make_run(workspace)
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "model_arch": "wan",
-                "dataset_options": {"tiny": {"target_frames": [25]}},
-            }}
-            dataset = workspace / "datasets" / "tiny"
-            (dataset / "a.png").unlink()
-            (dataset / "a.mp4").write_bytes(b"video")
-            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
-            row["files"][0]["path"] = "a.mp4"
-            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
-
-            lock = freeze_dataset_handoff(
-                run,
-                workspace,
-                resolved,
-                backend="musubi-tuner",
-                project=lambda selection: project_musubi_dataset(run, selection),
-            )
-
-            self.assertEqual(
-                lock["views"][0]["consumers"][0]["native_pointer"],
-                "/datasets/0/video_jsonl_file",
             )
 
     def test_musubi_wan_frame_settings_change_input_identity(self) -> None:

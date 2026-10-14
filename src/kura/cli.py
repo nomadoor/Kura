@@ -446,23 +446,11 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
                     constraints.append(f"max={contract['maximum']}")
                 print(f"    {field} (" + ", ".join(constraints) + ")")
     if payload["config_value_choices"]:
-        print("backend.config accepted values (from the pinned upstream; Kura accepts any of them, though not every one has been run end to end):")
+        print("backend.config selector values (spelled exactly as listed; not every one has been run end to end):")
         for field, choices in payload["config_value_choices"].items():
             print(f"  {field}: " + ", ".join(choices))
     if payload["boolean_fields"]:
         print("backend.config fields that take true or false (not quoted): " + ", ".join(payload["boolean_fields"]))
-    if payload["selector_aliases"]:
-        print("backend.config selector aliases:")
-        for field, aliases in payload["selector_aliases"].items():
-            authored = ", ".join(aliases["fields"]) or "(none)"
-            values = ", ".join(
-                f"{alias}->{canonical}"
-                for alias, canonical in aliases["values"].items()
-            ) or "(none)"
-            print(
-                f"  {field}: fields={authored}; values={values}; "
-                f"normalization={aliases['normalization']}"
-            )
     if payload["unsupported_fields"]:
         print("unsupported fields:")
         for field, reason in payload["unsupported_fields"].items():

@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
-from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, canonical_musubi_architecture
+from kura.backends.ai_toolkit_baseline import tagged_entries, trained_arch
+from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
-from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
+from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
@@ -40,17 +41,6 @@ def _when_any(field: str, *clauses: dict[str, tuple[Any, ...]]) -> FieldConditio
 
 
 @dataclass(frozen=True)
-class SelectorNormalization:
-    """Resolve authored selector names and values before surface conditions."""
-
-    field: str
-    aliases: tuple[str, ...]
-    normalize: Callable[[Any], Any]
-    rule: str
-    value_aliases: tuple[tuple[str, str], ...] = ()
-
-
-@dataclass(frozen=True)
 class BackendSurface:
     """The adapter-owned authoring vocabulary accepted by Kura."""
 
@@ -62,8 +52,8 @@ class BackendSurface:
     selector_defaults: tuple[tuple[str, Any], ...] = ()
     unavailable: tuple[tuple[str, str], ...] = ()
     nested_config_fields: dict[str, dict[str, dict[str, Any]]] | None = None
+    # Selector fields Kura decides from, with their one accepted spelling each; checked first.
     config_value_choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
-    selector_normalizations: tuple[SelectorNormalization, ...] = ()
 
     def __post_init__(self) -> None:
         if self.boolean_fields - self.fields:
@@ -80,14 +70,6 @@ class BackendSurface:
         choice_fields = [field for field, _ in self.config_value_choices]
         if len(choice_fields) != len(set(choice_fields)) or set(choice_fields) - self.fields:
             raise ValueError("backend config value choices must name distinct declared fields")
-        normalized_fields = [item.field for item in self.selector_normalizations]
-        if len(normalized_fields) != len(set(normalized_fields)):
-            raise ValueError("backend selector normalizations must name distinct fields")
-        for item in self.selector_normalizations:
-            if item.field not in self.fields:
-                raise ValueError(f"backend selector normalization names undeclared field: {item.field}")
-            if item.field in item.aliases or len(item.aliases) != len(set(item.aliases)):
-                raise ValueError(f"backend selector normalization aliases are invalid for {item.field}")
 
 
 @dataclass(frozen=True)
@@ -126,6 +108,11 @@ def _compile_sd_scripts(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
     return compile_sd_scripts(run, resolved / "sd-scripts")
 
 
+def _ai_toolkit_arch_values(arch: str) -> tuple[str, ...]:
+    """Every model_arch value that trains `arch`: the arch and its tagged UI entries."""
+    return (arch, *(name for name in tagged_entries() if trained_arch(name) == arch))
+
+
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
         "batch_size", "dataset_config", "dataset_options", "flatten_groups", "gradient_accumulation_steps", "gradient_checkpointing",
@@ -134,9 +121,9 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         "save_every_n_steps", "save_last_n_steps",
     }),
     conditions=(
-        _when("bypass_guidance_embedding", model_arch=("flex2",)),
-        _when("extras_name_or_path", model_arch=("zimage_l2p",)),
-        _when("model_edit", model_arch=("krea2",)),
+        _when("bypass_guidance_embedding", model_arch=_ai_toolkit_arch_values("flex2")),
+        _when("extras_name_or_path", model_arch=_ai_toolkit_arch_values("zimage_l2p")),
+        _when("model_edit", model_arch=_ai_toolkit_arch_values("krea2")),
     ),
     escape_hatches=frozenset({"command", "native_config"}),
     boolean_fields=frozenset({
@@ -152,7 +139,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         "dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS,
         **AI_TOOLKIT_DATASET_OPTION_CAPABILITIES,
     },
-    config_value_choices=(("model_arch", tuple(sorted(AI_TOOLKIT_PINNED_MODEL_ARCHS))),),
+    config_value_choices=(("model_arch", tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *tagged_entries()}))),),
 )
 
 MUSUBI_SURFACE = BackendSurface(
@@ -183,14 +170,14 @@ MUSUBI_SURFACE = BackendSurface(
         "one_frame_no_2x", "one_frame_no_4x", "precache", "quantized_qwen", "remove_first_image_from_target",
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only",
     }),
-    selector_normalizations=(SelectorNormalization(
-        field="architecture",
-        aliases=("model_arch",),
-        normalize=canonical_musubi_architecture,
-        rule="case-insensitive; hyphens become underscores; named aliases become canonical values",
-        value_aliases=tuple(sorted(MUSUBI_ARCHITECTURE_ALIASES.items())),
-    ),),
-    selector_defaults=(("precache", True), ("one_frame", False), ("h3_loss_method", "guidance")),
+    config_value_choices=(
+        ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
+        ("h3_loss_method", ("guidance", "teacher_matching", "training_adapter")),
+    ),
+    selector_defaults=(
+        ("precache", True), ("one_frame", False), ("h3_loss_method", "guidance"),
+        ("convrot_int8", False), ("gradient_checkpointing", False),
+    ),
     unavailable=(("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),),
     conditions=(
         _when("allow_a40_large_micro_batch", architecture=("flux2",)),
@@ -274,6 +261,10 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     fields=frozenset(CONFIG_KEYS - {"command", "extra_args"}),
     escape_hatches=frozenset({"command", "extra_args"}),
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
+    config_value_choices=(
+        ("architecture", tuple(sorted({architecture for architecture, _ in ENTRYPOINTS}))),
+        ("mode", tuple(sorted({mode for _, mode in ENTRYPOINTS}))),
+    ),
     selector_defaults=(("mode", "lora"),),
     unavailable=(
         ("batch", "sd-scripts batch size is configured at backend.config.dataset_config.general.batch_size or backend.config.dataset_config.datasets[].batch_size"),
@@ -358,7 +349,6 @@ def get_backend(name: Any) -> BackendAdapter:
 _GENERAL_ML_ALIASES = {
     "batch": "batch_size",
     "lr": "learning_rate",
-    "model_arch": "architecture",
     "optimizer": "optimizer_type",
     "output_format": "output_compatibility",
     "rank": "network_dim",
@@ -376,12 +366,7 @@ def validate_backend_config(run: dict[str, Any]) -> None:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
     native = backend_config(run, adapter.name)
-    selector_aliases = {
-        alias
-        for normalization in adapter.surface.selector_normalizations
-        for alias in normalization.aliases
-    }
-    accepted = adapter.surface.fields | adapter.surface.escape_hatches | selector_aliases
+    accepted = adapter.surface.fields | adapter.surface.escape_hatches
     unknown = sorted(set(native) - accepted)
     details: list[str] = []
     unavailable = {**_GENERAL_UNAVAILABLE, **dict(adapter.surface.unavailable)}
@@ -404,49 +389,24 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             f"{adapter.name} backend.config field(s) must be true or false: "
             + ", ".join(f"{key}={native[key]!r}" for key in not_boolean)
         )
-    resolved = dict(native)
-    for normalization in adapter.surface.selector_normalizations:
-        authored = [
-            (field, native[field])
-            for field in (normalization.field, *normalization.aliases)
-            if field in native
-        ]
-        if len(authored) > 1:
+    for field, choices in adapter.surface.config_value_choices:
+        if field in native and native[field] not in choices:
             raise ValueError(
-                f"{adapter.name} backend.config selector {normalization.field!r} "
-                "must use exactly one authored field; found "
-                + ", ".join(repr(field) for field, _ in authored)
+                f"{adapter.name} backend.config.{field} {native[field]!r} is not accepted; use one of: "
+                + ", ".join(choices) + f". Run `kura run capabilities {adapter.name}` for accepted values."
             )
-        if authored:
-            authored_field, authored_value = authored[0]
-            if not isinstance(authored_value, str):
-                raise ValueError(
-                    f"{adapter.name} backend.config.{authored_field} must be a string"
-                )
-            resolved[normalization.field] = normalization.normalize(authored_value)
     defaults = dict(adapter.surface.selector_defaults)
     for condition in adapter.surface.conditions:
         if condition.field not in native:
             continue
         matched = False
         resolved_clauses: list[str] = []
-        selector_missing = False
         for clause in condition.when_any:
-            clause_matches = True
-            labels: list[str] = []
-            for selector, allowed in clause:
-                value = resolved.get(selector, defaults.get(selector))
-                if value is None:
-                    selector_missing = True
-                    clause_matches = False
-                elif value not in allowed:
-                    clause_matches = False
-                labels.append(f"{selector}=" + "|".join(repr(item) for item in allowed))
-            matched = matched or clause_matches
-            resolved_clauses.append(" and ".join(labels))
-        if not matched and not selector_missing:
+            matched = matched or all(native.get(selector, defaults.get(selector)) in allowed for selector, allowed in clause)
+            resolved_clauses.append(" and ".join(f"{selector}=" + "|".join(repr(item) for item in allowed) for selector, allowed in clause))
+        if not matched:
             selected = ", ".join(
-                f"{selector}={resolved.get(selector, defaults.get(selector))!r}"
+                f"{selector}={native.get(selector, defaults.get(selector))!r}"
                 for selector in sorted({name for clause in condition.when_any for name, _ in clause})
             )
             raise ValueError(
@@ -482,12 +442,4 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
         "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
         "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
         "boolean_fields": sorted(adapter.surface.boolean_fields),
-        "selector_aliases": {
-            item.field: {
-                "fields": list(item.aliases),
-                "values": dict(item.value_aliases),
-                "normalization": item.rule,
-            }
-            for item in adapter.surface.selector_normalizations
-        },
     }

@@ -425,7 +425,7 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     }
     memory["blocks_to_swap"] = native.get("blocks_to_swap") or _extra_arg_value(extra_args, "--blocks_to_swap")
     return {
-        "architecture": native.get("architecture") or native.get("model_arch"),
+        "architecture": native.get("architecture"),
         "selector": native.get("task"),
         "rank": native.get("network_dim"),
         "alpha": native.get("network_alpha"),
@@ -666,11 +666,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         task = musubi_native_task(architecture, override.get("task"))
         if task not in {"t2va", "fl2va", "ref2va"}:
             raise ValueError("Musubi MiniMax-H3 task must be t2va, fl2va, or ref2va")
-        loss_method = str(override.get("h3_loss_method") or "guidance")
-        if loss_method not in {"guidance", "training_adapter", "teacher_matching"}:
-            raise ValueError(
-                "Musubi MiniMax-H3 h3_loss_method must be guidance, training_adapter, or teacher_matching"
-            )
+        loss_method = override.get("h3_loss_method", "guidance")
         one_frame = _truthy(override.get("one_frame"))
         if one_frame and not _truthy(override.get("video_only")):
             raise ValueError("Musubi MiniMax-H3 one_frame requires video_only=true")
