@@ -325,9 +325,8 @@ sidecar `lora_insert`: omit `checkpoint` from the baseline row and Kura leaves
 the base workflow unchanged for that case. Direct `lora`, `checkpoint`, and
 `model_patch` bindings require a checkpoint on every row because an empty model
 name is not a valid loader input.
-`type: image` marks a value as a path relative to the explicit cases JSONL
-directory, or to the legacy promptset directory for a legacy run. `kura render
-compile` copies it into `resolved/images/` and records its digest. Local launch
+`type: image` marks a value as a path relative to the cases JSONL directory.
+`kura render compile` copies it into `resolved/images/` and records its digest. Local launch
 stages that frozen copy into `comfyui.input_dir`; RunPod launch verifies and
 uploads the frozen copy into the disposable Pod before ComfyUI starts. Runtime
 file names are recorded in `applied_values` without replacing the frozen
@@ -355,12 +354,10 @@ model-patch staging remain local-executor features.
 
 ### Legacy promptsets
 
-Legacy runs with `inputs.promptset` plus singular `inputs.checkpoint` remain
-supported. A promptset row owns `id`, `prompt`, `negative_prompt`, `seeds`, and
-`meta`; additional keys require matching `workflow_patches`. Compile expands
-the row seeds and normalizes the result to `resolved/cases.jsonl`, so launch and
-provenance use the same case contract as new runs. Do not combine
-`inputs.cases` with `inputs.promptset`. A singular `inputs.checkpoint` may be
+A render an earlier Kura compiled from `inputs.promptset` still launches and
+shows with its frozen cases and output names. Compile refuses a new one: write
+one row per case under `inputs.cases` instead (a promptset item with several
+`seeds` becomes one row per seed). A singular `inputs.checkpoint` may be
 combined with `inputs.cases` only as the shared default described above.
 
 `prompt`, `negative_prompt`, and `seed` are checked the same way. Rendering with
@@ -380,7 +377,7 @@ which parameters the run did not own. Fixing `seed` also stops case expansion â€
 `render.default_seed` must be null, no item may carry `seeds`, each case renders
 once, and the file name drops its `_seed` segment. Otherwise Kura would queue one
 image per seed, name them apart, and record seeds that never reached the workflow.
-When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
+When `prompt` is workflow-fixed, cases may omit `prompt`; requiring a
 placeholder that is never rendered would make the file claim an input Kura does
 not own.
 
@@ -391,9 +388,17 @@ that strength for the run: Kura sets it on the LoRA node bound by
 `workflow_patches.lora` (model and clip strength), or on the LoRA it inserts
 from the sidecar's `lora_insert`, where a strength written in the sidecar is
 otherwise kept. A strength bound per case in `workflow_patches` wins over both.
-The `render:` mapping accepts only `output_dir`, `timeout_sec`, `default_seed`,
-`workflow_fixed`, and `lora_strength`, and run.yaml may not set facts compile
-writes itself, such as `lora_insert`. A local render stages every checkpoint
+The `render:` mapping accepts only `output_dir` (a folder inside the run),
+`timeout_sec` (whole seconds, at least 1; 600 when omitted), `default_seed`,
+`workflow_fixed`, and `lora_strength`. Every other level of a render run.yaml is
+closed too, and run.yaml may not set facts compile writes itself, such as
+`lora_insert`. A workflow sidecar (`<workflow>.kura.yaml`) takes `source`,
+`provenance`, `models`, and `lora_insert`; `lora_insert` takes `kind`
+(`model_only` or `model_clip`), `model_node` written as a string such as `'37'`,
+and optionally `model_output`, `strength_model`, and for `model_clip`
+`clip_node`, `clip_output`, and `strength_clip`. A local compile asks the
+endpoint which models it has and refuses a workflow that loads one it does not
+have. A local render stages every checkpoint
 into ComfyUI's LoRA or model-patch folder (`comfyui.lora_dir`,
 `comfyui.model_patches_dir`); a checkpoint it cannot stage is refused, and an
 authored checkpoint hash must match its file.

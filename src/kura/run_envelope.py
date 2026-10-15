@@ -37,6 +37,15 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
 RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider", "model.revision"})
 
 
+def gpu_choice_problem(gpu: Any, *, runpod: bool) -> str | None:
+    """What is wrong with an authored compute.gpu, for a training or a render run; None when it is right."""
+    if not isinstance(gpu, list) or not gpu or not all(isinstance(item, str) and item.strip() for item in gpu):
+        return f"compute.gpu must be a list of RunPod GPU type IDs (for example [NVIDIA A40]), not {gpu!r}; omit it to use the workspace list"
+    if not runpod:
+        return "compute.gpu chooses a RunPod GPU; a local run uses the local GPU, so remove it"
+    return None
+
+
 def validate_train_run_fields(run: dict[str, Any]) -> None:
     """Refuse a key no Kura code reads, naming the likely intended key or saying it is retired."""
     from kura.workspace import closest_key
@@ -80,11 +89,9 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
     if isinstance(compute, dict) and "executor" in compute and compute["executor"] not in ("docker", "runpod"):
         problems.append(f"compute.executor must be docker or runpod, not {compute['executor']!r}")
     if isinstance(compute, dict) and "gpu" in compute:
-        gpu = compute["gpu"]
-        if not isinstance(gpu, list) or not gpu or not all(isinstance(item, str) and item.strip() for item in gpu):
-            problems.append(f"compute.gpu must be a list of RunPod GPU type IDs (for example [NVIDIA A40]), not {gpu!r}; omit it to use the workspace list")
-        elif run_executor(run) != "runpod":
-            problems.append("compute.gpu chooses a RunPod GPU; a Docker run uses the local GPU, so remove it")
+        problem = gpu_choice_problem(compute["gpu"], runpod=run_executor(run) == "runpod")
+        if problem:
+            problems.append(problem)
     if problems:
         raise ValueError("run.yaml: " + "; ".join(problems))
 

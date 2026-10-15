@@ -17,7 +17,7 @@ Read only the reference needed for the task:
 
 - Read [case queues and bindings](references/case-queues-and-bindings.md) when
   authoring a comparison, varying any workflow input, using images, diagnosing
-  a binding error, or adapting a legacy promptset.
+  a binding error, or converting a legacy promptset to cases.
 - Read [local ComfyUI](references/local-comfyui.md) for endpoint identity,
   model visibility, LoRA/model-patch/image staging, and local smoke rules.
 - Read [RunPod render](references/runpod-render.md) only for remote rendering,

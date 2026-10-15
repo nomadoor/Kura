@@ -8,6 +8,52 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: closed-render-surface-runpod-executor-2026-10-16
+    executor: runpod
+    reason: 'A render run.yaml and its workflow sidecar are closed and read in one form: an unknown key at any level is refused, lora_insert has one shape (kind model_only or model_clip, string node ids), render.timeout_sec has one reader and must be at least 1, render.output_dir stays inside the run, compute.gpu is checked by the same rule as a training run, a new inputs.promptset is refused while compiled promptset renders keep their readers, and a local compile refuses a model the endpoint does not have. Training launches are unchanged, and the RunPod render path reads the same frozen timeout, so every recorded smoke builds the same launch.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 93b52e362e6210d05c7cbb37c86ca59b7d54459ddeceee5e8ac61ec2594eacef
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: c01803e7dde5c81d6c8ee46949b29fc074037329968c03eea27a5262dba958bd
   - id: one-field-models-sd-scripts-2026-10-16
     backend: sd-scripts
     reason: 'Model sources use one key per meaning: model_downloads takes repo, filename (a name, or a list whose first file is the one the trainer reads), revision, and repo_type, and refuses repo_id, file, and filenames naming the key to write; an empty model_paths entry is refused; model.revision is refused because no trainer receives it, and a Resume copy drops it as a retired key. Every recorded smoke wrote repo and filename and no model.revision a trainer read, so it downloads the same files and builds the same command.'

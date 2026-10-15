@@ -23,6 +23,7 @@ from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_m
 from kura.fsio import atomic_write_json
 from kura.records import record as as_record
 from kura.fsio import atomic_write_yaml as dump_yaml
+from kura.run_envelope import gpu_choice_problem
 from kura.workspace import plain_relative_folder, validate_workspace_config
 
 
@@ -35,11 +36,6 @@ PROMPTSET_CORE_KEYS = frozenset({"id", "prompt", "negative_prompt", "seeds", "me
 # `seed` is item-sourced but read from `seeds` / render.default_seed, and
 # `negative_prompt` stays optional for promptsets that do not set one.
 PATCHES_WITHOUT_ITEM_KEY = frozenset({"lora", "checkpoint", "model_patch", "seed", "negative_prompt"})
-
-# Patch names an item must never carry: writing them there looks like it sets a
-# per-case value, but the value would come from the run and the item would be
-# ignored. `seeds` is the per-item spelling; `seed` is the binding name.
-ITEM_FORBIDDEN_KEYS = frozenset({"lora", "checkpoint", "model_patch", "seed"})
 
 # Core keys that must be bound when the promptset supplies them. Without a
 # binding the value is carried into filenames and images.jsonl while the
@@ -169,7 +165,11 @@ def _workflow_sidecar(path: Path) -> dict[str, Any]:
     sidecar = path.with_suffix(".kura.yaml")
     if not sidecar.is_file():
         return {}
-    return load_yaml_mapping(sidecar)
+    values = load_yaml_mapping(sidecar)
+    unknown = sorted(str(key) for key in values if key not in SIDECAR_KEYS)
+    if unknown:
+        raise ValueError(f"{sidecar.name} has unsupported key(s): {', '.join(unknown)}; use {', '.join(sorted(SIDECAR_KEYS))}")
+    return values
 
 
 def event(run_dir: Path, payload: dict[str, Any]) -> None:
@@ -292,76 +292,6 @@ def _core_binding_required(name: str, items: list[dict[str, Any]], default_seed:
     return default_seed is not None or any(item.get("seeds") for item in items)
 
 
-def reconcile_promptset(items: list[dict[str, Any]], patches: Any, *, default_seed: Any = None, workflow_fixed: Any = None) -> None:
-    """Fail when a promptset and the declared bindings disagree about which parameters exist.
-
-    Kura cannot know whether an unbound key is an input the user expects to take
-    effect or provenance from whatever generated the promptset, so it refuses to
-    guess in either direction. Core keys are checked too: an unbound `prompt` or
-    `seed` still reaches file names and `samples/images.jsonl` while the workflow
-    renders its own hardcoded value, which is the silently-wrong result this
-    whole contract exists to prevent.
-    """
-    bound = set(patches) if isinstance(patches, dict) else set()
-    fixed = set(normalized_workflow_fixed(workflow_fixed))
-    unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
-    if unknown_fixed:
-        raise ValueError(f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}")
-    conflicting = sorted(fixed & bound)
-    if conflicting:
-        raise ValueError(
-            f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}; a parameter is either bound or fixed by the workflow"
-        )
-    if "seed" in fixed:
-        # Kura must not expand cases along a parameter the workflow controls; every
-        # image would be identical while file names and images.jsonl claimed a seed.
-        if default_seed is not None:
-            raise ValueError("render.workflow_fixed includes seed, so render.default_seed must be null")
-        seeded = [item["id"] for item in items if item.get("seeds")]
-        if seeded:
-            raise ValueError(
-                f"render.workflow_fixed includes seed, but these promptset items set seeds: {', '.join(seeded)}. "
-                "The workflow would render its own seed for every one of them. Remove the seeds, or bind seed to a workflow node/field."
-            )
-    for name in ("prompt", "negative_prompt"):
-        if name in fixed and any(str(item.get(name, "")).strip() for item in items):
-            print(
-                f"warning: render.workflow_fixed includes {name}, so promptset {name} values are not rendered and are recorded as null.",
-                flush=True,
-            )
-    for name in CORE_KEYS_REQUIRING_BINDINGS:
-        if name in bound or name in fixed:
-            continue
-        if not _core_binding_required(name, items, default_seed):
-            continue
-        source = "render.default_seed or promptset seeds" if name == "seed" else f"promptset {name}"
-        raise ValueError(
-            f"this render uses {source} but run.yaml workflow_patches has no {name} binding, so the workflow would render its own "
-            f"value while Kura recorded yours. Bind {name} to a workflow node/field, or list it under render.workflow_fixed to "
-            "declare that this workflow deliberately fixes it."
-        )
-    required = {name for name in bound if name not in PATCHES_WITHOUT_ITEM_KEY}
-    for item in items:
-        forbidden = sorted(set(item) & ITEM_FORBIDDEN_KEYS)
-        if forbidden:
-            raise ValueError(
-                f"promptset item {item['id']!r} sets {', '.join(forbidden)}, which comes from the run rather than the item and would be "
-                "ignored. Use `seeds` for per-case seeds; the checkpoint is set by inputs.checkpoint."
-            )
-        unbound = sorted(set(item) - PROMPTSET_CORE_KEYS - bound)
-        if unbound:
-            raise ValueError(
-                f"promptset item {item['id']!r} declares {', '.join(unbound)} but run.yaml workflow_patches has no binding for "
-                f"{'them' if len(unbound) > 1 else 'it'}. Either bind each one to a workflow node/field, move it under `meta` if it is "
-                "provenance rather than an input, or remove it because this workflow derives that value another way."
-            )
-        missing = sorted(name for name in required if name not in item)
-        if missing:
-            raise ValueError(
-                f"promptset item {item['id']!r} has no value for bound workflow_patches: {', '.join(missing)}"
-            )
-
-
 def patch_workflow(
     workflow: dict[str, Any],
     patches: dict[str, Any],
@@ -427,47 +357,44 @@ def _link(node: str, output: int) -> list[Any]:
     return [node, output]
 
 
-def _as_node_id(value: Any, *, context: str) -> str:
-    if isinstance(value, str) and value:
-        return value
-    if isinstance(value, int):
-        return str(value)
-    raise ValueError(f"{context} requires node")
-
-
-def _as_output_index(value: Any, default: int, *, context: str) -> int:
-    if value is None:
-        return default
-    if isinstance(value, int) and value >= 0:
-        return value
-    raise ValueError(f"{context} output must be a non-negative integer")
+# lora_insert keys by kind: model_only inserts LoraLoaderModelOnly, model_clip inserts LoraLoader.
+LORA_INSERT_KEYS = {
+    "model_only": frozenset({"kind", "model_node", "model_output", "strength_model"}),
+    "model_clip": frozenset({"kind", "model_node", "model_output", "clip_node", "clip_output", "strength_model", "strength_clip"}),
+}
 
 
 def _lora_insert_from_sidecar(sidecar: dict[str, Any]) -> dict[str, Any] | None:
+    """The one form of a sidecar's lora_insert, as the spec insert_lora_loader applies."""
     raw = sidecar.get("lora_insert")
-    if raw is None and isinstance(sidecar.get("lora"), dict):
-        raw = sidecar["lora"].get("insert")
     if raw is None:
         return None
-    if not isinstance(raw, dict):
-        raise ValueError("lora_insert must be a mapping")
-    kind = str(raw.get("kind") or raw.get("type") or "model_clip").strip()
-    class_type = "LoraLoaderModelOnly" if kind in ("model_only", "LoraLoaderModelOnly") else "LoraLoader"
-    if kind not in ("model_only", "model_clip", "full", "LoraLoaderModelOnly", "LoraLoader"):
-        raise ValueError("lora_insert.kind must be one of: model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader")
-    model = raw.get("model") if isinstance(raw.get("model"), dict) else {}
-    clip = raw.get("clip") if isinstance(raw.get("clip"), dict) else {}
-    model_node = _as_node_id(raw.get("model_node", model.get("node")), context="lora_insert.model")
+    if not isinstance(raw, dict) or raw.get("kind") not in LORA_INSERT_KEYS:
+        raise ValueError("lora_insert must be a mapping whose kind is model_only or model_clip")
+    kind = raw["kind"]
+    unknown = sorted(str(key) for key in raw if key not in LORA_INSERT_KEYS[kind])
+    if unknown:
+        raise ValueError(f"lora_insert kind {kind} takes {', '.join(sorted(LORA_INSERT_KEYS[kind]))}, not {', '.join(unknown)}")
+    for key in ("model_node", "clip_node"):
+        if key in raw or key == "model_node":
+            if not isinstance(raw.get(key), str) or not raw[key]:
+                raise ValueError(f"lora_insert.{key} must be a workflow node id written as a string, such as '37', not {raw.get(key)!r}")
+    for key in ("model_output", "clip_output"):
+        if key in raw and (isinstance(raw[key], bool) or not isinstance(raw[key], int) or raw[key] < 0):
+            raise ValueError(f"lora_insert.{key} must be a non-negative integer, not {raw[key]!r}")
+    for key in ("strength_model", "strength_clip"):
+        if key in raw and (isinstance(raw[key], bool) or not isinstance(raw[key], (int, float))):
+            raise ValueError(f"lora_insert.{key} must be a number, not {raw[key]!r}")
     spec: dict[str, Any] = {
-        "class_type": class_type,
-        "model_node": model_node,
-        "model_output": _as_output_index(raw.get("model_output", model.get("output")), 0, context="lora_insert.model"),
-        "strength_model": float(raw.get("strength_model", DEFAULT_LORA_STRENGTH)),
+        "class_type": "LoraLoaderModelOnly" if kind == "model_only" else "LoraLoader",
+        "model_node": raw["model_node"],
+        "model_output": raw.get("model_output", 0),
+        "strength_model": raw.get("strength_model", DEFAULT_LORA_STRENGTH),
     }
-    if class_type == "LoraLoader":
-        spec["clip_node"] = _as_node_id(raw.get("clip_node", clip.get("node", model_node)), context="lora_insert.clip")
-        spec["clip_output"] = _as_output_index(raw.get("clip_output", clip.get("output")), 1, context="lora_insert.clip")
-        spec["strength_clip"] = float(raw.get("strength_clip", DEFAULT_LORA_STRENGTH))
+    if kind == "model_clip":
+        spec["clip_node"] = raw.get("clip_node", raw["model_node"])
+        spec["clip_output"] = raw.get("clip_output", 1)
+        spec["strength_clip"] = raw.get("strength_clip", DEFAULT_LORA_STRENGTH)
     return spec
 
 
@@ -626,9 +553,8 @@ def _stage_mode(value: Any, name: str, endpoint: str | None) -> str:
     cannot follow a link made in WSL, when it does not report its OS, or when
     Kura itself runs on Windows, where making a link needs privileges.
     """
-    mode = str(value or "auto").strip().lower()
-    if mode not in ("auto", "symlink", "copy"):
-        raise ValueError(f"comfyui.{name} must be auto, symlink, or copy")
+    # validate_workspace_config accepted only auto, symlink, or copy.
+    mode = "auto" if value is None else value
     if mode != "auto":
         return mode
     if os.name != "nt" and _endpoint_os(endpoint) == "posix":
@@ -748,20 +674,16 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     # Copy, not symlink: ComfyUI resolves LoadImage paths and rejects one that
     # leaves its input directory, so a symlinked input fails validation at queue
     # time even though a symlinked model loads fine.
-    mode = str(comfyui.get("input_stage_mode") or "copy").strip().lower()
+    mode = comfyui.get("input_stage_mode", "copy")
     if mode == "auto":
         mode = "copy"  # ComfyUI rejects symlinked LoadImage inputs
-    if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.input_stage_mode must be auto, symlink, or copy")
     if mode == "symlink":
         print(
             "warning: comfyui.input_stage_mode=symlink is set, but ComfyUI rejects symlinked LoadImage inputs "
             "(\"Invalid image file\"). Use copy unless this endpoint is known to accept them.",
             flush=True,
         )
-    cleanup = str(comfyui.get("input_stage_cleanup") or "remove_after_render").strip().lower()
-    if cleanup not in ("remove_after_render", "keep"):
-        raise ValueError("comfyui.input_stage_cleanup must be remove_after_render or keep")
+    cleanup = comfyui.get("input_stage_cleanup", "remove_after_render")
     plans: dict[str, dict[str, Any]] = {}
     for name in names:
         for source in sorted((run_dir / "resolved" / "images" / name).glob("*")):
@@ -1072,20 +994,13 @@ def _legacy_render_cases(items: list[dict[str, Any]], checkpoint: dict[str, Any]
     return cases
 
 
-def _freeze_case_images(run_dir: Path, source_path: Path, cases: list[dict[str, Any]], patches: Any, *, legacy: bool) -> list[dict[str, Any]]:
-    if legacy:
-        source_cases: dict[str, dict[str, Any]] = {}
-        for case in cases:
-            source_id = case["source_id"]
-            source_cases.setdefault(source_id, {"id": source_id, **deepcopy(case["values"])})
-        flattened = list(source_cases.values())
-    else:
-        flattened = [{"id": case["id"], **deepcopy(case["values"])} for case in cases]
+def _freeze_case_images(run_dir: Path, source_path: Path, cases: list[dict[str, Any]], patches: Any) -> list[dict[str, Any]]:
+    flattened = [{"id": case["id"], **deepcopy(case["values"])} for case in cases]
     records = _freeze_promptset_images(run_dir, source_path, flattened, patches)
     frozen_by_id = {item["id"]: item for item in flattened}
     image_names = image_patch_names(patches)
     for case in cases:
-        item = frozen_by_id[case["source_id"] if legacy else case["id"]]
+        item = frozen_by_id[case["id"]]
         for name in image_names:
             case["values"][name] = item[name]
     return records
@@ -1278,6 +1193,60 @@ class ComfyUIClient:
 # then overwritten, so a value there would be silently ignored.
 COMPILED_RENDER_KEYS = ("lora_insert", "comfyui", "comfyui_models", "comfyui_model_registry", "comfyui_endpoint_identity", "comfyui_required_models", "promptset_images", "_kura")
 RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength")
+# Every key a render run.yaml may hold, by level. `render` is RENDER_SETTINGS, and
+# `workflow_patches` is closed by validate_patch_bindings.
+RENDER_RUN_SCHEMA: dict[str, frozenset[str]] = {
+    "": frozenset({
+        "schema_version", "id", "type", "created", "intent", "inputs", "generator", "executor", "compute",
+        "workflow_patches", "render",
+        # Recorded as written (the lora-evaluation skill's plan); Kura reads nothing in it.
+        "evaluation",
+    }),
+    "inputs": frozenset({"train_run", "workflow", "cases", "promptset", "checkpoint"}),
+    "inputs.workflow": frozenset({"path", "digest"}),
+    "generator": frozenset({"name", "endpoint"}),
+    "executor": frozenset({"name"}),
+    "compute": frozenset({"gpu"}),
+}
+SIDECAR_KEYS = frozenset({"source", "provenance", "models", "lora_insert"})
+DEFAULT_RENDER_TIMEOUT_SEC = 600
+
+
+def render_timeout_sec(frozen: dict[str, Any]) -> int:
+    """How long one ComfyUI request may take; local and RunPod renders both read it here."""
+    render = frozen.get("render") if isinstance(frozen.get("render"), dict) else {}
+    return render.get("timeout_sec", DEFAULT_RENDER_TIMEOUT_SEC)
+
+
+def _validate_render_run_fields(run: dict[str, Any]) -> None:
+    """Refuse a key no render reader uses, and a value Kura decides from in any other form, in one message."""
+    problems: list[str] = []
+    for level, keys in RENDER_RUN_SCHEMA.items():
+        holder: Any = run
+        for part in level.split(".") if level else ():
+            holder = holder.get(part) if isinstance(holder, dict) else None
+        for key in holder if isinstance(holder, dict) else ():
+            if key not in keys:
+                problems.append(f"{level + '.' if level else ''}{key} is not a render run setting")
+    generator = run.get("generator") if isinstance(run.get("generator"), dict) else {}
+    if generator.get("name", "comfyui") != "comfyui":
+        problems.append(f"generator.name must be comfyui, not {generator['name']!r}")
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    if executor.get("name", "local") not in ("local", "runpod"):
+        problems.append(f"executor.name must be local or runpod, not {executor['name']!r}")
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    if "gpu" in compute:
+        problem = gpu_choice_problem(compute["gpu"], runpod=executor.get("name") == "runpod")
+        if problem:
+            problems.append(problem)
+    render = run.get("render") if isinstance(run.get("render"), dict) else {}
+    timeout = render.get("timeout_sec", DEFAULT_RENDER_TIMEOUT_SEC)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+        problems.append(f"render.timeout_sec must be a whole number of seconds of at least 1, not {timeout!r}")
+    if "output_dir" in render and not plain_relative_folder(render["output_dir"]):
+        problems.append(f"render.output_dir must be a folder inside the run, such as samples/images (no leading or trailing slash, . or ..), not {render['output_dir']!r}")
+    if problems:
+        raise ValueError("render run.yaml: " + "; ".join(problems))
 
 
 def _render_lora_strength(value: Any) -> float | None:
@@ -1307,30 +1276,25 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     inputs = run.get("inputs", {})
     if not isinstance(inputs, dict):
         raise ValueError("render inputs must be a mapping")
-    if "checkpoints" in inputs:
-        raise ValueError("render inputs.checkpoints is obsolete; author one row per logical case under inputs.cases")
-    has_cases = "cases" in inputs
-    has_promptset = "promptset" in inputs
-    if has_cases == has_promptset:
-        raise ValueError("render requires exactly one of inputs.cases or legacy inputs.promptset")
-    if has_cases:
-        descriptor = inputs.get("cases")
-        if not isinstance(descriptor, dict):
-            raise ValueError("render inputs.cases must be a mapping with path and digest")
-        unknown_descriptor = sorted(str(key) for key in descriptor if key not in {"path", "digest"})
-        if unknown_descriptor:
-            raise ValueError(f"render inputs.cases has unsupported keys: {', '.join(unknown_descriptor)}")
-        if not isinstance(descriptor.get("path"), str) or not descriptor["path"].strip():
-            raise ValueError("render inputs.cases.path must be a non-empty path")
-        if descriptor.get("digest") is not None and not isinstance(descriptor.get("digest"), str):
-            raise ValueError("render inputs.cases.digest must be a string or null")
+    _validate_render_run_fields(run)
+    if "promptset" in inputs:
+        # Runs compiled with one stay readable; a new one authors inputs.cases.
+        raise ValueError("render inputs.promptset is replaced by inputs.cases; write one row per case in a cases.jsonl")
+    descriptor = inputs.get("cases")
+    if not isinstance(descriptor, dict):
+        raise ValueError("render requires inputs.cases, a mapping with path and digest")
+    unknown_descriptor = sorted(str(key) for key in descriptor if key not in {"path", "digest"})
+    if unknown_descriptor:
+        raise ValueError(f"render inputs.cases has unsupported keys: {', '.join(unknown_descriptor)}")
+    if not isinstance(descriptor.get("path"), str) or not descriptor["path"].strip():
+        raise ValueError("render inputs.cases.path must be a non-empty path")
+    if descriptor.get("digest") is not None and not isinstance(descriptor.get("digest"), str):
+        raise ValueError("render inputs.cases.digest must be a string or null")
     train_run = _validate_train_run_reference(workspace, inputs.get("train_run"))
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
-    source_input = inputs.get("cases") if has_cases else inputs.get("promptset")
-    source_path = workspace / (source_input.get("path", "") if isinstance(source_input, dict) else "")
+    source_path = workspace / descriptor["path"]
     if not workflow_path.is_file() or not source_path.is_file():
-        source_name = "cases" if has_cases else "promptset"
-        raise ValueError(f"render inputs.workflow.path and inputs.{source_name}.path must exist")
+        raise ValueError("render inputs.workflow.path and inputs.cases.path must exist")
     try:
         workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -1350,7 +1314,6 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         if "strength_clip" in lora_insert:
             lora_insert["strength_clip"] = lora_strength
     workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
-    fixed = set(workflow_fixed)
     patches = run.get("workflow_patches")
     if patches is None:
         patches = {}
@@ -1358,20 +1321,15 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         raise ValueError("workflow_patches must be a mapping of name to {node, field}")
     validate_patch_bindings(workflow, patches)
     shared_checkpoint = _validated_checkpoint(inputs.get("checkpoint"), context="render inputs.checkpoint", require_id=False)
-    if has_cases:
-        cases = authored_cases(source_path)
-        if shared_checkpoint is not None and any(case.get("checkpoint") for case in cases):
-            raise ValueError("render inputs.checkpoint cannot be combined with an explicit case checkpoint")
-        if shared_checkpoint is not None:
-            for case in cases:
-                case["checkpoint"] = deepcopy(shared_checkpoint)
-    else:
-        items = promptset(source_path, require_prompt="prompt" not in fixed)
-        reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
-        cases = _legacy_render_cases(items, shared_checkpoint, patches=patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
+    cases = authored_cases(source_path)
+    if shared_checkpoint is not None and any(case.get("checkpoint") for case in cases):
+        raise ValueError("render inputs.checkpoint cannot be combined with an explicit case checkpoint")
+    if shared_checkpoint is not None:
+        for case in cases:
+            case["checkpoint"] = deepcopy(shared_checkpoint)
     has_checkpoint_consumer = bool(lora_insert) or any(name in patches for name in ASSET_PATCH_NAMES)
     requires_checkpoint = any(name in patches for name in ASSET_PATCH_NAMES)
-    _reconcile_case_values(cases, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed, has_checkpoint_consumer=has_checkpoint_consumer, requires_checkpoint=requires_checkpoint, strict_checkpoint=has_cases)
+    _reconcile_case_values(cases, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed, has_checkpoint_consumer=has_checkpoint_consumer, requires_checkpoint=requires_checkpoint, strict_checkpoint=True)
     _freeze_case_checkpoints(workspace, cases)
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     is_runpod = executor.get("name") == "runpod"
@@ -1397,7 +1355,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
         frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
-    frozen["inputs"].setdefault("cases" if has_cases else "promptset", {})["digest"] = digest(source_path)
+    frozen["inputs"]["cases"]["digest"] = digest(source_path)
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
@@ -1425,6 +1383,12 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
                 print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {_redact_url_userinfo(endpoint)}: {exc}", flush=True)
             else:
                 visible, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
+                if missing:
+                    labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
+                    raise ValueError(
+                        f"ComfyUI at {_redact_url_userinfo(endpoint)} does not have model(s) this workflow loads: {labels}; "
+                        "add them to that ComfyUI's model folders, or change the workflow, then compile again"
+                    )
                 frozen["comfyui_endpoint_identity"] = endpoint_fingerprint(object_info)
                 frozen["comfyui_required_models"] = {"visible": visible, "missing": missing}
     # Image freezing mutates resolved/ and the in-memory cases. Keep it
@@ -1432,7 +1396,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     # unreferenced image copies behind.
     resolved = run_dir / "resolved"
     resolved.mkdir(exist_ok=True)
-    frozen_images = _freeze_case_images(run_dir, source_path, cases, patches, legacy=not has_cases)
+    frozen_images = _freeze_case_images(run_dir, source_path, cases, patches)
     if frozen_images:
         frozen["promptset_images"] = frozen_images
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
@@ -1444,16 +1408,6 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     if "comfyui_model_registry" in frozen:
         atomic_write_json(resolved / "comfyui_model_registry.json", frozen["comfyui_model_registry"])
     (resolved / "cases.jsonl").write_text("".join(json.dumps(case, ensure_ascii=False) + "\n" for case in indexed_cases), encoding="utf-8")
-    if not has_cases:
-        used_items = deepcopy(items)
-        cases_by_source = {case["source_id"]: case for case in cases}
-        for item in used_items:
-            matching = cases_by_source.get(item["id"])
-            if matching is not None:
-                for name in image_patch_names(patches):
-                    if name in matching["values"]:
-                        item[name] = matching["values"][name]
-        (resolved / "promptset_used.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in used_items), encoding="utf-8")
     dump_yaml(resolved / "env.lock", {**kura_provenance(), "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled", last_step=0, total_steps=len(indexed_cases), current_case_id=None)
 
@@ -1620,7 +1574,7 @@ def launch_render(
     images_log.parent.mkdir(parents=True, exist_ok=True)
     if not isinstance(endpoint, str) or not endpoint:
         raise ValueError("render generator endpoint is empty")
-    client = ComfyUIClient(endpoint, int(frozen.get("render", {}).get("timeout_sec", 600)))
+    client = ComfyUIClient(endpoint, render_timeout_sec(frozen))
     # The user's ComfyUI is checked before the run is marked running, so a stopped
     # or different ComfyUI leaves the run compiled and launchable again.
     if resolved_executor == "local" and hasattr(client, "object_info"):

@@ -45,7 +45,6 @@ why, so it is not raised again.
 - 2026-10-14 | sd-scripts records | `training_state_contract_sd_scripts` reads an old run.yaml written with an alias (`architecture: flux`) as unsupported, which changes state publication for such a run still in flight across the upgrade | review of the selectors and decided-values pull request | P9
 - 2026-10-14 | guidance | AGENTS.md and the kura-core skill say values Kura only forwards pass through untouched, but leave out values Kura only records, which the ADR also covers | CodeRabbit on the authored-input foundation pull request | -
 - 2026-10-14 | job runner | With an invalid workspace.yaml and a pending local request, the runner logs "local launches wait" every poll, and `follow` tells the user another local run holds the slot | review of the run and workspace one-form pull request | P11
-- 2026-10-14 | render compute | A render run.yaml's `compute.gpu` is not validated (a string passes, and it is not refused on a local render); `requested_gpu_types` still reads one string for old records | review of the run and workspace one-form pull request | -
 - 2026-10-14 | HF token record | The RunPod launch records `HF_TOKEN` presence from `os.environ` directly (`runpod.py` launch records) instead of `declared_secret`, a second reader of the same decision | review of the run and workspace one-form pull request | P9
 - 2026-10-14 | workspace migrate | `comfyui.runpod.cloud_type` and a `storage.host_drive` written as `D:\\` are refused but not migrated | review of the run and workspace one-form pull request | P11
 - 2026-10-14 | old records | Viewing or planning an old frozen run whose `safety.*_gb` is a string or whose capacity duration is `2H` now fails in `_configured_gib` and `_parse_duration_seconds`; record readers need the old form | review of the run and workspace one-form pull request | P9
@@ -65,6 +64,7 @@ why, so it is not raised again.
 - 2026-10-16 | one owner | The retired ComfyUI key map is written in `comfyui_models.py` and `workspace.py`; `registry.py` conditions for `model_bundle` and `model_version` copy the architectures of `MUSUBI_BUNDLES` and `MODEL_VERSIONS`; `MODEL_FORMATS` copies the validator's list with no test tying them | review of the model selection pull request | -
 - 2026-10-16 | workspace message | An old-shape `comfyui.model_registry.models.<folder>` is refused as an unsupported key under a folder named `models`, without naming the removed wrapper or `kura workspace migrate` | review of the model selection pull request | P11
 - 2026-10-16 | resume copy | A Resume or `--from` copy of an older Musubi run that relied on the automatic bundle, a bundle alias, `model_bundle: none`, or a bundle-filled `model_downloads` fails at compile (safely); the refusal should say to name the bundle or Fork from Weight | review of the model selection pull request | P9
+- 2026-10-16 | workflow check | `kura workflow check` still validates promptset JSONL under `promptsets/`, though compile now refuses a new promptset render; check case queues instead, or drop the promptset check | render surface pull request | P11
 
 ## Rejected
 

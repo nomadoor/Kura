@@ -2286,7 +2286,7 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2330,7 +2330,7 @@ class RenderNotificationTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 123}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "schema_version": 1,
@@ -2339,7 +2339,7 @@ class RenderNotificationTests(unittest.TestCase):
                         "train_run": "train-1",
                         "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
-                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                        "cases": {"path": "promptsets/prompts.jsonl", "digest": None},
                     },
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
@@ -2405,14 +2405,14 @@ class RenderNotificationTests(unittest.TestCase):
                 path.mkdir(parents=True, exist_ok=True)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             workflow.write_text(json.dumps({"1": {"inputs": {"seed": 0}}}), encoding="utf-8")
-            prompts.write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            prompts.write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 1}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
                     "inputs": {
                         "train_run": "missing-train",
                         "workflow": {"path": "workflows/wf.json"},
-                        "promptset": {"path": "promptsets/prompts.jsonl"},
+                        "cases": {"path": "promptsets/prompts.jsonl"},
                     },
                     "workflow_patches": {"seed": {"node": "1", "field": "inputs.seed"}},
                 }),
@@ -2450,7 +2450,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "  clip_node: '4'\n",
                 encoding="utf-8",
             )
-            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 123}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "schema_version": 1,
@@ -2458,7 +2458,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "inputs": {
                         "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
-                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                        "cases": {"path": "promptsets/prompts.jsonl", "digest": None},
                     },
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
@@ -2599,11 +2599,11 @@ class RenderNotificationTests(unittest.TestCase):
             (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
             (workflow_dir / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}}}), encoding="utf-8")
             (workflow_dir / "wf.kura.yaml").write_text("lora_insert:\n  kind: typo\n  model_node: '1'\n", encoding="utf-8")
-            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 1}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
                     "workflow_patches": {},
@@ -2612,7 +2612,7 @@ class RenderNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader"):
+            with self.assertRaisesRegex(ValueError, "kind is model_only or model_clip"):
                 compile_render(root, run_dir)
 
     def test_comfyui_prepare_model_ready_logs_json_paths(self) -> None:
@@ -2752,7 +2752,7 @@ class RenderNotificationTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 123}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "schema_version": 1,
@@ -2760,7 +2760,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "inputs": {
                         "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
-                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                        "cases": {"path": "promptsets/prompts.jsonl", "digest": None},
                     },
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
@@ -2787,7 +2787,7 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(code, 1)
             stdout = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8")
             self.assertIn("render endpoint: http://127.0.0.1:8188", stdout)
-            self.assertIn("queued p1 seed=123 prompt_id=prompt-1", stdout)
+            self.assertIn("queued case=p1 index=1/1 prompt_id=prompt-1", stdout)
             self.assertIn("RuntimeError: render broke", stdout)
 
     def test_render_fails_when_comfyui_returns_no_images(self) -> None:
@@ -2806,14 +2806,14 @@ class RenderNotificationTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 123}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "schema_version": 1,
                     "type": "render",
                     "inputs": {
                         "workflow": {"path": "workflows/wf.json", "digest": None},
-                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                        "cases": {"path": "promptsets/prompts.jsonl", "digest": None},
                     },
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
@@ -2853,11 +2853,11 @@ class RenderNotificationTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
             (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "missing.safetensors"}}}), encoding="utf-8")
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2887,11 +2887,11 @@ class RenderNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2926,11 +2926,11 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: curated/toy.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -2976,11 +2976,11 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: direct.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy_text2image_api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy_text2image_api.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -3028,11 +3028,11 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: curated/toy.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
-                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "inputs": {"workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
@@ -3079,7 +3079,7 @@ class RenderNotificationTests(unittest.TestCase):
                 (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
-                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                         "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                         "executor": {"name": "runpod"},
                         "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
@@ -3240,7 +3240,7 @@ class RenderNotificationTests(unittest.TestCase):
                 (resolved / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
-                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                         "generator": {"name": "comfyui", "endpoint": ""},
                         "executor": {"name": "runpod"},
                         "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
@@ -3304,7 +3304,7 @@ class RenderNotificationTests(unittest.TestCase):
                 (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
-                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "cases": {"path": "promptsets/prompts.jsonl"}},
                         "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                         "executor": {"name": "local"},
                         "workflow_patches": {},
@@ -3390,7 +3390,7 @@ class RenderNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (workflow_dir / "wf.kura.yaml").write_text("lora_insert:\n  kind: model_only\n  model_node: '12'\n", encoding="utf-8")
-            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "values": {"prompt": "hello", "seed": 123}}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "schema_version": 1,
@@ -3398,7 +3398,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "inputs": {
                         "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
-                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                        "cases": {"path": "promptsets/prompts.jsonl", "digest": None},
                     },
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8189"},
                     "executor": {"name": "local"},
