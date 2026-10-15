@@ -32,11 +32,6 @@ from kura.workspace import plain_relative_folder, validate_workspace_config
 # promptset and a workflow can never silently disagree about which parameters exist.
 PROMPTSET_CORE_KEYS = frozenset({"id", "prompt", "negative_prompt", "seeds", "meta"})
 
-# Patch names whose value comes from the run, not from each promptset item.
-# `seed` is item-sourced but read from `seeds` / render.default_seed, and
-# `negative_prompt` stays optional for promptsets that do not set one.
-PATCHES_WITHOUT_ITEM_KEY = frozenset({"lora", "checkpoint", "model_patch", "seed", "negative_prompt"})
-
 # Core keys that must be bound when the promptset supplies them. Without a
 # binding the value is carried into filenames and images.jsonl while the
 # workflow renders its own hardcoded one.
@@ -282,14 +277,6 @@ def validate_patch_bindings(workflow: dict[str, Any], patches: Any) -> None:
             _set_path(probe, node, field, None)
         except ValueError as exc:
             raise ValueError(f"workflow_patches.{name} does not match this workflow: {exc}") from exc
-
-
-def _core_binding_required(name: str, items: list[dict[str, Any]], default_seed: Any) -> bool:
-    if name == "prompt":
-        return True
-    if name == "negative_prompt":
-        return any(str(item.get("negative_prompt", "")).strip() for item in items)
-    return default_seed is not None or any(item.get("seeds") for item in items)
 
 
 def patch_workflow(
@@ -553,8 +540,10 @@ def _stage_mode(value: Any, name: str, endpoint: str | None) -> str:
     cannot follow a link made in WSL, when it does not report its OS, or when
     Kura itself runs on Windows, where making a link needs privileges.
     """
-    # validate_workspace_config accepted only auto, symlink, or copy.
-    mode = "auto" if value is None else value
+    # Read from a frozen manifest, which an older Kura may have written in another spelling.
+    mode = str(value or "auto").strip().lower()
+    if mode not in ("auto", "symlink", "copy"):
+        raise ValueError(f"comfyui.{name} must be auto, symlink, or copy")
     if mode != "auto":
         return mode
     if os.name != "nt" and _endpoint_os(endpoint) == "posix":
@@ -674,16 +663,21 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     # Copy, not symlink: ComfyUI resolves LoadImage paths and rejects one that
     # leaves its input directory, so a symlinked input fails validation at queue
     # time even though a symlinked model loads fine.
-    mode = comfyui.get("input_stage_mode", "copy")
+    # Read from a frozen manifest, which an older Kura may have written in another spelling.
+    mode = str(comfyui.get("input_stage_mode") or "copy").strip().lower()
     if mode == "auto":
         mode = "copy"  # ComfyUI rejects symlinked LoadImage inputs
+    if mode not in ("symlink", "copy"):
+        raise ValueError("comfyui.input_stage_mode must be auto, symlink, or copy")
     if mode == "symlink":
         print(
             "warning: comfyui.input_stage_mode=symlink is set, but ComfyUI rejects symlinked LoadImage inputs "
             "(\"Invalid image file\"). Use copy unless this endpoint is known to accept them.",
             flush=True,
         )
-    cleanup = comfyui.get("input_stage_cleanup", "remove_after_render")
+    cleanup = str(comfyui.get("input_stage_cleanup") or "remove_after_render").strip().lower()
+    if cleanup not in ("remove_after_render", "keep"):
+        raise ValueError("comfyui.input_stage_cleanup must be remove_after_render or keep")
     plans: dict[str, dict[str, Any]] = {}
     for name in names:
         for source in sorted((run_dir / "resolved" / "images" / name).glob("*")):
@@ -927,7 +921,7 @@ def promptset(path: Path, *, require_prompt: bool = True) -> list[dict[str, Any]
     return prompts
 
 
-def _reconcile_case_values(cases: list[dict[str, Any]], patches: Any, *, default_seed: Any, workflow_fixed: Any, has_checkpoint_consumer: bool, requires_checkpoint: bool, strict_checkpoint: bool) -> None:
+def _reconcile_case_values(cases: list[dict[str, Any]], patches: Any, *, default_seed: Any, workflow_fixed: Any, has_checkpoint_consumer: bool, requires_checkpoint: bool) -> None:
     bound = set(patches) if isinstance(patches, dict) else set()
     fixed = set(normalized_workflow_fixed(workflow_fixed))
     unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
@@ -938,6 +932,8 @@ def _reconcile_case_values(cases: list[dict[str, Any]], patches: Any, *, default
         raise ValueError(f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}")
     if "seed" in fixed and default_seed is not None:
         raise ValueError("render.workflow_fixed includes seed, so render.default_seed must be null")
+    if default_seed is not None and "seed" not in bound:
+        raise ValueError("render.default_seed needs a workflow_patches.seed binding; without one the workflow renders its own seed")
     required = bound - ASSET_PATCH_NAMES - {"negative_prompt"}
     for case in cases:
         values = case["values"]
@@ -957,9 +953,9 @@ def _reconcile_case_values(cases: list[dict[str, Any]], patches: Any, *, default
         missing = sorted(required - set(values))
         if missing:
             raise ValueError(f"case {case['id']!r} has no value for workflow_patches: {', '.join(missing)}")
-        if strict_checkpoint and case.get("checkpoint") and not has_checkpoint_consumer:
+        if case.get("checkpoint") and not has_checkpoint_consumer:
             raise ValueError(f"case {case['id']!r} has a checkpoint but this workflow has no lora, checkpoint, or model_patch binding and no lora_insert")
-        if strict_checkpoint and requires_checkpoint and not case.get("checkpoint"):
+        if requires_checkpoint and not case.get("checkpoint"):
             raise ValueError(f"case {case['id']!r} requires a checkpoint because this workflow applies a lora, checkpoint, or model_patch")
 
 
@@ -1212,10 +1208,21 @@ SIDECAR_KEYS = frozenset({"source", "provenance", "models", "lora_insert"})
 DEFAULT_RENDER_TIMEOUT_SEC = 600
 
 
+def _refuse_missing_models(missing: list[dict[str, Any]], endpoint: str) -> None:
+    """A local render needs every model its workflow loads; compile and launch both refuse here."""
+    if missing:
+        labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
+        raise ValueError(
+            f"ComfyUI at {_redact_url_userinfo(endpoint)} does not have model(s) this workflow loads: {labels}. "
+            "Add them to that ComfyUI's model folders or change the workflow; a local render never downloads models."
+        )
+
+
 def render_timeout_sec(frozen: dict[str, Any]) -> int:
     """How long one ComfyUI request may take; local and RunPod renders both read it here."""
     render = frozen.get("render") if isinstance(frozen.get("render"), dict) else {}
-    return render.get("timeout_sec", DEFAULT_RENDER_TIMEOUT_SEC)
+    # Compile accepts only a whole number of at least 1; int() reads a manifest an older Kura froze.
+    return int(render.get("timeout_sec", DEFAULT_RENDER_TIMEOUT_SEC))
 
 
 def _validate_render_run_fields(run: dict[str, Any]) -> None:
@@ -1225,9 +1232,14 @@ def _validate_render_run_fields(run: dict[str, Any]) -> None:
         holder: Any = run
         for part in level.split(".") if level else ():
             holder = holder.get(part) if isinstance(holder, dict) else None
+        if level and holder is not None and not isinstance(holder, dict):
+            problems.append(f"{level} must be a mapping of {', '.join(sorted(keys))}, not {holder!r}")
+            continue
         for key in holder if isinstance(holder, dict) else ():
             if key not in keys:
                 problems.append(f"{level + '.' if level else ''}{key} is not a render run setting")
+    if problems:
+        raise ValueError("render run.yaml: " + "; ".join(problems))
     generator = run.get("generator") if isinstance(run.get("generator"), dict) else {}
     if generator.get("name", "comfyui") != "comfyui":
         problems.append(f"generator.name must be comfyui, not {generator['name']!r}")
@@ -1329,7 +1341,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             case["checkpoint"] = deepcopy(shared_checkpoint)
     has_checkpoint_consumer = bool(lora_insert) or any(name in patches for name in ASSET_PATCH_NAMES)
     requires_checkpoint = any(name in patches for name in ASSET_PATCH_NAMES)
-    _reconcile_case_values(cases, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed, has_checkpoint_consumer=has_checkpoint_consumer, requires_checkpoint=requires_checkpoint, strict_checkpoint=True)
+    _reconcile_case_values(cases, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed, has_checkpoint_consumer=has_checkpoint_consumer, requires_checkpoint=requires_checkpoint)
     _freeze_case_checkpoints(workspace, cases)
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     is_runpod = executor.get("name") == "runpod"
@@ -1383,12 +1395,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
                 print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {_redact_url_userinfo(endpoint)}: {exc}", flush=True)
             else:
                 visible, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
-                if missing:
-                    labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
-                    raise ValueError(
-                        f"ComfyUI at {_redact_url_userinfo(endpoint)} does not have model(s) this workflow loads: {labels}; "
-                        "add them to that ComfyUI's model folders, or change the workflow, then compile again"
-                    )
+                _refuse_missing_models(missing, endpoint)
                 frozen["comfyui_endpoint_identity"] = endpoint_fingerprint(object_info)
                 frozen["comfyui_required_models"] = {"visible": visible, "missing": missing}
     # Image freezing mutates resolved/ and the in-memory cases. Keep it
@@ -1590,13 +1597,7 @@ def launch_render(
                 "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
                 f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
             )
-        _, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
-        if missing:
-            labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
-            raise ValueError(
-                "ComfyUI endpoint cannot see workflow-required models: " + labels + ". "
-                "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
-            )
+        _refuse_missing_models(visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))[1], endpoint)
     if check_only:
         return 0
     stdout_log = run_dir / "logs" / "stdout.log"

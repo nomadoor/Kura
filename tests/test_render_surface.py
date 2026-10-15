@@ -42,6 +42,11 @@ class RenderSurfaceTests(unittest.TestCase):
             (lambda run: run["executor"].update(gpu="A40"), "executor.gpu is not a render run setting"),
             (lambda run: run["executor"].update(name="docker"), "executor.name must be local or runpod"),
             (lambda run: run.update(compute={"gpu": ["NVIDIA A40"]}), "a local run uses the local GPU"),
+            (lambda run: run["generator"].update(name="a1111"), "generator.name must be comfyui"),
+            (lambda run: run.update(executor="runpod"), "executor must be a mapping of name, not 'runpod'"),
+            (lambda run: run.update(compute=["NVIDIA A40"]), "compute must be a mapping of gpu"),
+            (lambda run: run.update(generator="comfyui"), "generator must be a mapping of endpoint, name"),
+            (lambda run: run["inputs"].update(workflow="workflows/wf.json"), "inputs.workflow must be a mapping of digest, path"),
         ):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
                 run_dir = self._run(Path(directory))
@@ -53,12 +58,26 @@ class RenderSurfaceTests(unittest.TestCase):
         for render, message in (
             ({"output_dir": "/tmp/out"}, "render.output_dir must be a folder inside the run"),
             ({"output_dir": "../elsewhere"}, "render.output_dir must be a folder inside the run"),
+            ({"output_dir": "C:out"}, "render.output_dir must be a folder inside the run"),
             ({"timeout_sec": 0}, "render.timeout_sec must be a whole number of seconds of at least 1, not 0"),
             ({"timeout_sec": "600"}, "render.timeout_sec must be a whole number"),
         ):
             with self.subTest(render=render), tempfile.TemporaryDirectory() as directory:
                 run_dir = self._run(Path(directory))
                 _edit_run(run_dir, lambda run: run["render"].update(render))
+                with self.assertRaisesRegex(ValueError, message):
+                    compile_render(Path(directory), run_dir)
+
+    def test_seed_values_reach_the_workflow_or_are_refused(self) -> None:
+        for change, message in (
+            (lambda run: (run["workflow_patches"].pop("seed"), run["render"].update(default_seed=42)), "render.default_seed needs a workflow_patches.seed binding"),
+            (lambda run: run["render"].update(workflow_fixed=["seed"]), "render.workflow_fixed and workflow_patches both claim seed"),
+            (lambda run: (run["workflow_patches"].pop("seed"), run["render"].update(workflow_fixed=["seed"], default_seed=42)), "includes seed, so render.default_seed must be null"),
+        ):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                run_dir = self._run(Path(directory))
+                (Path(directory) / "cases" / "render.jsonl").write_text(json.dumps({"id": "a", "values": {"prompt": "x", "negative_prompt": ""}}) + "\n", encoding="utf-8")
+                _edit_run(run_dir, change)
                 with self.assertRaisesRegex(ValueError, message):
                     compile_render(Path(directory), run_dir)
 

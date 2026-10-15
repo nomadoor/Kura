@@ -142,7 +142,8 @@ class RenderImageBindingTest(unittest.TestCase):
             with self.assertRaises(ValueError) as caught:
                 compile_render(root, run_dir)
             self.assertIn("height, width", str(caught.exception))
-            self.assertFalse((run_dir / "resolved" / "promptset_used.jsonl").exists())
+            self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
+            self.assertFalse((run_dir / "resolved" / "manifest.lock.yaml").exists())
 
     def test_compile_freezes_control_images_and_repoints_the_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -520,6 +521,10 @@ class WorkflowFixedRecordTest(unittest.TestCase):
                 root, patches={"prompt": {"node": "6", "field": "inputs.text"}},
                 items=[{"id": "case_a"}],
             )
+            run_yaml = run_dir / "run.yaml"
+            run = yaml.safe_load(run_yaml.read_text())
+            run["render"]["default_seed"] = None
+            run_yaml.write_text(yaml.safe_dump(run), encoding="utf-8")
             with self.assertRaises(ValueError) as caught:
                 compile_render(root, run_dir)
             self.assertIn("case 'case_a' has no value for workflow_patches: prompt", str(caught.exception))

@@ -65,6 +65,8 @@ why, so it is not raised again.
 - 2026-10-16 | workspace message | An old-shape `comfyui.model_registry.models.<folder>` is refused as an unsupported key under a folder named `models`, without naming the removed wrapper or `kura workspace migrate` | review of the model selection pull request | P11
 - 2026-10-16 | resume copy | A Resume or `--from` copy of an older Musubi run that relied on the automatic bundle, a bundle alias, `model_bundle: none`, or a bundle-filled `model_downloads` fails at compile (safely); the refusal should say to name the bundle or Fork from Weight | review of the model selection pull request | P9
 - 2026-10-16 | workflow check | `kura workflow check` still validates promptset JSONL under `promptsets/`, though compile now refuses a new promptset render; check case queues instead, or drop the promptset check | render surface pull request | P11
+- 2026-10-16 | render digests | `inputs.workflow.digest` and `inputs.cases.digest` are accepted but never compared: compile overwrites an authored digest that does not match, unlike the training dataset digest check | review of the render surface pull request (pre-existing) | P9
+- 2026-10-16 | render messages | A render run.yaml with a compiled-only key or an unknown `render` setting is refused before the other unknown keys are listed, so one compile does not name every problem | review of the render surface pull request | P11
 
 ## Rejected
 

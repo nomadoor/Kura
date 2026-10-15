@@ -373,10 +373,10 @@ render:
 A fixed parameter is one Kura does not control and cannot read back, so Kura
 claims nothing about it: `samples/images.jsonl` records it as `null` alongside
 the `workflow_fixed` list, and the images.jsonl/realization pair says plainly
-which parameters the run did not own. Fixing `seed` also stops case expansion —
-`render.default_seed` must be null, no item may carry `seeds`, each case renders
-once, and the file name drops its `_seed` segment. Otherwise Kura would queue one
-image per seed, name them apart, and record seeds that never reached the workflow.
+which parameters the run did not own. When `seed` is fixed, no case may set
+`seed` and `render.default_seed` must be null; `render.default_seed` otherwise
+needs a `workflow_patches.seed` binding, or Kura would record a seed that never
+reached the workflow.
 When `prompt` is workflow-fixed, cases may omit `prompt`; requiring a
 placeholder that is never rendered would make the file claim an input Kura does
 not own.
