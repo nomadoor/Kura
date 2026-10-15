@@ -416,6 +416,71 @@ class RenderCasesCompileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "inputs.checkpoint.path must be a non-empty path"):
                     compile_render(root, run_dir)
 
+    def test_a_render_evaluates_the_checkpoint_its_record_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            row["checkpoint"]["hash"] = "sha256:" + "0" * 64
+            run_dir = _workspace(root, cases=[row])
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            with self.assertRaisesRegex(ValueError, "checkpoint hash .* does not match"):
+                compile_render(root, run_dir)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            with self.assertRaisesRegex(ValueError, "is not a file"):
+                compile_render(root, run_dir)
+
+    def test_a_checkpoint_kura_cannot_stage_is_refused_not_passed_as_a_lora_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            (root / "workspace.yaml").write_text("comfyui:\n  input_dir: comfyui/input\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "set comfyui.lora_dir"):
+                compile_render(root, run_dir)
+
+    def test_a_base_model_checkpoint_binding_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run["workflow_patches"]["checkpoint"] = {"node": "4", "field": "inputs.ckpt_name"}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "choose the base model in the workflow itself"):
+                compile_render(root, run_dir)
+
+    def test_stage_cleanup_never_leaves_its_base_for_an_old_manifest(self) -> None:
+        from kura.render import remove_leftover_stages
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            outside = root / "shared" / "render-1-keep.safetensors"
+            outside.parent.mkdir()
+            outside.write_bytes(b"x")
+            (root / "loras").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "comfyui:\n  lora_dir: loras\n  lora_stage_subdir: ../shared\n", encoding="utf-8")
+            remove_leftover_stages(root, run_dir)
+            self.assertTrue(outside.exists())
+
+    def test_render_lora_stage_is_not_a_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row])
+            run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run.setdefault("render", {})["lora_stage"] = "off"
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "render has unsupported keys: lora_stage"):
+                compile_render(root, run_dir)
+
     def test_compile_refuses_an_empty_workspace_setting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

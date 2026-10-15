@@ -318,8 +318,9 @@ workflow_patches:
   strength:      {node: "17", field: inputs.strength}
 ```
 
-`lora`, `checkpoint`, and `model_patch` take their value from the case's
-`checkpoint`. Every other binding reads the key of the same name under the
+`lora` and `model_patch` take their value from the case's `checkpoint`, which
+Kura stages into ComfyUI's LoRA or model-patch folder. A base model is chosen in
+the workflow itself; `workflow_patches.checkpoint` is refused. Every other binding reads the key of the same name under the
 case's `values` mapping.
 A no-LoRA baseline and LoRA cases may share one queue when the workflow uses
 sidecar `lora_insert`: omit `checkpoint` from the baseline row and Kura leaves
@@ -393,8 +394,11 @@ that strength for the run: Kura sets it on the LoRA node bound by
 from the sidecar's `lora_insert`, where a strength written in the sidecar is
 otherwise kept. A strength bound per case in `workflow_patches` wins over both.
 The `render:` mapping accepts only `output_dir`, `timeout_sec`, `default_seed`,
-`workflow_fixed`, `lora_strength`, and `lora_stage`, and run.yaml may not set
-facts compile writes itself, such as `lora_insert`.
+`workflow_fixed`, and `lora_strength`, and run.yaml may not set facts compile
+writes itself, such as `lora_insert`. A local render stages every checkpoint
+into ComfyUI's LoRA or model-patch folder (`comfyui.lora_dir`,
+`comfyui.model_patches_dir`); a checkpoint it cannot stage is refused, and an
+authored checkpoint hash must match its file.
 
 ## Checks
 

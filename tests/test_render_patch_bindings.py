@@ -305,7 +305,7 @@ class RenderImageBindingTest(unittest.TestCase):
             source.write_bytes(b"control-a")
             with self.assertRaises(ValueError) as caught:
                 compile_render(root, run_dir)
-            self.assertIn("comfyui.model_patches_dir is required", str(caught.exception))
+            self.assertIn("set comfyui.model_patches_dir", str(caught.exception))
             self.assertFalse((run_dir / "resolved" / "images").exists())
 
     def test_explicit_empty_seeds_fall_back_to_default_seed(self) -> None:

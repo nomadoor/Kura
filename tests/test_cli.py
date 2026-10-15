@@ -2737,7 +2737,7 @@ class RenderNotificationTests(unittest.TestCase):
             output_run = root / "runs" / "train-1" / "outputs"
             for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
                 path.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("comfyui: {}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("comfyui:\n  lora_dir: comfyui/loras\n", encoding="utf-8")
             checkpoint = output_run / "example.safetensors"
             checkpoint.write_bytes(b"fake-lora")
             (workflow_dir / "wf.json").write_text(
