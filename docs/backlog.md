@@ -67,6 +67,7 @@ why, so it is not raised again.
 - 2026-10-16 | workflow check | `kura workflow check` still validates promptset JSONL under `promptsets/`, though compile now refuses a new promptset render; check case queues instead, or drop the promptset check | render surface pull request | P11
 - 2026-10-16 | render digests | `inputs.workflow.digest` and `inputs.cases.digest` are accepted but never compared: compile overwrites an authored digest that does not match, unlike the training dataset digest check | review of the render surface pull request (pre-existing) | P9
 - 2026-10-16 | render messages | A render run.yaml with a compiled-only key or an unknown `render` setting is refused before the other unknown keys are listed, so one compile does not name every problem | review of the render surface pull request | P11
+- 2026-10-16 | resume copy | A Resume of an older sd-scripts run whose frozen dataset settings hold a `null` or a subset without `dataset_id` is refused when the derived run compiles; the refusal should say to fix the settings in a Fork from Weight | review of the dataset files pull request | P9
 
 ## Rejected
 

@@ -32,8 +32,9 @@ DATASET_YAML_KEYS = frozenset({"items_schema_version", "id", "description", "tri
 def dataset_yaml_problems(metadata: dict[str, Any]) -> list[str]:
     """What a manifest-v2 dataset.yaml holds that Kura does not read, or holds in another form."""
     problems = [f"{key} is not a dataset.yaml setting (use {', '.join(sorted(DATASET_YAML_KEYS))})" for key in sorted(map(str, set(metadata) - DATASET_YAML_KEYS))]
-    if "trigger_word" in metadata and (not isinstance(metadata["trigger_word"], str) or not metadata["trigger_word"].strip()):
-        problems.append(f"trigger_word must be a non-empty string, not {metadata['trigger_word']!r}")
+    trigger = metadata.get("trigger_word")
+    if "trigger_word" in metadata and (not isinstance(trigger, str) or not trigger.strip() or trigger != trigger.strip()):
+        problems.append(f"trigger_word must be a non-empty string with no space at either end, not {trigger!r}")
     stats = metadata.get("stats", {})
     if not isinstance(stats, dict) or set(stats) - {"count"} or ("count" in stats and (isinstance(stats["count"], bool) or not isinstance(stats["count"], int))):
         problems.append(f"stats takes only count, a whole number, not {stats!r}")
@@ -474,15 +475,20 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     metadata = load_yaml(metadata_path)
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
-    # Propose a dataset.yaml only when the authored one does not declare v2 yet.
+    # Propose a dataset.yaml when the authored one does not declare v2 yet, or holds what v2 refuses.
     issues: list[str] = []
     proposed_metadata = None
-    if not declares_items_v2(metadata):
+    if not declares_items_v2(metadata) or dataset_yaml_problems(metadata):
         proposed_metadata = {key: value for key, value in metadata.items() if key in DATASET_YAML_KEYS}
         proposed_metadata["items_schema_version"] = 2
         dropped = sorted(map(str, set(metadata) - DATASET_YAML_KEYS))
+        stats = proposed_metadata.get("stats")
+        if isinstance(stats, dict) and set(stats) - {"count"}:
+            dropped += [f"stats.{key}" for key in sorted(map(str, set(stats) - {"count"}))]
+            proposed_metadata["stats"] = {key: value for key, value in stats.items() if key == "count"}
         if dropped:
             issues.append("dataset.yaml keys manifest v2 does not read were left out of the candidate: " + ", ".join(dropped))
+        issues.extend(f"dataset.yaml candidate needs review: {problem}" for problem in dataset_yaml_problems(proposed_metadata))
     root = directory.resolve(strict=True)
     legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues, v2_rows_expected=proposed_metadata is None)
     choices: list[tuple[str, list[Path]]] = []
@@ -514,8 +520,10 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
                 issues.append(f"{relative}: generated/imported id {sample_id!r} is not unique; author must choose stable IDs")
             generated_ids.add(sample_id)
             target = {"type": "file", "role": "target", "path": relative}
-            if legacy is not None and isinstance(legacy.get("hash"), str):
-                target["sha256"] = legacy["hash"]
+            if legacy is not None and "hash" in legacy:
+                digest = _legacy_sha256(legacy["hash"], f"{relative}: legacy hash", issues)
+                if digest is not None:
+                    target["sha256"] = digest
             references = [target]
             if legacy is not None:
                 for field, role in (
@@ -537,8 +545,10 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
                         continue
                     reference = {"type": "file", "role": role, "path": legacy_path}
                     hash_field = f"{role}_hash"
-                    if isinstance(legacy.get(hash_field), str):
-                        reference["sha256"] = legacy[hash_field]
+                    if hash_field in legacy:
+                        digest = _legacy_sha256(legacy[hash_field], f"{relative}: legacy {hash_field}", issues)
+                        if digest is not None:
+                            reference["sha256"] = digest
                     references.append(reference)
             items.append({
                 "id": sample_id,
@@ -549,6 +559,15 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     if unmatched:
         issues.append("legacy rows do not match drafted media: " + ", ".join(unmatched))
     return {"dataset": root.name, "dataset_yaml": proposed_metadata, "items": items, "issues": issues}
+
+
+def _legacy_sha256(value: Any, context: str, issues: list[str]) -> str | None:
+    """A legacy row's digest in the one v2 form; a legacy row wrote it with a `sha256:` prefix."""
+    digest = value.removeprefix("sha256:") if isinstance(value, str) else None
+    if digest is None or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        issues.append(f"{context} {value!r} is not a SHA-256 digest; it was left out")
+        return None
+    return digest
 
 
 def _legacy_draft_rows(path: Path, issues: list[str], *, v2_rows_expected: bool) -> dict[str, dict[str, Any]]:

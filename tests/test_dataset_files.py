@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 
 from kura.backends import validate_backend_config
-from kura.backends.sd_scripts_datasets import _sd_scripts_authored_subsets
 from kura.dataset_manifest import draft_manifest, measure_manifest
+from kura.yamlio import dump_yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backend_fixtures import with_required  # noqa: E402
@@ -73,8 +73,33 @@ class DatasetFileTests(unittest.TestCase):
             with self.subTest(general=general), self.assertRaisesRegex(ValueError, message):
                 validate_backend_config(run({"general": general, "datasets": [{"subsets": subsets}]}))
         validate_backend_config(run({"general": {"resolution": 512}, "datasets": [{"subsets": subsets}]}))
-        with self.assertRaisesRegex(ValueError, "every dataset_config subset names its manifest dataset with dataset_id"):
-            _sd_scripts_authored_subsets("tiny", ["tiny"], [({}, [{"num_repeats": 1}])])
+        for config, message in (
+            ({"datasets": [{"subsets": [{"num_repeats": 1}]}]}, r"datasets\[0\].subsets\[0\] must name its manifest dataset with dataset_id"),
+            ({"general": None, "datasets": [{"subsets": subsets}]}, "dataset_config.general must be a mapping"),
+            ({"datasets": [{"subsets": [None]}]}, r"subsets\[0\] must be a mapping"),
+        ):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, message):
+                validate_backend_config(run(config))
+
+    def test_a_drafted_legacy_dataset_validates(self) -> None:
+        import hashlib
+
+        digest = hashlib.sha256(b"png").hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = _dataset(Path(directory), "schema_version: 1\nid: tiny\nlayout: {image_dir: images}\nstats: {count: 1, person_count: 1}\n")
+            (dataset / "items.jsonl").write_text(json.dumps({"id": "a", "path": "images/a.png", "caption": "x", "hash": f"sha256:{digest}"}) + "\n", encoding="utf-8")
+            proposal = draft_manifest(dataset)
+            self.assertEqual(proposal["dataset_yaml"], {"id": "tiny", "stats": {"count": 1}, "items_schema_version": 2})
+            self.assertIn("stats.person_count", " ".join(proposal["issues"]))
+            self.assertEqual(proposal["items"][0]["files"][0]["sha256"], digest)
+            (dataset / "dataset.yaml").write_text(dump_yaml(proposal["dataset_yaml"]), encoding="utf-8")
+            (dataset / "items.jsonl").write_text("".join(json.dumps(item) + "\n" for item in proposal["items"]), encoding="utf-8")
+            measure_manifest(dataset)
+
+    def test_a_v2_dataset_yaml_with_refused_keys_gets_a_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            proposal = draft_manifest(_dataset(Path(directory), "items_schema_version: 2\nid: tiny\nmodality: image\n"))
+        self.assertEqual(proposal["dataset_yaml"], {"items_schema_version": 2, "id": "tiny"})
 
 
 if __name__ == "__main__":

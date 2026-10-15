@@ -425,7 +425,7 @@ class DatasetManifestTests(unittest.TestCase):
             preview = json.loads(stdout.getvalue())
             self.assertEqual(preview["items"], [{
                 "id": "001",
-                "files": [{"type": "file", "role": "target", "path": "001.png", "sha256": digest}],
+                "files": [{"type": "file", "role": "target", "path": "001.png", "sha256": digest.removeprefix("sha256:")}],
                 "caption": {"text": "Vivi, full body"},
             }])
             self.assertNotIn("not imported", " ".join(preview["issues"]))

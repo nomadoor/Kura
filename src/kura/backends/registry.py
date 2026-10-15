@@ -432,8 +432,9 @@ _GENERAL_UNAVAILABLE = {
 def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> None:
     """Reject authored values that have no declared home on the selected adapter.
 
-    `frozen` reads a manifest an earlier compile accepted: it is checked as it is, except for
-    values that became required after it was frozen.
+    `frozen` reads a manifest an earlier compile accepted: its keys and values are checked as
+    they are, but not values that became required, or the dataset settings an older compile
+    accepted in another form.
     """
 
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
@@ -519,7 +520,7 @@ def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> Non
                 + ", ".join(f"{flag} (backend.config.{field})" for flag, field in shadowed)
                 + "; write the declared field instead"
             )
-    if adapter.validate_authored is not None:
+    if adapter.validate_authored is not None and not frozen:
         adapter.validate_authored(run)
     # Last, so a more specific refusal of a value the run did write comes first.
     if "command" not in native and not frozen:
