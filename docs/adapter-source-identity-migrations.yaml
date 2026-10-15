@@ -8,6 +8,86 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: forwarded-values-sd-scripts-2026-10-15
+    backend: sd-scripts
+    reason: 'Forwarded values reach sd-scripts exactly as written, through one argv renderer, with no Kura default and no Kura type check: learning_rate, optimizer_type, mixed_precision, (for LoRA) network_dim and network_alpha, the FLUX.1 timestep_sampling, guidance_scale, and model_prediction_type, and the Anima LLLite timestep_sampling and discrete_flow_shift are required, SDXL text-encoder learning rates take the trainer''s one --text_encoder_lr (the numbered flags Kura emitted do not exist upstream, and no smoke set them), and an omitted Anima LoRA flow value or LLLite network value is the trainer''s own default. Every recorded smoke wrote the required values and each FLUX.1 and Anima flow value, so it builds the same training: the argv now leaves out gradient_accumulation_steps 1, the LLLite scalars, and the cache flag a disk cache implies, each of which equals the pinned trainer''s own default or implication.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: a5551b769a28b1551c64e8306b1ad7077d0077bef087093e276e444d34901bac
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 2946d874e7c0f746261703ec419be49b062d219c16994e25235c243e4623e844
+  - id: forwarded-values-musubi-tuner-2026-10-15
+    backend: musubi-tuner
+    reason: 'Forwarded values reach Musubi Tuner exactly as written, through one argv renderer, with no Kura default: learning_rate, optimizer_type, network_dim, network_alpha, the timestep_sampling of FLUX.2, Wan, Krea 2, and HiDream-O1, Wan''s discrete_flow_shift, and the MiniMax-H3 guidance values are required, and the fp8 alias and Krea 2''s implied fp8_scaled are removed. The smoke and conformance harness now writes the values Kura used to fill (adamw8bit, save_precision bf16, each timestep_sampling, Wan''s shift 3.0), so a recorded smoke trains the same model: what remains different is the data-loader worker count and persistence and the text-encoder cache batch size, which change loading speed and memory, not what is trained.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 0b779b915c33b21afc5e31c65869b7b7635452ddb95cd7cca468dc28d77ca7b1
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8b7e7c140aeb3324096910a5abfa13e8c8cffa27b65f0a8cd1959470bb87d788
+  - id: forwarded-values-ai-toolkit-2026-10-15
+    backend: ai-toolkit
+    reason: 'A backend.config key written with no value is refused, and the plan display keeps an authored 0 or false instead of falling through to the native config or baseline. The native config a recorded smoke compiles is unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 3b07d9fece9c9f7fd6b133f10cbf4a474b726b24601190aa7dca81d8d5c5fd46
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 63649a2557364ccf58fc0a88d85f9ab4467a341ce9f1d762c695c02bdeff087b
   - id: one-form-envelope-sd-scripts-2026-10-14
     backend: sd-scripts
     reason: 'Run, compute, workspace, and environment settings are read in one form

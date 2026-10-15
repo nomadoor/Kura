@@ -29,6 +29,7 @@ from kura.training_artifacts import trained_steps
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.platform_support import DATASET_IO, posix_only  # noqa: E402
+from tests.backend_fixtures import with_required  # noqa: E402
 from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, publish_source, sd_scripts_run  # noqa: E402
 
 
@@ -565,10 +566,10 @@ class FreshRunPlanTests(unittest.TestCase):
                 "compute": {"executor": "runpod"},
                 "safety": {"allow_many_checkpoints": True},
                 "sampling": {"cadence_steps": 10},
-                "backend": {"name": "musubi-tuner", "config": {
+                "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
                     "architecture": "flux2", "model_bundle": "none", "save_every_n_steps": 50,
                     "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}},
-                }},
+                })},
             }
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             previous = Path.cwd()

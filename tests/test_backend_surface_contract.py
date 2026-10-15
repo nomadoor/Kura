@@ -28,6 +28,7 @@ from kura.media_types import frozen_suffixes
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.platform_support import DATASET_IO, posix_only
+from tests.backend_fixtures import with_required
 
 
 class BackendSurfaceContractTests(unittest.TestCase):
@@ -70,7 +71,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.subTest(backend=backend, config=config):
                 with self.assertRaisesRegex(ValueError, f"{backend} backend.config field.* must be true or false: {re.escape(named)}"):
                     validate_backend_config({"backend": {"name": backend, "config": config}})
-        validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"architecture": "hidream_o1", "precache": False}}})
+        validate_backend_config({"backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {"architecture": "hidream_o1", "precache": False})}})
         for name, adapter in BACKENDS.items():
             with self.subTest(declared=name):
                 self.assertLessEqual(adapter.surface.boolean_fields, adapter.surface.fields)
@@ -201,25 +202,25 @@ class BackendSurfaceContractTests(unittest.TestCase):
         runs = {
             "musubi-tuner": {
                 "id": "legacy-musubi",
-                "backend": {"name": "musubi-tuner", "config": {
+                "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
                     "architecture": "flux2", "model_version": "klein-base-4b",
                     "model_paths": {
                         "dit": "/models/dit", "vae": "/models/vae",
                         "text_encoder": "/models/text",
                     },
-                }},
+                })},
                 "model": {"base": "example/model"},
                 "datasets": [{"id": "tiny"}],
                 "recipe": {"steps": 1, "seed": 1},
             },
             "sd-scripts": {
                 "id": "legacy-sd",
-                "backend": {"name": "sd-scripts", "config": {
+                "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", {
                     "architecture": "sd15", "model_paths": {"base": "/models/base"},
                     "dataset_config": {"datasets": [{"subsets": [{
                         "dataset_id": "tiny", "num_repeats": 1,
                     }]}]},
-                }},
+                })},
                 "model": {"base": "/models/base"},
                 "datasets": [{"id": "tiny"}],
                 "recipe": {"steps": 1, "seed": 1},
@@ -404,7 +405,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ("musubi-tuner", {"architecture": "flux_2", "fp8_base": True}, "architecture 'flux_2' is not accepted"),
             ("musubi-tuner", {"architecture": "Flux2", "f1": True}, "architecture 'Flux2' is not accepted"),
             ("musubi-tuner", {"architecture": 5, "fp8_base": True}, "architecture 5 is not accepted"),
-            ("musubi-tuner", {"architecture": "unknownarch", "fp8": True}, "architecture 'unknownarch' is not accepted"),
+            ("musubi-tuner", {"architecture": "unknownarch", "fp8_base": True}, "architecture 'unknownarch' is not accepted"),
             ("ai-toolkit", {"model_arch": "FLUX"}, "model_arch 'FLUX' is not accepted"),
             ("ai-toolkit", {"model_arch": "flex1"}, "model_arch 'flex1' is not accepted"),
             ("ai-toolkit", {"model_arch": "sd1:portrait"}, "model_arch 'sd1:portrait' is not accepted"),
@@ -480,9 +481,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.subTest(config=config):
                 with self.assertRaisesRegex(ValueError, "not applicable"):
                     validate_backend_config({"backend": {"name": "musubi-tuner", "config": config}})
-        validate_backend_config({"backend": {"name": "musubi-tuner", "config": {
+        validate_backend_config({"backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
             "architecture": "krea2", "convrot_int8": True, "convrot_int8_bwd": True,
-        }}})
+        })}})
 
     def test_ai_toolkit_legacy_dataset_selectors_name_manifest_migrations(self) -> None:
         base = {
@@ -540,6 +541,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             validate_backend_config(run)
 
         del run["backend"]["config"]["h3_guidance_loss_scale"]
+        run["backend"]["config"] = with_required("musubi-tuner", run["backend"]["config"])
         validate_backend_config(run)
 
     def test_musubi_minimax_h3_loss_fields_reject_the_wrong_loss_method(self) -> None:
@@ -557,9 +559,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_musubi_minimax_h3_architecture_requirements_guard_batch_and_resolution(self) -> None:
         base = {
-            "backend": {"name": "musubi-tuner", "config": {
+            "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
                 "architecture": "minimax_h3",
-            }},
+            })},
             "datasets": [{"id": "tiny"}],
         }
         invalid = (
@@ -588,7 +590,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         validate_backend_config(explicit)
 
         unrelated = deepcopy(base)
-        unrelated["backend"]["config"].update({
+        unrelated["backend"]["config"] = with_required("musubi-tuner", {
             "architecture": "wan",
             "batch_size": 2,
             "resolution": [960, 550],
@@ -1276,8 +1278,14 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run = json.loads(json.dumps(base))
+            # Written or not, a field the architecture declares is never set through extra_args.
+            run["backend"]["config"].update({"extra_args": ["--weighting_scheme", "none"]})
+            with self.assertRaisesRegex(ValueError, r"--weighting_scheme \(backend.config.weighting_scheme\); write the declared field instead"):
+                BACKENDS["musubi-tuner"].compile(run, root / "unset")
+
+            run = json.loads(json.dumps(base))
             run["backend"]["config"].update({"blocks_to_swap": 1, "extra_args": ["--blocks_to_swap", "2"]})
-            with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+            with self.assertRaisesRegex(ValueError, "write the declared field instead"):
                 BACKENDS["musubi-tuner"].compile(run, root / "args")
 
             run = json.loads(json.dumps(base))
@@ -1287,7 +1295,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "gradient_checkpointing": True,
                 "extra_args": ["--block_swap_h2d_only"],
             })
-            with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+            with self.assertRaisesRegex(ValueError, "write the declared field instead"):
                 BACKENDS["musubi-tuner"].compile(run, root / "h2d")
 
     @posix_only(DATASET_IO)
@@ -1298,16 +1306,16 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
             "musubi-tuner": {
-                "id": "surface-musubi", "backend": {"name": "musubi-tuner", "config": {
+                "id": "surface-musubi", "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
                     "architecture": "flux2", "model_version": "klein-base-4b", "optimizer_type": "adamw8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2, "batch_size": 1, "resolution": [64, 64], "blocks_to_swap": 1,
                     "model_paths": {"dit": "/models/dit", "vae": "/models/vae", "text_encoder": "/models/text"},
-                }}, "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                })}, "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
             "sd-scripts": {
-                "id": "surface-sd", "backend": {"name": "sd-scripts", "config": {
+                "id": "surface-sd", "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", {
                     "architecture": "sd15", "optimizer_type": "AdamW8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2, "model_paths": {"base": "/models/base"},
                     "dataset_config": {"datasets": [{"subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}]},
-                }}, "model": {"base": "/models/base"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                })}, "model": {"base": "/models/base"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
         }
         with tempfile.TemporaryDirectory() as directory:

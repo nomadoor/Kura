@@ -27,6 +27,7 @@ from kura.backends.sd_scripts import compile_sd_scripts
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.backend_fixtures import with_required
 from tests.platform_support import DATASET_IO, posix_only
 
 
@@ -52,6 +53,7 @@ def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
                     "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "sample", "num_repeats": 1}]}],
                 },
                 "network_dim": 8,
+                "network_alpha": 1,
                 "learning_rate": 0.0001,
                 "optimizer_type": "AdamW8bit",
                 "mixed_precision": "bf16",
@@ -60,6 +62,8 @@ def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
     }
     if mode == "controlnet_lllite":
         run["backend"]["config"].pop("network_dim")
+        run["backend"]["config"].pop("network_alpha")
+    run["backend"]["config"] = with_required("sd-scripts", run["backend"]["config"])
     return run
 
 
@@ -384,25 +388,24 @@ class SdScriptsBackendTests(unittest.TestCase):
             ("sdxl", "lora"): ("sdxl_train_network.py", "networks.lora"),
             ("flux1", "lora"): ("flux_train_network.py", "networks.lora_flux"),
             ("anima", "lora"): ("anima_train_network.py", "networks.lora_anima"),
-            ("anima", "controlnet_lllite"): ("anima_train_control_net_lllite.py", "--lllite_target_layers self_attn_q"),
+            ("anima", "controlnet_lllite"): ("anima_train_control_net_lllite.py",),
         }
         for selector, fragments in expected.items():
             with self.subTest(selector=selector):
-                script = command_sd_scripts(base_run(*selector))["argv"][2]
+                run = base_run(*selector)
+                validate_backend_config(run)
+                script = command_sd_scripts(run)["argv"][2]
                 for fragment in fragments:
                     self.assertIn(fragment, script)
                 if selector == ("anima", "lora"):
                     self.assertIn('"--max_train_steps", "1"', script)
                     self.assertIn('"--mixed_precision", "bf16"', script)
-                    self.assertIn('"--gradient_accumulation_steps", "1"', script)
-                elif selector[0] != "anima":
-                    self.assertIn("--max_train_steps 1", script)
-                    self.assertIn("--mixed_precision bf16", script)
-                    self.assertIn("--gradient_accumulation_steps 1", script)
                 else:
                     self.assertIn("--max_train_steps 1", script)
                     self.assertIn("--mixed_precision bf16", script)
-                    self.assertIn("--gradient_accumulation_steps 1", script)
+                # An unset value is the trainer's own default; Kura adds no flag for it.
+                self.assertNotIn("--gradient_accumulation_steps", script)
+                self.assertNotIn("--lllite_target_layers", script)
 
     def test_anima_publication_converts_all_checkpoints_and_has_non_output_recovery(self) -> None:
         script = command_sd_scripts(base_run("anima", "lora"))["argv"][2]
@@ -628,8 +631,8 @@ class SdScriptsBackendTests(unittest.TestCase):
     def test_anima_lllite_rejects_unsupported_memory_modes(self) -> None:
         run = base_run("anima", "controlnet_lllite")
         run["backend"]["config"]["blocks_to_swap"] = 2
-        with self.assertRaisesRegex(ValueError, "does not support"):
-            command_sd_scripts(run)
+        with self.assertRaisesRegex(ValueError, "blocks_to_swap is not applicable"):
+            validate_backend_config(run)
 
     def test_anima_lllite_requires_paired_image_mode(self) -> None:
         run = base_run("anima", "controlnet_lllite")
@@ -725,44 +728,49 @@ class SdScriptsBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported key.*netwrok_dim"):
             validate_backend_config(run)
 
-    def test_flow_matching_defaults_are_explicit_and_visible_in_plan_data(self) -> None:
+    def test_flow_values_pass_through_and_unset_anima_lora_ones_are_the_trainers_own(self) -> None:
         flux = base_run("flux1")
         flux_command = command_sd_scripts(flux)["argv"][2]
-        self.assertIn("--timestep_sampling flux_shift", flux_command)
-        self.assertIn("--guidance_scale 1.0", flux_command)
-        self.assertIn("--model_prediction_type raw", flux_command)
+        for flag in ("--timestep_sampling flux_shift", "--guidance_scale 1.0", "--model_prediction_type raw"):
+            self.assertIn(flag, flux_command)
+        self.assertNotIn("--discrete_flow_shift", flux_command)
         self.assertEqual(display_sd_scripts(flux)["flow_matching"]["timestep_sampling"], "flux_shift")
+        for field in ("timestep_sampling", "guidance_scale", "model_prediction_type"):
+            unset = base_run("flux1")
+            del unset["backend"]["config"][field]
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"requires {field} for architecture='flux1'"):
+                validate_backend_config(unset)
+
+        anima = command_sd_scripts(base_run("anima", "lora"))["argv"][2]
+        for flag in ("--timestep_sampling", "--discrete_flow_shift", "--attn_mode"):
+            self.assertNotIn(flag, anima)
 
         lllite = base_run("anima", "controlnet_lllite")
+        lllite["backend"]["config"].update({"attn_mode": "flash", "discrete_flow_shift": 1.0})
         lllite_command = command_sd_scripts(lllite)["argv"][2]
+        self.assertEqual(lllite_command.count("--attn_mode flash"), 1)
         self.assertIn("--timestep_sampling shift", lllite_command)
-        self.assertIn("--discrete_flow_shift 3.0", lllite_command)
-        self.assertIn("--attn_mode sdpa", lllite_command)
-        self.assertEqual(display_sd_scripts(lllite)["flow_matching"]["discrete_flow_shift"], 3.0)
-        self.assertEqual(display_sd_scripts(lllite)["memory"]["attn_mode"], "sdpa")
-
-        lllite["backend"]["config"]["attn_mode"] = "flash"
-        self.assertEqual(command_sd_scripts(lllite)["argv"][2].count("--attn_mode flash"), 1)
+        self.assertIn("--discrete_flow_shift 1.0", lllite_command)
+        self.assertEqual(display_sd_scripts(lllite)["flow_matching"]["discrete_flow_shift"], 1.0)
 
     def test_anima_lllite_rejects_fp8_base(self) -> None:
         run = base_run("anima", "controlnet_lllite")
         run["backend"]["config"]["fp8_base"] = True
-        with self.assertRaisesRegex(ValueError, "does not support fp8_base"):
-            command_sd_scripts(run)
+        with self.assertRaisesRegex(ValueError, "fp8_base is not applicable"):
+            validate_backend_config(run)
 
-    def test_invalid_architecture_specific_parameter_is_rejected(self) -> None:
+    def test_a_mistyped_forwarded_value_reaches_the_trainer_unchanged(self) -> None:
         run = base_run("flux1")
         run["backend"]["config"]["timestep_sampling"] = "typo"
-        with self.assertRaisesRegex(ValueError, "timestep_sampling must be one of"):
-            command_sd_scripts(run)
-        anima = base_run("anima", "controlnet_lllite")
-        anima["backend"]["config"]["attn_mode"] = "typo"
-        with self.assertRaisesRegex(ValueError, "attn_mode must be one of"):
-            command_sd_scripts(anima)
+        run["backend"]["config"]["learning_rate"] = "fast"
+        validate_backend_config(run)
+        command = command_sd_scripts(run)["argv"][2]
+        self.assertIn("--timestep_sampling typo", command)
+        self.assertIn("--learning_rate fast", command)
         sd15 = base_run()
         sd15["backend"]["config"]["guidance_scale"] = 1.0
-        with self.assertRaisesRegex(ValueError, "only valid for FLUX"):
-            command_sd_scripts(sd15)
+        with self.assertRaisesRegex(ValueError, "guidance_scale is not applicable"):
+            validate_backend_config(sd15)
 
     def test_explicit_command_is_escape_hatch_and_rejects_secrets(self) -> None:
         run = {"id": "native", "backend": {"name": "sd-scripts", "config": {"command": {"cwd": "/opt/sd-scripts", "argv": ["python", "future.py"], "env": {}}}}}

@@ -41,6 +41,21 @@ def _when_any(field: str, *clauses: dict[str, tuple[Any, ...]]) -> FieldConditio
 
 
 @dataclass(frozen=True)
+class RequiredField:
+    """A field an author must write when a selector clause matches: it changes training quality,
+    and the trainer would otherwise fall back to `otherwise`, a generic default no one chose for
+    this model (read in the pinned trainer source, cited there)."""
+
+    field: str
+    when_any: tuple[tuple[tuple[str, tuple[Any, ...]], ...], ...]
+    otherwise: str
+
+
+def _required(field: str, otherwise: str, *clauses: dict[str, tuple[Any, ...]]) -> RequiredField:
+    return RequiredField(field, tuple(tuple(clause.items()) for clause in clauses) or ((),), otherwise)
+
+
+@dataclass(frozen=True)
 class BackendSurface:
     """The adapter-owned authoring vocabulary accepted by Kura."""
 
@@ -58,6 +73,8 @@ class BackendSurface:
     integer_minimums: tuple[tuple[str, int], ...] = ()
     # Other fields Kura decides from, besides the selectors above; escape hatches may not set them.
     decided: frozenset[str] = frozenset()
+    # Fields with no upstream baseline that an author must write; Kura adds no training default.
+    required: tuple[RequiredField, ...] = ()
 
     @property
     def decided_fields(self) -> frozenset[str]:
@@ -77,6 +94,9 @@ class BackendSurface:
             raise ValueError("conditional backend fields must be declared exactly once")
         if self.decided_fields - self.fields:
             raise ValueError("decided backend fields are not declared: " + ", ".join(sorted(self.decided_fields - self.fields)))
+        required = [item.field for item in self.required]
+        if len(required) != len(set(required)) or set(required) - self.fields:
+            raise ValueError("required backend fields must name distinct declared fields")
         choice_fields = [field for field, _ in self.config_value_choices]
         if len(choice_fields) != len(set(choice_fields)) or set(choice_fields) - self.fields:
             raise ValueError("backend config value choices must name distinct declared fields")
@@ -160,7 +180,7 @@ MUSUBI_SURFACE = BackendSurface(
     fields=frozenset({
         "architecture", "batch_size",
         "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "dataset_options", "discrete_flow_shift",
-        "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "flatten_groups", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
+        "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "flatten_groups", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
         "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing", "gradient_checkpointing_cpu_offload",
         "h3_guidance_loss_scale", "h3_guidance_loss_sigma_min", "h3_loss_method",
         "h3_teacher_condition_sigma_max", "h3_teacher_condition_sigma_min", "h3_teacher_conditions",
@@ -179,13 +199,24 @@ MUSUBI_SURFACE = BackendSurface(
     escape_hatches=frozenset({"command", "extra_args"}),
     boolean_fields=frozenset({
         "block_swap_h2d_only", "convrot_int8", "f1",
-        "flatten_groups", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te", "fp8_text_encoder", "fp8_vl",
+        "flatten_groups", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te", "fp8_text_encoder", "fp8_vl",
         "gradient_checkpointing", "gradient_checkpointing_cpu_offload", "include_turbo_dit", "one_frame",
         "one_frame_no_2x", "one_frame_no_4x", "precache", "quantized_qwen", "remove_first_image_from_target",
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only",
     }),
     integer_minimums=(("save_every_n_steps", 1), ("gradient_accumulation_steps", 1), ("prune_checkpoints_before_step", 1)),
     decided=frozenset({"lr_scheduler"}),
+    # Generic defaults of the pinned trainer (v0.3.5), shared by every architecture.
+    required=(
+        _required("learning_rate", "2e-6 (training/parser_common.py:323)"),
+        _required("optimizer_type", "'', read as AdamW (training/parser_common.py:310)"),
+        _required("network_dim", "4 (networks/lora.py:420)"),
+        _required("network_alpha", "1 (training/parser_common.py:561)"),
+        _required("timestep_sampling", "sigma (training/parser_common.py:444)", {"architecture": ("flux2", "wan", "krea2", "hidream_o1")}),
+        _required("discrete_flow_shift", "1.0 (training/parser_common.py:464)", {"architecture": ("wan",)}),
+        _required("h3_guidance_loss_scale", "0.0, no guidance loss (minimax_h3_train_network.py:1750)", {"architecture": ("minimax_h3",), "h3_loss_method": ("guidance",)}),
+        _required("h3_guidance_loss_sigma_min", "0.0 (minimax_h3_train_network.py:1764)", {"architecture": ("minimax_h3",), "h3_loss_method": ("guidance",)}),
+    ),
     config_value_choices=(
         ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
         ("h3_loss_method", ("guidance", "teacher_matching", "training_adapter")),
@@ -194,14 +225,16 @@ MUSUBI_SURFACE = BackendSurface(
         ("precache", True), ("one_frame", False), ("h3_loss_method", "guidance"),
         ("convrot_int8", False), ("gradient_checkpointing", False),
     ),
-    unavailable=(("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),),
+    unavailable=(
+        ("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),
+        ("fp8", "use fp8_base; Musubi Tuner's --fp8 belongs to its generation scripts, not training"),
+    ),
     conditions=(
         _when("convrot_int8_bwd", architecture=("krea2",), convrot_int8=(True,)),
         _when("convrot_int8", architecture=("krea2",)),
         _when("discrete_flow_shift", architecture=("wan",)),
         _when("dit_dtype", architecture=("ideogram4",)),
         _when("f1", architecture=("framepack",)),
-        _when("fp8", architecture=("flux_kontext", "framepack")),
         _when("fp8_base", architecture=("flux2", "wan", "krea2", "qwen_image", "zimage", "flux_kontext", "hidream_o1", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")),
         _when("fp8_scaled", architecture=("flux2", "krea2", "qwen_image", "zimage", "flux_kontext", "hidream_o1", "hunyuan_video_1_5", "framepack", "kandinsky5")),
         _when_any("fp8_llm", {"architecture": ("zimage", "framepack")}, {"architecture": ("hunyuan_video",), "precache": (True,)}),
@@ -277,6 +310,24 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 1), ("gradient_accumulation_steps", 1)),
     decided=frozenset({"lr_scheduler"}),
+    # Defaults of the pinned trainer (37a1cbb) that no one chose for the model: shared ones, and
+    # FLUX.1 and Anima LLLite flow values whose argparse defaults differ from what upstream's own
+    # guides train with (docs/flux_train_network.md:144-146, docs/anima_train_control_net_lllite.md:112-113).
+    # Anima LoRA flow values and the LLLite network values left unset take the trainer's own defaults.
+    required=(
+        _required("learning_rate", "2e-6 (library/args.py:87)"),
+        _required("optimizer_type", "AdamW (library/optimizer.py:53)"),
+        _required("mixed_precision", "no, full fp32 (library/args.py:367)"),
+        _required("network_dim", "4 (networks/lora.py:429)", {"mode": ("lora",)}),
+        _required("network_alpha", "1 (train_network.py:1926)", {"mode": ("lora",)}),
+        _required(
+            "timestep_sampling", "sigma for FLUX.1 (library/flux_train_utils.py:780), sigmoid for Anima LLLite (library/anima_train_utils.py:103)",
+            {"architecture": ("flux1",)}, {"architecture": ("anima",), "mode": ("controlnet_lllite",)},
+        ),
+        _required("guidance_scale", "3.5 (library/flux_train_utils.py:773)", {"architecture": ("flux1",)}),
+        _required("model_prediction_type", "sigma_scaled (library/flux_train_utils.py:793)", {"architecture": ("flux1",)}),
+        _required("discrete_flow_shift", "1.0 (library/anima_train_utils.py:97)", {"architecture": ("anima",), "mode": ("controlnet_lllite",)}),
+    ),
     config_value_choices=(
         ("architecture", tuple(sorted({architecture for architecture, _ in ENTRYPOINTS}))),
         ("mode", tuple(sorted({mode for _, mode in ENTRYPOINTS}))),
@@ -309,8 +360,7 @@ SD_SCRIPTS_SURFACE = BackendSurface(
         _when("network_train_unet_only", mode=("lora",)),
         _when("qwen_image_vae_2d", architecture=("anima",)),
         _when("sigmoid_scale", architecture=("flux1", "anima")),
-        _when("text_encoder_lr1", architecture=("sdxl",)),
-        _when("text_encoder_lr2", architecture=("sdxl",)),
+        _when("text_encoder_lr", architecture=("sdxl",)),
         _when("timestep_sampling", architecture=("flux1", "anima")),
         _when("unet_lr", architecture=("sdxl",)),
         _when("unsloth_offload_checkpointing", mode=("lora",)),
@@ -376,8 +426,12 @@ _GENERAL_UNAVAILABLE = {
 }
 
 
-def validate_backend_config(run: dict[str, Any]) -> None:
-    """Reject authored values that have no declared home on the selected adapter."""
+def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> None:
+    """Reject authored values that have no declared home on the selected adapter.
+
+    `frozen` reads a manifest an earlier compile accepted: it is checked as it is, except for
+    values that became required after it was frozen.
+    """
 
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
@@ -399,6 +453,12 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             f"{adapter.name} backend.config contains unsupported key(s): " + ", ".join(details)
             + f". Run `kura run capabilities {adapter.name}` for accepted fields."
         )
+    empty = sorted(key for key, value in native.items() if value is None)
+    if empty:
+        raise ValueError(
+            f"{adapter.name} backend.config key(s) written with no value: " + ", ".join(empty)
+            + "; write a value, or remove the key to leave it unset"
+        )
     for field, choices in adapter.surface.config_value_choices:
         if field in native and native[field] not in choices:
             raise ValueError(
@@ -418,26 +478,67 @@ def validate_backend_config(run: dict[str, Any]) -> None:
                 f"{adapter.name} backend.config.{field} must be an integer of at least {minimum}, not {value!r}"
             )
     defaults = dict(adapter.surface.selector_defaults)
+
+    def matches(clauses: tuple[tuple[tuple[str, tuple[Any, ...]], ...], ...]) -> bool:
+        return any(all(native.get(name, defaults.get(name)) in allowed for name, allowed in clause) for clause in clauses)
+
+    def selected(clauses: tuple[tuple[tuple[str, tuple[Any, ...]], ...], ...]) -> str:
+        return ", ".join(
+            f"{selector}={native.get(selector, defaults.get(selector))!r}"
+            for selector in sorted({name for clause in clauses for name, _ in clause})
+        )
+
     for condition in adapter.surface.conditions:
-        if condition.field not in native:
-            continue
-        matched = False
-        resolved_clauses: list[str] = []
-        for clause in condition.when_any:
-            matched = matched or all(native.get(selector, defaults.get(selector)) in allowed for selector, allowed in clause)
-            resolved_clauses.append(" and ".join(f"{selector}=" + "|".join(repr(item) for item in allowed) for selector, allowed in clause))
-        if not matched:
-            selected = ", ".join(
-                f"{selector}={native.get(selector, defaults.get(selector))!r}"
-                for selector in sorted({name for clause in condition.when_any for name, _ in clause})
-            )
+        if condition.field in native and not matches(condition.when_any):
+            resolved_clauses = [
+                " and ".join(f"{selector}=" + "|".join(repr(item) for item in allowed) for selector, allowed in clause)
+                for clause in condition.when_any
+            ]
             raise ValueError(
-                f"{adapter.name} backend.config.{condition.field} is not applicable for {selected}; "
+                f"{adapter.name} backend.config.{condition.field} is not applicable for {selected(condition.when_any)}; "
                 f"it requires " + " or ".join(resolved_clauses)
                 + f". Run `kura run capabilities {adapter.name}` for field applicability."
             )
+    applicable = adapter.surface.fields - {item.field for item in adapter.surface.conditions} | {
+        item.field for item in adapter.surface.conditions if matches(item.when_any)
+    }
+    extra_args = native.get("extra_args")
+    if isinstance(extra_args, list):
+        # A field the selected architecture declares has one place: the field, never extra_args.
+        shadowed = sorted({
+            (argument.split("=", 1)[0], field)
+            for argument in extra_args if isinstance(argument, str) and argument.startswith("--")
+            for field in applicable if f"--{field}".startswith(argument.split("=", 1)[0])
+        })
+        if shadowed:
+            raise ValueError(
+                f"{adapter.name} backend.config.extra_args sets "
+                + ", ".join(f"{flag} (backend.config.{field})" for flag, field in shadowed)
+                + "; write the declared field instead"
+            )
     if adapter.validate_authored is not None:
         adapter.validate_authored(run)
+    # Last, so a more specific refusal of a value the run did write comes first.
+    if "command" not in native and not frozen:
+        missing = [
+            item for item in adapter.surface.required if item.field not in native and matches(item.when_any)
+        ]
+        if missing:
+            raise ValueError(
+                f"{adapter.name} backend.config requires "
+                + "; ".join(
+                    item.field + (f" for {selected(item.when_any)}" if selected(item.when_any) else "")
+                    + f" (the trainer would otherwise use {item.otherwise})"
+                    for item in missing
+                )
+                + ". Kura adds no training default; write the value you chose."
+                + (
+                    " A Resume continues its source exactly, so a source compiled while Kura still filled"
+                    " these values cannot be resumed; write them and create a Fork from Weight instead."
+                    if run.get("continuation") is not None else ""
+                )
+                + f" Run `kura run capabilities {adapter.name}` for required fields."
+            )
 
 
 def backend_capabilities(name: Any) -> dict[str, Any]:
@@ -465,5 +566,12 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
         "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
         "integer_minimums": dict(adapter.surface.integer_minimums),
         "decided_fields": sorted(adapter.surface.decided_fields),
+        "required_fields": {
+            item.field: {
+                "when_any": [{selector: list(allowed) for selector, allowed in clause} for clause in item.when_any],
+                "otherwise": item.otherwise,
+            }
+            for item in adapter.surface.required
+        },
         "boolean_fields": sorted(adapter.surface.boolean_fields),
     }

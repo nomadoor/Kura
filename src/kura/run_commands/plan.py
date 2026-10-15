@@ -1047,7 +1047,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     run = _load_yaml(source)
     if run.get("type") != "train":
         raise ValueError("kura run plan is for train runs; render runs use `kura render` commands")
-    validate_backend_config(run)
+    validate_backend_config(run, frozen=source == manifest)
 
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}

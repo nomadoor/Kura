@@ -1127,6 +1127,11 @@ def _nested(mapping: Any, *path: str) -> Any:
     return value
 
 
+def _first_set(*values: Any) -> Any:
+    """The first value that is set; 0 and false are values, only None is unset."""
+    return next((value for value in values if value is not None), None)
+
+
 def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display."""
     native = _ai_toolkit_backend_override(run)
@@ -1142,32 +1147,25 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     return {
         "baseline": baseline,
         "architecture": native.get("model_arch") or _nested(config, "model", "arch"),
-        "rank": native.get("network_dim") or _nested(config, "network", "linear"),
-        "alpha": native.get("network_alpha") or _nested(config, "network", "linear_alpha"),
-        "learning_rate": native.get("learning_rate") or _nested(config, "train", "lr") or filled["train"].get("lr"),
+        "rank": _first_set(native.get("network_dim"), _nested(config, "network", "linear")),
+        "alpha": _first_set(native.get("network_alpha"), _nested(config, "network", "linear_alpha")),
+        "learning_rate": _first_set(native.get("learning_rate"), _nested(config, "train", "lr"), filled["train"].get("lr")),
         "scheduler": native.get("lr_scheduler"),
-        "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
+        "batch_size": _first_set(native.get("batch_size"), _nested(config, "train", "batch_size")),
         "gradient_accumulation_steps": native.get("gradient_accumulation_steps"),
-        "bypass_guidance_embedding": (
-            native.get("bypass_guidance_embedding")
-            if "bypass_guidance_embedding" in native
-            else _nested(config, "train", "bypass_guidance_embedding")
-        ),
+        "bypass_guidance_embedding": _first_set(native.get("bypass_guidance_embedding"), _nested(config, "train", "bypass_guidance_embedding")),
         "model_edit": native.get("model_edit"),
-        "extras_name_or_path": (
-            native.get("extras_name_or_path")
-            if "extras_name_or_path" in native
-            else _nested(config, "model", "extras_name_or_path")
-        ),
-        "resolution": first_dataset.get("resolution") or native.get("resolution"),
+        "extras_name_or_path": _first_set(native.get("extras_name_or_path"), _nested(config, "model", "extras_name_or_path")),
+        "resolution": _first_set(first_dataset.get("resolution"), native.get("resolution")),
         "dataset": deepcopy(dataset_config),
-        "optimizer": native.get("optimizer_type") or _nested(config, "train", "optimizer") or filled["train"].get("optimizer"),
-        "precision": native.get("mixed_precision") or _nested(config, "train", "dtype") or filled["train"].get("dtype"),
+        "optimizer": _first_set(native.get("optimizer_type"), _nested(config, "train", "optimizer"), filled["train"].get("optimizer")),
+        "precision": _first_set(native.get("mixed_precision"), _nested(config, "train", "dtype"), filled["train"].get("dtype")),
         "memory": {
-            "gradient_checkpointing": native.get("gradient_checkpointing") if "gradient_checkpointing" in native else _nested(config, "train", "gradient_checkpointing"),
-            "low_vram": native.get("low_vram") if "low_vram" in native else _nested(config, "model", "low_vram") if _nested(config, "model", "low_vram") is not None else filled["model"].get("low_vram"),
-            "quantize": native.get("quantize") if "quantize" in native else _nested(config, "model", "quantize") if _nested(config, "model", "quantize") is not None else filled["model"].get("quantize"),
-            "quantize_te": native.get("quantize_te") if "quantize_te" in native else _nested(config, "model", "quantize_te") if _nested(config, "model", "quantize_te") is not None else filled["model"].get("quantize_te"),
+            "gradient_checkpointing": _first_set(native.get("gradient_checkpointing"), _nested(config, "train", "gradient_checkpointing")),
+            **{
+                key: _first_set(native.get(key), _nested(config, "model", key), filled["model"].get(key))
+                for key in ("low_vram", "quantize", "quantize_te")
+            },
         },
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
