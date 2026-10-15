@@ -336,9 +336,10 @@ def _validate_field(value: Any, spec: dict[str, Any], *, field: str) -> None:
             raise ValueError(f"sd-scripts {field} must be at most {maximum:g}")
         return
     if kind == "resolution":
-        values = value if isinstance(value, (list, tuple)) else [value]
-        if len(values) not in (1, 2) or any(isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in values):
-            raise ValueError(f"sd-scripts {field} must be a positive integer or a two-item positive integer resolution")
+        # The two forms sd-scripts reads: one side, or [width, height].
+        values = value if isinstance(value, list) else [value]
+        if (isinstance(value, list) and len(values) != 2) or any(isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in values):
+            raise ValueError(f"sd-scripts {field} must be a positive integer or [width, height], not {value!r}")
         return
     raise AssertionError(f"unknown sd-scripts dataset field type: {kind}")
 
@@ -361,10 +362,12 @@ def _clean_keys(values: Any, specs: dict[str, dict[str, Any]], *, field: str) ->
                 "an optional manifest group on the authored subset"
             )
         raise ValueError(f"sd-scripts {field} contains unsupported key(s): " + ", ".join(unknown))
-    clean = {key: value for key, value in values.items() if value is not None}
-    for key, value in clean.items():
+    empty = sorted(key for key, value in values.items() if value is None)
+    if empty:
+        raise ValueError(f"sd-scripts {field} key(s) written with no value: {', '.join(empty)}; write a value, or remove the key")
+    for key, value in values.items():
         _validate_field(value, specs[key], field=f"{field}.{key}")
-    return clean
+    return dict(values)
 
 
 def _text_cache_enabled(native: dict[str, Any]) -> bool:
@@ -511,11 +514,9 @@ def _sd_scripts_authored_subsets(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     candidates: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     for native_dataset, subsets in cleaned_datasets:
-        matching = [
-            subset for subset in subsets
-            if subset.get("dataset_id") == dataset_id
-            or subset.get("dataset_id") is None and len(declared_ids) == 1
-        ]
+        if any("dataset_id" not in subset for subset in subsets):
+            raise ValueError("sd-scripts every dataset_config subset names its manifest dataset with dataset_id")
+        matching = [subset for subset in subsets if subset["dataset_id"] == dataset_id]
         if matching:
             if len(matching) != len(subsets):
                 raise ValueError("sd-scripts one native dataset block cannot mix manifest datasets")

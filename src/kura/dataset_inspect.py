@@ -146,7 +146,8 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
 def dataset_trigger_word(dataset_path: Path) -> str | None:
     """The trigger word a dataset declares in dataset.yaml, if any."""
     value = _load_dataset_yaml(dataset_path / "dataset.yaml").get("trigger_word")
-    return value.strip() if isinstance(value, str) and value.strip() else None
+    # Validation refuses a trigger word that is not a non-empty string; inspect reads any dataset.
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _load_dataset_yaml(path: Path) -> dict[str, Any]:

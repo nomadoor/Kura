@@ -24,6 +24,24 @@ ORDINARY_DATASET_SUFFIXES = {".caption", ".json", ".jsonl", ".md", ".txt", ".yam
 CAPTION_SUFFIXES = (".txt", ".caption")
 
 
+# Every key a manifest-v2 dataset.yaml may hold; `description` is free text Kura only shows.
+# `stats.count` is compared with the observed sample count.
+DATASET_YAML_KEYS = frozenset({"items_schema_version", "id", "description", "trigger_word", "excluded_files", "excluded_directories", "stats"})
+
+
+def dataset_yaml_problems(metadata: dict[str, Any]) -> list[str]:
+    """What a manifest-v2 dataset.yaml holds that Kura does not read, or holds in another form."""
+    problems = [f"{key} is not a dataset.yaml setting (use {', '.join(sorted(DATASET_YAML_KEYS))})" for key in sorted(map(str, set(metadata) - DATASET_YAML_KEYS))]
+    if "trigger_word" in metadata and (not isinstance(metadata["trigger_word"], str) or not metadata["trigger_word"].strip()):
+        problems.append(f"trigger_word must be a non-empty string, not {metadata['trigger_word']!r}")
+    stats = metadata.get("stats", {})
+    if not isinstance(stats, dict) or set(stats) - {"count"} or ("count" in stats and (isinstance(stats["count"], bool) or not isinstance(stats["count"], int))):
+        problems.append(f"stats takes only count, a whole number, not {stats!r}")
+    if "description" in metadata and not isinstance(metadata["description"], str):
+        problems.append("description must be text")
+    return problems
+
+
 def declares_items_v2(metadata: Any) -> bool:
     """Whether a parsed dataset.yaml declares manifest v2 (the integer 2, not 2.0 or true)."""
     return isinstance(metadata, dict) and type(metadata.get("items_schema_version")) is int and metadata["items_schema_version"] == 2
@@ -142,10 +160,10 @@ def _reference(
     if assertion is not None:
         if not isinstance(assertion, str):
             raise ValueError(f"{context}: sha256 must be a string")
-        expected = assertion.removeprefix("sha256:")
-        if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
-            raise ValueError(f"{context}: invalid sha256 assertion")
-        if digest != expected:
+        # One form, as every *_sha256 record field: 64 lowercase hex digits, no prefix.
+        if len(assertion) != 64 or any(character not in "0123456789abcdef" for character in assertion):
+            raise ValueError(f"{context}: sha256 must be 64 lowercase hex digits with no prefix, not {assertion!r}")
+        if digest != assertion:
             raise ValueError(f"{context}: sha256 assertion does not match {logical}")
     return logical, physical, digest, stat, content
 
@@ -275,6 +293,9 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
     if not declares_items_v2(metadata):
         raise ValueError("dataset.yaml requires items_schema_version: 2")
+    problems = dataset_yaml_problems(metadata)
+    if problems:
+        raise ValueError("dataset.yaml: " + "; ".join(problems))
     # A run selects a dataset by its directory name. A different declared id
     # would record one name while training another, so the two must agree.
     # The unresolved name is compared so a symlinked dataset directory is not
@@ -454,8 +475,14 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
     # Propose a dataset.yaml only when the authored one does not declare v2 yet.
-    proposed_metadata = None if declares_items_v2(metadata) else {**metadata, "items_schema_version": 2}
     issues: list[str] = []
+    proposed_metadata = None
+    if not declares_items_v2(metadata):
+        proposed_metadata = {key: value for key, value in metadata.items() if key in DATASET_YAML_KEYS}
+        proposed_metadata["items_schema_version"] = 2
+        dropped = sorted(map(str, set(metadata) - DATASET_YAML_KEYS))
+        if dropped:
+            issues.append("dataset.yaml keys manifest v2 does not read were left out of the candidate: " + ", ".join(dropped))
     root = directory.resolve(strict=True)
     legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues, v2_rows_expected=proposed_metadata is None)
     choices: list[tuple[str, list[Path]]] = []
