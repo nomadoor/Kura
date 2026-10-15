@@ -14,6 +14,7 @@ from kura.yamlio import dump_yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backend_fixtures import with_required  # noqa: E402
+from platform_support import DATASET_IO, posix_only  # noqa: E402
 
 
 def _dataset(root: Path, metadata: str, reference: dict | None = None) -> Path:
@@ -27,6 +28,7 @@ def _dataset(root: Path, metadata: str, reference: dict | None = None) -> Path:
 
 
 class DatasetFileTests(unittest.TestCase):
+    @posix_only(DATASET_IO)
     def test_a_v2_dataset_yaml_refuses_keys_kura_does_not_read(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             accepted = _dataset(Path(directory), "items_schema_version: 2\nid: tiny\ndescription: free text\ntrigger_word: vivi\nstats: {count: 1}\n")
@@ -41,6 +43,7 @@ class DatasetFileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     measure_manifest(_dataset(Path(directory), metadata))
 
+    @posix_only(DATASET_IO)
     def test_a_file_digest_has_one_form(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             import hashlib
@@ -81,6 +84,7 @@ class DatasetFileTests(unittest.TestCase):
             with self.subTest(config=config), self.assertRaisesRegex(ValueError, message):
                 validate_backend_config(run(config))
 
+    @posix_only(DATASET_IO)
     def test_a_drafted_legacy_dataset_validates(self) -> None:
         import hashlib
 
