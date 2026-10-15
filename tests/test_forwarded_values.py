@@ -1,0 +1,151 @@
+"""Forwarded values reach the trainer as written; values without an upstream baseline are required."""
+
+from __future__ import annotations
+
+import re
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from kura.backends import BACKENDS, backend_capabilities, validate_backend_config
+from kura.backends.shared import argv_value
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.backend_fixtures import with_required  # noqa: E402
+from tests.platform_support import DATASET_IO, posix_only  # noqa: E402
+
+
+def _run(backend: str, config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"forwarded-{backend}", "type": "train",
+        "model": {"base": "/models/base" if backend == "sd-scripts" else "example/model"},
+        "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+        "backend": {"name": backend, "config": config},
+    }
+
+
+ARGV_RUNS = {
+    "sd-scripts": lambda config: _run("sd-scripts", {
+        "architecture": "sd15", "model_paths": {"base": "/models/base"},
+        "dataset_config": {"datasets": [{"subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}]},
+        **config,
+    }),
+    "musubi-tuner": lambda config: _run("musubi-tuner", {
+        "architecture": "flux2", "model_version": "klein-base-4b", "timestep_sampling": "flux2_shift",
+        "model_paths": {"dit": "/models/dit", "vae": "/models/vae", "text_encoder": "/models/text"},
+        **config,
+    }),
+}
+
+
+def _compiled_argv(run: dict[str, Any], destination: Path) -> str:
+    freeze_fixture(run, destination)
+    return " ".join(BACKENDS[run["backend"]["name"]].compile(run, destination)["argv"])
+
+
+# The pinned AI-Toolkit loader (toolkit/config.py:54-65 in the image digest pinned in
+# kura.images), copied onto a subclass so the test leaves PyYAML's SafeLoader untouched.
+class _PinnedAiToolkitLoader(yaml.SafeLoader):
+    pass
+
+
+_PinnedAiToolkitLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile("""^(?:
+     [-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+    |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+    |\\.[0-9_]+(?:[eE][-+][0-9]+)?
+    |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
+    |[-+]?\\.(?:inf|Inf|INF)
+    |\\.(?:nan|NaN|NAN))$""", re.X),
+    list("-+0123456789."),
+)
+
+
+class ForwardedValueTests(unittest.TestCase):
+    def test_one_function_renders_every_value_as_argv(self) -> None:
+        self.assertEqual(argv_value("--flag", True), ["--flag"])
+        self.assertEqual(argv_value("--flag", False), [])
+        self.assertEqual(argv_value("--lr", 1e-4), ["--lr", "0.0001"])
+        self.assertEqual(argv_value("--n", 0), ["--n", "0"])
+        self.assertEqual(argv_value("--args", ["a=1", 2]), ["--args", "a=1", "2"])
+        with self.assertRaisesRegex(ValueError, "not a mapping"):
+            argv_value("--args", {"a": 1})
+
+    @posix_only(DATASET_IO)
+    def test_zero_false_and_a_mistyped_value_reach_every_argv_trainer_as_written(self) -> None:
+        written = {
+            "learning_rate": 0, "network_dim": 0, "network_alpha": 1e-4, "optimizer_type": "NotAnOptimizer",
+            "gradient_checkpointing": False,
+        }
+        extra = {"sd-scripts": {"mixed_precision": "bf16"}, "musubi-tuner": {"max_data_loader_n_workers": 0}}
+        for backend, build in ARGV_RUNS.items():
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                run = build({**written, **extra[backend]})
+                validate_backend_config(run)
+                argv = _compiled_argv(run, Path(directory) / backend)
+                for flag in ("--learning_rate 0", "--network_dim 0", "--network_alpha 0.0001", "--optimizer_type NotAnOptimizer"):
+                    self.assertIn(flag, argv)
+                self.assertNotIn("--gradient_checkpointing", argv)
+                if backend == "musubi-tuner":
+                    self.assertIn("--max_data_loader_n_workers 0", argv)
+
+    def test_an_omitted_required_value_is_refused_naming_the_field_and_the_trainer_default(self) -> None:
+        for backend, build in ARGV_RUNS.items():
+            with self.subTest(backend=backend):
+                run = build({})
+                run["backend"]["config"] = with_required(backend, run["backend"]["config"])
+                validate_backend_config(run)
+                del run["backend"]["config"]["learning_rate"]
+                with self.assertRaisesRegex(ValueError, r"requires learning_rate \(the trainer would otherwise use 2e-6 \(.*\)\)\. Kura adds no training default"):
+                    validate_backend_config(run)
+        lllite = ARGV_RUNS["sd-scripts"]({"architecture": "anima", "mode": "controlnet_lllite"})
+        lllite["backend"]["config"]["model_paths"] = {"dit": "/models/dit", "qwen3": "/models/qwen3", "vae": "/models/vae"}
+        validate_backend_config({**lllite, "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", lllite["backend"]["config"])}})
+        self.assertNotIn("network_dim", with_required("sd-scripts", lllite["backend"]["config"]))
+
+    def test_capabilities_list_each_required_value_with_the_default_it_replaces(self) -> None:
+        sd_scripts = backend_capabilities("sd-scripts")["required_fields"]
+        self.assertEqual(sd_scripts["network_dim"]["when_any"], [{"mode": ["lora"]}])
+        self.assertIn("library/args.py:87", sd_scripts["learning_rate"]["otherwise"])
+        musubi = backend_capabilities("musubi-tuner")["required_fields"]
+        self.assertEqual(musubi["timestep_sampling"]["when_any"], [{"architecture": ["flux2", "wan", "krea2", "hidream_o1"]}])
+        self.assertEqual(backend_capabilities("ai-toolkit")["required_fields"], {})
+
+    def test_a_key_written_with_no_value_is_refused_on_every_backend(self) -> None:
+        for backend, config in (
+            ("sd-scripts", {"architecture": "sd15", "learning_rate": None}),
+            ("musubi-tuner", {"architecture": "wan", "network_dim": None}),
+            ("ai-toolkit", {"model_arch": "sdxl", "learning_rate": None}),
+        ):
+            with self.subTest(backend=backend):
+                with self.assertRaisesRegex(ValueError, r"key\(s\) written with no value: (learning_rate|network_dim); write a value, or remove the key"):
+                    validate_backend_config({"backend": {"name": backend, "config": config}, "model": {"base": "x/y"}})
+
+    @posix_only(DATASET_IO)
+    def test_the_pinned_ai_toolkit_loader_reads_the_values_as_written(self) -> None:
+        run = _run("ai-toolkit", {
+            "model_arch": "sdxl", "learning_rate": 1e-5, "network_dim": 0, "network_alpha": 1e-4,
+            "gradient_checkpointing": False, "low_vram": False,
+        })
+        validate_backend_config(run)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            freeze_fixture(run, destination, target="sample.png")
+            BACKENDS["ai-toolkit"].compile(run, destination)
+            text = (destination / "ai-toolkit.yaml").read_text(encoding="utf-8")
+        process = yaml.load(text, Loader=_PinnedAiToolkitLoader)["config"]["process"][0]
+        self.assertEqual(process["train"]["lr"], 1e-5)
+        self.assertIs(process["train"]["gradient_checkpointing"], False)
+        self.assertEqual(process["network"]["linear"], 0)
+        self.assertEqual(process["network"]["linear_alpha"], 1e-4)
+        self.assertIs(process["model"]["low_vram"], False)
+
+
+if __name__ == "__main__":
+    unittest.main()

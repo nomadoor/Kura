@@ -23,6 +23,7 @@ from kura.provenance import artifact_pinning
 from kura.run_envelope import backend_config, common_recipe
 from kura.backends import BACKENDS
 from tests.platform_support import POSIX_PATHS, posix_only
+from tests.backend_fixtures import with_required
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
@@ -88,7 +89,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 if backend == "ai-toolkit":
                     run["backend"]["config"] = {"model_arch": "sdxl", "network_dim": 4, "network_alpha": 4, "learning_rate": 0.0001, "batch_size": 1}
                 else:
-                    run["backend"]["config"] = {"architecture": "flux2", "model_version": "klein-base-4b", "network_dim": 4, "learning_rate": 0.0001, "resolution": [64, 64], "batch_size": 1, "model_paths": {"dit": "/workspace/cache/models/dit.safetensors", "vae": "/workspace/cache/models/vae.safetensors", "text_encoder": "/workspace/cache/models/text.safetensors"}}
+                    run["backend"]["config"] = with_required(backend, {"architecture": "flux2", "model_version": "klein-base-4b", "network_dim": 4, "learning_rate": 0.0001, "resolution": [64, 64], "batch_size": 1, "model_paths": {"dit": "/workspace/cache/models/dit.safetensors", "vae": "/workspace/cache/models/vae.safetensors", "text_encoder": "/workspace/cache/models/text.safetensors"}})
                     models = root / "cache" / "models"
                     models.mkdir(parents=True, exist_ok=True)
                     for name in ("dit.safetensors", "vae.safetensors", "text.safetensors"):
@@ -137,8 +138,8 @@ class AgentIndependentCliTests(unittest.TestCase):
                     (models / name).write_bytes(b"model")
                 run["backend"]["config"] = {
                     "ai-toolkit": {"model_arch": "sdxl", "network_dim": 4, "network_alpha": 4, "learning_rate": 0.0001, "batch_size": 1},
-                    "musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-4b", "network_dim": 4, "learning_rate": 0.0001, "resolution": [64, 64], "batch_size": 1, "model_paths": {"dit": "/workspace/cache/models/dit.safetensors", "vae": "/workspace/cache/models/vae.safetensors", "text_encoder": "/workspace/cache/models/text.safetensors"}},
-                    "sd-scripts": {"architecture": "sd15", "mode": "lora", "network_dim": 4, "learning_rate": 0.0001, "model_paths": {"base": "/workspace/cache/models/base.safetensors"}, "dataset_config": {"general": {"resolution": [64, 64], "caption_extension": ".txt"}, "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}]}},
+                    "musubi-tuner": with_required(backend, {"architecture": "flux2", "model_version": "klein-base-4b", "network_dim": 4, "learning_rate": 0.0001, "resolution": [64, 64], "batch_size": 1, "model_paths": {"dit": "/workspace/cache/models/dit.safetensors", "vae": "/workspace/cache/models/vae.safetensors", "text_encoder": "/workspace/cache/models/text.safetensors"}}),
+                    "sd-scripts": with_required(backend, {"architecture": "sd15", "mode": "lora", "network_dim": 4, "learning_rate": 0.0001, "model_paths": {"base": "/workspace/cache/models/base.safetensors"}, "dataset_config": {"general": {"resolution": [64, 64], "caption_extension": ".txt"}, "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}]}}),
                 }[backend]
                 run_path.write_text(yaml.safe_dump(run, sort_keys=False), encoding="utf-8")
                 stderr = io.StringIO()

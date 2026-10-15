@@ -42,6 +42,7 @@ from kura.training_artifacts import (
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only  # noqa: E402
+from tests.backend_fixtures import with_required  # noqa: E402
 from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes, _write_state_marker  # noqa: E402
 
 
@@ -77,6 +78,8 @@ def musubi_run() -> dict[str, Any]:
             "network_dim": 4,
             "network_alpha": 4,
             "learning_rate": 1.0e-4,
+            "optimizer_type": "adamw8bit",
+            "timestep_sampling": "flux2_shift",
             "batch_size": 1,
             "resolution": [512, 512],
             "model_paths": {
@@ -103,6 +106,7 @@ def sd_scripts_run() -> dict[str, Any]:
                 "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "sample", "num_repeats": 1}]}],
             },
             "network_dim": 8,
+            "network_alpha": 1,
             "learning_rate": 0.0001,
             "optimizer_type": "AdamW8bit",
             "mixed_precision": "bf16",
@@ -659,10 +663,10 @@ def _plannable_musubi_run() -> dict[str, Any]:
     run["id"] = "derived"
     run["experiment"] = "steps"
     run["compute"] = {"executor": "docker"}
-    run["backend"]["config"] = {
+    run["backend"]["config"] = with_required("musubi-tuner", {
         "architecture": "flux2", "model_bundle": "none", "save_every_n_steps": 500,
         "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}},
-    }
+    })
     return run
 
 

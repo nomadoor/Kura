@@ -14,7 +14,7 @@ You decide only what you want to make and which data to use. The agent can work 
 Kura is not a trainer itself. It manages the training tools [AI-Toolkit](https://github.com/ostris/ai-toolkit), [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner), and [sd-scripts](https://github.com/kohya-ss/sd-scripts) so an agent can use them safely while keeping a record of everything.
 
 - **Trains on exactly the data you gave it**: only the files listed in the dataset are used for training. Old files or draft images left in the folder never slip in unnoticed.
-- **Starts from settings that work**: Kura fills each model's detailed settings with the training tool's own recommended values. You or the agent set only what you want to change.
+- **Starts from the training tool's own settings**: Kura adds no settings of its own. AI-Toolkit fills each model's detailed settings with its own recommended values; on Musubi Tuner and sd-scripts you or the agent write the few values that decide training quality (learning rate, rank, optimizer, and similar), and every other setting is the training tool's own default.
 - **Goes from training to test renders in one flow**: test-render the LoRA you trained in your own ComfyUI workflow and compare results under different conditions.
 - **Runs on your PC or in the cloud**: train on your own GPU or on a [RunPod](https://www.runpod.io/) cloud GPU with the same steps.
 - **Keeps everything as files**: settings, the data used, logs, and outputs all stay in the workspace as plain files. You can inspect them later or run the same training again.

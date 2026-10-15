@@ -89,6 +89,8 @@ _MUSUBI_COMMON: dict[str, Any] = {
     "resolution": [256, 256],
     "batch_size": 1,
     "learning_rate": 1e-6,
+    "optimizer_type": "adamw8bit",
+    "save_precision": "bf16",
     "network_dim": 1,
     "network_alpha": 1,
     "gradient_checkpointing": True,
@@ -197,11 +199,11 @@ SMOKES: dict[str, Smoke] = {
     # Musubi Tuner image families.
     "musubi-flux2-klein-4b": _musubi(
         "flux2", "black-forest-labs/FLUX.2-klein-base-4B", IMAGE_DATASET, "flux_2_train_network.py",
-        model_version="klein-base-4b", fp8_base=True, fp8_scaled=True, blocks_to_swap=8,
+        model_version="klein-base-4b", timestep_sampling="flux2_shift", fp8_base=True, fp8_scaled=True, blocks_to_swap=8,
     ),
     "musubi-krea2": _musubi(
         "krea2", "krea/Krea-2-Raw", IMAGE_DATASET, "krea2_train_network.py",
-        fp8_base=True, fp8_scaled=True, blocks_to_swap=26, prune_checkpoints_before_step=1,
+        timestep_sampling="krea2_shift", fp8_base=True, fp8_scaled=True, blocks_to_swap=26, prune_checkpoints_before_step=1,
     ),
     "musubi-qwen-image": _musubi(
         "qwen_image", "Comfy-Org/Qwen-Image_ComfyUI", IMAGE_DATASET, "qwen_image_train_network.py",
@@ -242,7 +244,7 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-hidream-o1": _musubi(
         "hidream_o1", "Comfy-Org/HiDream-O1-Image", IMAGE_DATASET, "hidream_o1_train_network.py",
-        model_type="dev", task="t2i", blocks_to_swap=24, noise_scale_start=7.5, noise_scale_end=7.5, noise_clip_std=2.5,
+        model_type="dev", task="t2i", timestep_sampling="uniform", blocks_to_swap=24, noise_scale_start=7.5, noise_scale_end=7.5, noise_clip_std=2.5,
         model_downloads={"dit": _download("Comfy-Org/HiDream-O1-Image", "checkpoints/hidream_o1_image_dev_bf16.safetensors")},
     ),
     # Musubi Tuner video families.
@@ -654,7 +656,7 @@ def conformance_smoke(backend: str, kind: str) -> Smoke:
         smoke = SMOKES["ai-toolkit-sd1"]
         return replace(smoke, dataset=dataset, config={**smoke.config, "save_every_n_steps": CADENCE})
     if backend == "musubi-tuner":
-        config = {"architecture": "wan", "task": "t2v-1.3B", **_MUSUBI_COMMON, "save_every_n_steps": CADENCE, "fp8_t5": True, "model_downloads": WAN_1_3B}
+        config = {"architecture": "wan", "task": "t2v-1.3B", **_MUSUBI_COMMON, "timestep_sampling": "shift", "discrete_flow_shift": 3.0, "save_every_n_steps": CADENCE, "fp8_t5": True, "model_downloads": WAN_1_3B}
         return Smoke(
             backend, "wan", "Comfy-Org/Wan_2.1_ComfyUI_repackaged", dataset, config, executor="docker", gpu="gpu",
             expected_script="wan_train_network.py", dataset_options={dataset: dict(_VIDEO_ONE_FRAME)},

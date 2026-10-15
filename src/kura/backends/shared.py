@@ -73,18 +73,32 @@ def _reject_owned_extra_args(
         )
 
 
-def _int_or_none(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+def argv_value(flag: str, value: Any) -> list[str]:
+    """How an authored value becomes trainer argv; every argv backend renders through here.
+
+    true is the bare flag and false no flag; a number or string follows the flag in its one
+    textual form (`str`, so YAML's 1e-4 is 0.0001); a list follows the flag item by item. The
+    value is never checked or replaced: the trainer reports a value it cannot read.
+    """
+    if value is True:
+        return [flag]
+    if value is False:
+        return []
+    if isinstance(value, list):
+        return [flag, *(str(item) for item in value)]
+    if isinstance(value, dict):
+        raise ValueError(f"{flag} takes a single value or a list, not a mapping")
+    return [flag, str(value)]
 
 
-def _append_flag(args: list[str], override: dict[str, Any], key: str, flag: str | None = None) -> None:
-    if _truthy(override.get(key)):
-        args.append(flag or f"--{key}")
+def config_argv(config: dict[str, Any], key: str, flag: str | None = None) -> list[str]:
+    """The authored `key` as `flag` (default `--key`), exactly as written; an omitted key adds nothing."""
+    return argv_value(flag or f"--{key}", config[key]) if key in config else []
+
+
+def append_config_args(args: list[str], config: dict[str, Any], *keys: str) -> None:
+    for key in keys:
+        args.extend(config_argv(config, key))
 
 
 MODEL_DOWNLOAD_KEYS = ("repo_id", "repo", "filename", "file", "filenames", "revision", "repo_type")
