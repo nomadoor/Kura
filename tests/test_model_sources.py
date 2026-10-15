@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import unittest
 
-from kura.backends.musubi_models import _musubi_model_expectations
+from kura.backends import validate_backend_config
+from kura.backends.ai_toolkit_baseline import select_baseline_entry
+from kura.backends.musubi_models import _musubi_model_expectations, musubi_model_download_specs
 from kura.comfyui_models import resolve_model_specs
 from kura.workspace import migrate_workspace_config, validate_workspace_config
 
@@ -48,6 +50,27 @@ class ModelSourceTests(unittest.TestCase):
         ):
             with self.subTest(expectations=expectations), self.assertRaisesRegex(ValueError, message):
                 _musubi_model_expectations(run(expectations))
+
+    def test_an_ai_toolkit_arch_with_several_ui_entries_names_them(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"model_arch 'wan21' is trained by several UI entries \(wan21:14b, wan21:1b\); write the one you train"):
+            select_baseline_entry("wan21", "Wan-AI/Wan2.1-T2V-14B-Diffusers")
+        self.assertEqual(select_baseline_entry("sd1", None)[0], "sd15")
+
+    def test_the_minimax_h3_transformer_family_comes_from_the_bundle_not_the_task(self) -> None:
+        run = {"backend": {"name": "musubi-tuner", "config": {"architecture": "minimax_h3", "task": "ref2va", "model_bundle": "minimax-h3-fl2va-pruned-int8"}}}
+        dit = next(item["filename"] for item in musubi_model_download_specs(run)[0] if item["key"] == "dit")
+        self.assertEqual(dit, "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors")
+
+    def test_a_musubi_qwen_model_version_has_one_spelling(self) -> None:
+        for value in ("EDIT_2511", "Edit-2509", "edit_2509"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "model_version .* is not accepted"):
+                validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"architecture": "qwen_image", "model_version": value}}})
+
+    def test_include_turbo_dit_applies_only_to_the_krea2_bundle(self) -> None:
+        with self.assertRaisesRegex(ValueError, "include_turbo_dit is not applicable"):
+            validate_backend_config({"backend": {"name": "musubi-tuner", "config": {
+                "architecture": "krea2", "include_turbo_dit": True, "model_downloads": {"dit": {"repo": "a/b", "filename": "d.safetensors"}},
+            }}})
 
 
 if __name__ == "__main__":

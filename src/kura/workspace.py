@@ -418,8 +418,8 @@ def _one_model_registry_shape(config: dict[str, Any]) -> list[str]:
     wrapped = registry.pop("models", None)
     if isinstance(wrapped, dict):
         for section, entries in wrapped.items():
-            if isinstance(entries, dict):
-                registry.setdefault(section, {}).update(entries)
+            if isinstance(entries, dict) and isinstance(registry.setdefault(section, {}), dict):
+                registry[section].update(entries)
         notes.append("moved comfyui.model_registry.models.<folder> to comfyui.model_registry.<folder>")
     for section, entries in registry.items():
         for name, entry in (entries.items() if isinstance(entries, dict) else ()):

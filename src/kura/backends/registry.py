@@ -246,7 +246,7 @@ MUSUBI_SURFACE = BackendSurface(
         _when("fp8_text_encoder", architecture=("flux2",), precache=(True,)),
         _when("fp8_vl", architecture=("qwen_image", "hunyuan_video_1_5")),
         _when("gradient_checkpointing_cpu_offload", architecture=("krea2",), gradient_checkpointing=(True,)),
-        _when("include_turbo_dit", architecture=("krea2",)),
+        _when("include_turbo_dit", architecture=("krea2",), model_bundle=("krea2-raw",)),
         _when("model_bundle", architecture=("flux2", "krea2", "minimax_h3")),
         _when("model_type", architecture=("hidream_o1",)),
         _when("model_version", architecture=("flux2", "qwen_image")),

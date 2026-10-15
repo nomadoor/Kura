@@ -187,9 +187,11 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "or remove model_bundle and list each role in model_downloads"
         )
     if architecture == "flux2" and name != f"flux2-{_musubi_flux2_model_version(run)}":
+        matching = f"flux2-{override['model_version']}"
         raise ValueError(
             f"Musubi model_bundle {name!r} downloads another FLUX.2 variant than model_version "
-            f"{override.get('model_version')!r}; use model_bundle flux2-{override.get('model_version')}"
+            f"{override['model_version']!r}; "
+            + (f"use model_bundle {matching}" if matching in MUSUBI_BUNDLES else "no bundle downloads it; list its files in model_downloads")
         )
     return files(run)
 
@@ -366,7 +368,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     }
     expectations = dict(defaults.get(architecture, {}))
     authored = override.get("model_expectations", {})
-    if not isinstance(authored, dict) or not all(isinstance(value, str) for value in authored.values()):
+    if not isinstance(authored, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in authored.items()):
         raise ValueError("Musubi model_expectations must map model roles to a format name")
     unknown_roles = sorted(set(authored) - set(expectations))
     unknown_formats = sorted({value for value in authored.values() if value not in MODEL_FORMATS})

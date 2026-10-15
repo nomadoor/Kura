@@ -63,8 +63,13 @@ def select_baseline_entry(model_arch: str, model_base: object) -> tuple[str, dic
     this entry's, is refused as a conflict.
     """
     entries = load_baseline()["entries"]
-    candidates = [name for name, entry in entries.items() if entry.get("arch") == model_arch]
-    name = model_arch if model_arch in entries else candidates[0] if len(candidates) == 1 else None
+    candidates = sorted(name for name, entry in entries.items() if entry.get("arch") == model_arch)
+    if model_arch not in entries and len(candidates) > 1:
+        raise ValueError(
+            f"AI-Toolkit model_arch {model_arch!r} is trained by several UI entries ({', '.join(candidates)}); "
+            "write the one you train as model_arch"
+        )
+    name = model_arch if model_arch in entries else candidates[0] if candidates else None
     if name is None:
         return None
     entry = entries[name]

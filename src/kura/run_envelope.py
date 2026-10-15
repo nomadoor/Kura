@@ -53,7 +53,10 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
                 continue
             if path == "model.revision":
                 # No trainer receives it, so it would record a pin that never happened.
-                problems.append("model.revision is not read by any trainer; pin a file with revision in backend.config.model_downloads")
+                problems.append(
+                    "model.revision is not read by any trainer; remove it (sd-scripts and Musubi Tuner pin a file with "
+                    "backend.config.model_downloads.<role>.revision; the pinned AI-Toolkit loads the repository's default branch)"
+                )
                 continue
             suggestion = closest_key(str(key), TRAIN_RUN_SCHEMA[level])
             hint = f" (did you mean {suggestion!r}?)" if suggestion else ""

@@ -58,10 +58,10 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 860f7c9499f2d9d77f6f00b3761f5ee1a162b74b0f1f535b1ff4cb28e81c9d89
+      value: 39723aab73126ca2e43b8a607a73bff11787505e24538bb2061751800b0a2b58
   - id: one-field-models-ai-toolkit-2026-10-16
     backend: ai-toolkit
-    reason: 'Model sources use one key per meaning: model_downloads takes repo, filename (a name, or a list whose first file is the one the trainer reads), revision, and repo_type, and refuses repo_id, file, and filenames naming the key to write; an empty model_paths entry is refused; model.revision is refused because no trainer receives it, and a Resume copy drops it as a retired key. model_arch alone picks the UI baseline entry: model.base never chooses one, and a base that is another entry''s model is refused. The UI names the pinned trainer reads as an arch (a :tag entry and flex1, toolkit/config_modules.py:768-775) are accepted model_arch values, written as given. Every recorded smoke named the entry it trained, so it fills the same baseline.'
+    reason: 'Model sources use one key per meaning: model_downloads takes repo, filename (a name, or a list whose first file is the one the trainer reads), revision, and repo_type, and refuses repo_id, file, and filenames naming the key to write; an empty model_paths entry is refused; model.revision is refused because no trainer receives it, and a Resume copy drops it as a retired key. model_arch alone picks the UI baseline entry: model.base never chooses one, and a base that is another entry''s model is refused. The UI names the pinned trainer reads as an arch (a :tag entry and flex1, toolkit/config_modules.py:768-775) are accepted model_arch values, written as given. An arch trained by several UI entries (wan21, wan21_i2v) is refused, naming them. Every recorded smoke named the entry it trained, so it fills the same baseline.'
     behavior_changed: false
     evidence_ids:
     - ai-toolkit-conformance-runpod-2026-10-11
@@ -87,7 +87,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 986c32d1eb0fff7b08c758f7689f871d6f7a1505e7a9108a75574bbadc10dfed
+      value: f7771df3f02b2072b80a1a4332c94865dcde93783bf54c35e4fcdab630439579
   - id: one-field-models-runpod-executor-2026-10-16
     executor: runpod
     reason: 'A RunPod ComfyUI render reads its model sources by one key each (repo or url, filename, revision, subfolder, target_dir, target_name) and refuses repo_id, direct_url, file, and a malformed entry instead of treating it as unknown; comfyui.model_registry has one shape (folder, then model name), which kura workspace migrate produces from the older models: wrapper. Training launches read the same model_downloads as before for every recorded smoke, and no recorded render used an older key.'
@@ -133,7 +133,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 05841692d09521ae7a92ad4ec86a0f4d2a61fdd03d347d24bd90d72bae9dee64
+      value: 93b52e362e6210d05c7cbb37c86ca59b7d54459ddeceee5e8ac61ec2594eacef
   - id: forwarded-values-sd-scripts-2026-10-15
     backend: sd-scripts
     reason: 'Forwarded values reach sd-scripts exactly as written, through one argv renderer, with no Kura default and no Kura type check: learning_rate, optimizer_type, mixed_precision, (for LoRA) network_dim and network_alpha, the FLUX.1 timestep_sampling, guidance_scale, and model_prediction_type, and the Anima LLLite timestep_sampling and discrete_flow_shift are required, SDXL text-encoder learning rates take the trainer''s one --text_encoder_lr (the numbered flags Kura emitted do not exist upstream, and no smoke set them), and an omitted Anima LoRA flow value or LLLite network value is the trainer''s own default. Every recorded smoke wrote the required values and each FLUX.1 and Anima flow value, so it builds the same training: the argv now leaves out gradient_accumulation_steps 1, the LLLite scalars, and the cache flag a disk cache implies, each of which equals the pinned trainer''s own default or implication.'

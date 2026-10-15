@@ -166,7 +166,7 @@ class AgentIndependentCliTests(unittest.TestCase):
         for backend in ("ai-toolkit", "sd-scripts", "musubi-tuner"):
             with self.subTest(backend=backend):
                 self.assertIn(
-                    "model.revision is not read by any trainer; pin a file with revision in backend.config.model_downloads",
+                    "model.revision is not read by any trainer; remove it",
                     self._compile_with_model(backend, {"base": "example/model", "revision": "main"}),
                 )
 

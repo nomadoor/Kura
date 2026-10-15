@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry, trained_arch, ui_entry_values
+from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry, trained_arch
 from kura.backends.dataset_profiles import (
     caption_presence,
     classify_dataset_shape,

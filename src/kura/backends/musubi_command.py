@@ -507,8 +507,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if loss_method == "training_adapter":
             if not paths.get("base_weights"):
                 raise ValueError(
-                    "Musubi MiniMax-H3 training_adapter requires model_paths.base_weights "
-                    "or model_downloads.base_weights"
+                    "Musubi MiniMax-H3 training_adapter requires model_paths.base_weights"
+                    + ("" if "model_bundle" in override else " or model_downloads.base_weights")
                 )
             if "int8_convrot" in Path(dit).name.lower():
                 raise ValueError(
