@@ -62,8 +62,7 @@ workflow_patches:
 ## Images
 
 For a `type: image` binding under `inputs.cases`, make the logical value relative
-to the cases JSONL directory. A legacy `inputs.promptset` image value is relative
-to the promptset file directory instead. Compile copies it into
+to the cases JSONL directory. Compile copies it into
 `resolved/images/` and records its digest. Local launch copies that frozen file
 into the configured ComfyUI input staging directory and removes the staged copy
 afterward. RunPod launch verifies and uploads the frozen file into the disposable
@@ -83,13 +82,9 @@ name is not a valid loader input.
 
 ## Legacy promptsets
 
-Legacy `inputs.promptset` plus singular `inputs.checkpoint` remains supported.
-Compile expands promptset seeds and normalizes them to the same resolved case
-contract. Promptset-owned keys are `id`, `prompt`, `negative_prompt`, `seeds`,
-and `meta`; any additional key needs a workflow binding.
-
-Author new comparisons with `inputs.cases`. Do not encode new axes by inventing
-promptset conventions.
+A render compiled from `inputs.promptset` by an earlier Kura still launches and
+shows. Compile refuses a new one: convert each promptset item to case rows under
+`inputs.cases`, one row per seed, with every bound key under `values`.
 
 ## When a value looks unpatchable
 

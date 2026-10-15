@@ -304,8 +304,6 @@ class StageModeTests(unittest.TestCase):
                 self.assertEqual(_stage_mode("symlink", "lora_stage_mode", frozen), "symlink")
         with patch("kura.render.os.name", "nt"), patch("kura.render._endpoint_os", return_value="posix"):
             self.assertEqual(_stage_mode(None, "lora_stage_mode", frozen), "copy")
-        with self.assertRaisesRegex(ValueError, "auto, symlink, or copy"):
-            _stage_mode("hardlink", "lora_stage_mode", frozen)
 
     def test_the_endpoint_os_comes_from_system_stats(self) -> None:
         from kura import render

@@ -23,7 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from kura.render import authored_cases, promptset, reconcile_promptset  # noqa: E402
+from kura.render import authored_cases, promptset  # noqa: E402
 from kura.run_envelope import TRAIN_RUN_SCHEMA, common_recipe, resume_intent, training_state_policy, validate_train_run_fields  # noqa: E402
 from kura.workspace import (  # noqa: E402
     WORKSPACE_OBSOLETE_KEYS,
@@ -228,8 +228,8 @@ class SurfaceContractTests(unittest.TestCase):
             ({"compute": {"executor": "runpod", "gpu": "NVIDIA A40"}}, "compute.gpu must be a list"),
             ({"compute": {"executor": "runpod", "gpu": "gpu"}}, "compute.gpu must be a list"),
             ({"compute": {"executor": "runpod", "gpu": True}}, "compute.gpu must be a list"),
-            ({"compute": {"executor": "docker", "gpu": ["NVIDIA A40"]}}, "a Docker run uses the local GPU"),
-            ({"compute": {"gpu": ["NVIDIA A40"]}}, "a Docker run uses the local GPU"),
+            ({"compute": {"executor": "docker", "gpu": ["NVIDIA A40"]}}, "a local run uses the local GPU"),
+            ({"compute": {"gpu": ["NVIDIA A40"]}}, "a local run uses the local GPU"),
             ({"safety": {"allow_storage_risk": "yes"}}, "safety.allow_storage_risk must be true or false"),
             ({"safety": {"checkpoint_estimate_gb": "25"}}, "safety.checkpoint_estimate_gb must be a positive number"),
             ({"safety": {"checkpoint_estimate_gb": float("nan")}}, "safety.checkpoint_estimate_gb must be a positive number"),
@@ -281,12 +281,6 @@ class SurfaceContractTests(unittest.TestCase):
                     validate_train_run_fields(run)
             finally:
                 os.chdir(previous)
-
-    def test_promptset_rejects_an_unbound_key(self) -> None:
-        patches = {"prompt": {"node": "6", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}}
-        with self.assertRaises(ValueError) as caught:
-            reconcile_promptset([{"id": "a", "prompt": "x", "seeds": [1], SENTINEL: True}], patches)
-        self.assertIn(SENTINEL, str(caught.exception))
 
     def test_promptset_rejects_an_unsafe_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

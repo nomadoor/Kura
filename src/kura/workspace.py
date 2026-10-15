@@ -5,7 +5,7 @@ from __future__ import annotations
 import posixpath
 import re
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
@@ -298,9 +298,10 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
 
 
 def plain_relative_folder(value: Any) -> bool:
-    """Whether a stage subfolder stays inside its base: a relative name with no slash at either end, `.`, or `..`."""
+    """Whether a folder stays inside its base: a relative name with no slash at either end, no drive, `.`, or `..`."""
     return (
         isinstance(value, str) and value == value.strip("/\\") and not Path(value).is_absolute()
+        and not PureWindowsPath(value).drive
         and bool(Path(value).parts) and not set(Path(value).parts) & {".", ".."}
     )
 

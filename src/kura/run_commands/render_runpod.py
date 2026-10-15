@@ -15,7 +15,7 @@ from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop
 from kura.executors.runpod import confirm_runpod_billing, format_cost_ceiling, runpod_cost_ceiling, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
-from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases
+from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases, render_timeout_sec
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
@@ -360,7 +360,7 @@ def launch_render_runpod(
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             endpoint = f"http://127.0.0.1:{local_port}"
-            ready_timeout = int(frozen.get("render", {}).get("timeout_sec", 600) or 600)
+            ready_timeout = render_timeout_sec(frozen)
             _wait_http_ready(endpoint, timeout_sec=max(ready_timeout, 180))
             lora_name_overrides = {
                 str(item["id"]): str(item["name"])

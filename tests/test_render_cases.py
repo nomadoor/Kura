@@ -135,55 +135,17 @@ def _resolved_cases(run_dir: Path) -> list[dict[str, Any]]:
 
 
 class RenderCasesCompileTests(unittest.TestCase):
-    def test_legacy_image_freeze_uses_exact_source_id(self) -> None:
+    def test_a_new_promptset_render_is_refused_at_compile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            patches = {
-                "control_image": {"node": "19", "field": "inputs.image", "type": "image"},
-            }
             run_dir = _workspace(
                 root,
                 cases=None,
-                prompt_items=[
-                    {"id": "front", "control_image": "front.png"},
-                    {"id": "front_seed", "control_image": "front_seed.png"},
-                ],
-                patches=patches,
+                prompt_items=[{"id": "legacy", "prompt": "legacy", "seeds": [1], "strength": 1.0, "cfg": 4.0}],
             )
-            run_path = run_dir / "run.yaml"
-            run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
-            run["render"]["workflow_fixed"] = ["prompt", "negative_prompt", "seed"]
-            run_path.write_text(yaml.safe_dump(run, sort_keys=False), encoding="utf-8")
-            (root / "promptsets" / "front.png").write_bytes(b"FRONT")
-            (root / "promptsets" / "front_seed.png").write_bytes(b"FRONT-SEED")
-
-            compile_render(root, run_dir)
-
-            frozen_dir = run_dir / "resolved" / "images" / "control_image"
-            self.assertEqual((frozen_dir / "front.png").read_bytes(), b"FRONT")
-            self.assertEqual((frozen_dir / "front_seed.png").read_bytes(), b"FRONT-SEED")
-            cases = _resolved_cases(run_dir)
-            self.assertEqual([row["source_id"] for row in cases], ["front", "front_seed"])
-            self.assertEqual(
-                [row["values"]["control_image"] for row in cases],
-                [
-                    "resolved/images/control_image/front.png",
-                    "resolved/images/control_image/front_seed.png",
-                ],
-            )
-            used = [
-                json.loads(line)
-                for line in (run_dir / "resolved" / "promptset_used.jsonl").read_text(encoding="utf-8").splitlines()
-            ]
-            self.assertEqual(
-                [item["control_image"] for item in used],
-                [
-                    "resolved/images/control_image/front.png",
-                    "resolved/images/control_image/front_seed.png",
-                ],
-            )
-            manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
-            self.assertEqual(len(manifest["promptset_images"]), 2)
+            with self.assertRaisesRegex(ValueError, "inputs.promptset is replaced by inputs.cases"):
+                compile_render(root, run_dir)
+            self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
 
     def test_checkpoint_id_must_identify_one_artifact_across_cases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -350,23 +312,9 @@ class RenderCasesCompileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "neither inserts"):
                 compile_render(root, run_dir)
 
-    def test_cases_and_promptset_are_mutually_exclusive(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = _workspace(
-                root,
-                cases=[_case("a", step=None, prompt="first", seed=1, strength=1.0, cfg=4.0)],
-                prompt_items=[{"id": "legacy", "prompt": "legacy", "seeds": [1], "strength": 1.0, "cfg": 4.0}],
-            )
-            with self.assertRaises(ValueError) as caught:
-                compile_render(root, run_dir)
-            self.assertIn("cases", str(caught.exception))
-            self.assertIn("promptset", str(caught.exception))
-            self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
-
     def test_compile_requires_one_case_source_and_a_closed_cases_descriptor(self) -> None:
         malformed = (
-            (None, "exactly one"),
+            (None, "requires inputs.cases"),
             ("cases/render.jsonl", "mapping"),
             ({"path": None, "digest": None}, "path"),
             ({"path": 7, "digest": None}, "path"),
@@ -914,18 +862,27 @@ class RenderCasesLaunchTests(unittest.TestCase):
                 stdout,
             )
 
-    def test_legacy_checkpoint_and_promptset_compile_to_cases_and_keep_output_names(self) -> None:
+    def test_a_promptset_render_an_older_kura_compiled_still_launches_with_its_output_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint = _checkpoint(1800)
             run_dir = _workspace(
                 root,
-                cases=None,
-                prompt_items=[{"id": "legacy", "prompt": "hello", "negative_prompt": "", "seeds": [42, 43], "strength": 1.0, "cfg": 4.0}],
+                cases=[
+                    {"id": f"legacy_seed{seed}", "values": {"prompt": "hello", "negative_prompt": "", "seed": seed, "strength": 1.0, "cfg": 4.0}}
+                    for seed in (42, 43)
+                ],
                 shared_checkpoint=checkpoint,
             )
             _write_checkpoint(root, checkpoint, b"legacy")
             compile_render(root, run_dir)
+            # What an older Kura froze for one promptset item with two seeds.
+            resolved = run_dir / "resolved"
+            rows = [{**row, "source_id": "legacy"} for row in _resolved_cases(run_dir)]
+            (resolved / "cases.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            manifest = yaml.safe_load((resolved / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            manifest["inputs"]["promptset"] = manifest["inputs"].pop("cases")
+            (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
             frozen = _resolved_cases(run_dir)
             self.assertEqual([row["index"] for row in frozen], [1, 2])
             self.assertEqual([row["values"]["seed"] for row in frozen], [42, 43])
