@@ -1213,7 +1213,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         },
         "model": {
             "base": model.get("base") if isinstance(model, dict) else None,
-            "revision": model.get("revision") if isinstance(model, dict) else None,
         },
         "compute": {
             "executor": plan_executor,

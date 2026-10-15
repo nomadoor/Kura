@@ -50,7 +50,7 @@ class AgentIndependentCliTests(unittest.TestCase):
         self.assertEqual(mutable["strength"], "mutable-reference")
 
     def test_ai_toolkit_requirement_records_no_revision_it_cannot_pin(self) -> None:
-        requirement = model_requirements({"backend": {"name": "ai-toolkit"}, "model": {"base": "org/model", "revision": "main"}})[0]
+        requirement = model_requirements({"backend": {"name": "ai-toolkit"}, "model": {"base": "org/model"}})[0]
         self.assertEqual(requirement["identity"], {"kind": "huggingface-repository", "repo_id": "org/model"})
         self.assertEqual(requirement["pinning"]["strength"], "mutable-reference")
 
@@ -83,7 +83,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
                 run["intent"] = "prove the CLI can execute authored files without agent state"
-                run["model"] = {"base": "example/model", "revision": "0123456789abcdef0123456789abcdef01234567"}
+                run["model"] = {"base": "example/model"}
                 run["datasets"] = [{"id": "tiny", "digest": None, "role": None}]
                 run["recipe"] = {"steps": 1, "seed": 1}
                 if backend == "ai-toolkit":
@@ -153,7 +153,7 @@ class AgentIndependentCliTests(unittest.TestCase):
     @posix_only(POSIX_PATHS)
     def test_only_ai_toolkit_requires_model_base(self) -> None:
         # Only AI-Toolkit trains from model.base; the others read their own model sources.
-        for model in ({"base": "", "revision": None}, {"revision": None}):
+        for model in ({"base": ""}, {}):
             for backend in ("sd-scripts", "musubi-tuner"):
                 with self.subTest(backend=backend, model=model):
                     self.assertEqual(self._compile_with_model(backend, model), "")
@@ -161,11 +161,14 @@ class AgentIndependentCliTests(unittest.TestCase):
                 self.assertRegex(self._compile_with_model("ai-toolkit", model), "AI-Toolkit trains from model.base")
 
     @posix_only(POSIX_PATHS)
-    def test_model_revision_stays_a_label_for_every_backend(self) -> None:
-        # Earlier runs wrote it, and Resume fingerprints include it, so no backend refuses it.
+    def test_model_revision_is_refused_because_no_trainer_receives_it(self) -> None:
+        # A Resume copy of an earlier run drops it with the other retired keys.
         for backend in ("ai-toolkit", "sd-scripts", "musubi-tuner"):
             with self.subTest(backend=backend):
-                self.assertEqual(self._compile_with_model(backend, {"base": "example/model", "revision": "main"}), "")
+                self.assertIn(
+                    "model.revision is not read by any trainer; remove it",
+                    self._compile_with_model(backend, {"base": "example/model", "revision": "main"}),
+                )
 
     @posix_only(POSIX_PATHS)
     def test_ai_toolkit_file_only_lifecycle(self) -> None:

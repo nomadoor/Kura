@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from kura.container_scripts import script_source
@@ -79,17 +80,12 @@ MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _normalize_musubi_model_version(value: Any, *, default: str = "") -> str:
-    """Return the one normalized spelling used by Musubi projection and argv."""
-    return str(value or default).strip().lower().replace("_", "-")
-
-
 def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
     clean = _musubi_explicit_model_paths(override)
     clean.update(musubi_model_download_specs(run)[1])
     if not clean:
-        raise ValueError("Musubi Tuner requires model_paths, model_downloads, or a known model.base bundle")
+        raise ValueError("Musubi Tuner requires model_paths, model_downloads, or model_bundle")
     return clean
 
 
@@ -111,139 +107,99 @@ def _musubi_model_cache_path(repo_id: str, key: str, filename: str) -> str:
     return f"/workspace/cache/models/musubi/{repo_component}/{key_component}/{filename}"
 
 
-# Every accepted name for a FLUX.2 Klein variant, read from model_bundle and model.base alike.
-_FLUX2_KLEIN_NAMES: dict[str, str] = {
-    name: variant
-    for variant, names in {
-        "klein-base-4b": ("flux2-klein-base-4b-comfy", "comfy-flux2-klein-base-4b"),
-        "klein-4b": ("flux2-klein-4b-comfy", "comfy-flux2-klein-4b"),
-        "klein-base-9b": ("bfl-flux2-klein-base-9b",),
-        "klein-9b": ("bfl-flux2-klein-9b",),
-    }.items()
-    for name in (
-        *names,
-        f"black-forest-labs/flux.2-{variant}",
-        f"flux.2-{variant}",
-        f"flux2-{variant}",
-    )
-}
-
-
-# The --model_version values the pinned Musubi Tuner accepts for FLUX.2 (flux_2/flux2_utils.py).
+# The --model_version values the pinned Musubi Tuner accepts for FLUX.2 (flux_2/flux2_utils.py)
+# and Qwen-Image (qwen_image/qwen_image_utils.py:1558-1571).
 FLUX2_MODEL_VERSIONS = ("klein-base-4b", "klein-4b", "klein-base-9b", "klein-9b", "dev")
+QWEN_IMAGE_MODEL_VERSIONS = ("original", "layered", "edit", "edit-2509", "edit-2511")
+MODEL_VERSIONS = {"flux2": FLUX2_MODEL_VERSIONS, "qwen_image": QWEN_IMAGE_MODEL_VERSIONS}
+
+# The expected_format values the container validator reads (container_scripts/safetensors_validator.py).
+MODEL_FORMATS = (
+    "safetensors", "file", "hf_model_id_or_path", "flux2_dit", "flux2_vae", "flux2_ae", "flux2_ae_or_vae",
+    "qwen3_4b_text_encoder", "qwen3_8b_text_encoder",
+)
 
 
-def _flux2_klein_variant(run: dict[str, Any]) -> str | None:
-    """Decide which FLUX.2 Klein variant a run trains: model_version, then model_bundle, then model.base."""
-    override = _musubi_backend_override(run)
-    model_version = _musubi_model_version(run, default="")
-    if model_version:
-        if model_version not in FLUX2_MODEL_VERSIONS:
-            raise ValueError(
-                f"Musubi FLUX.2 backend.config.model_version {model_version!r} is not one Musubi Tuner accepts; "
-                f"use one of {', '.join(FLUX2_MODEL_VERSIONS)}"
-            )
-        return model_version if model_version in _FLUX2_KLEIN_NAMES.values() else None
-    for name in (override.get("model_bundle"), run.get("model", {}).get("base")):
-        variant = _FLUX2_KLEIN_NAMES.get(_normalize_musubi_model_version(name))
-        if variant:
-            return variant
-    return None
-
-
-def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    override = _musubi_backend_override(run)
-    if _musubi_architecture(run) != "flux2":
-        return {}
-    if _normalize_musubi_model_version(override.get("model_bundle"), default="auto") in ("none", "off", "false"):
-        return {}
-    variant = _flux2_klein_variant(run)
+def _flux2_klein_files(variant: str) -> dict[str, dict[str, Any]]:
     if variant in ("klein-base-4b", "klein-4b"):
         repo = "Comfy-Org/vae-text-encorder-for-flux-klein-4b"
-        dit_name = f"flux-2-{variant}.safetensors"
         return {
-            "dit": {"repo": repo, "filename": f"split_files/diffusion_models/{dit_name}"},
+            "dit": {"repo": repo, "filename": f"split_files/diffusion_models/flux-2-{variant}.safetensors"},
             "vae": {"repo": repo, "filename": "split_files/vae/flux2-vae.safetensors"},
             "text_encoder": {"repo": repo, "filename": "split_files/text_encoders/qwen_3_4b.safetensors"},
         }
-    if variant in ("klein-base-9b", "klein-9b"):
-        model_repo = "black-forest-labs/FLUX.2-klein-base-9B" if variant == "klein-base-9b" else "black-forest-labs/FLUX.2-klein-9B"
-        dit_name = f"flux-2-{variant}.safetensors"
-        text_files = [f"text_encoder/model-0000{index}-of-00004.safetensors" for index in range(1, 5)]
-        return {
-            "dit": {"repo": model_repo, "filename": dit_name},
-            "vae": {"repo": model_repo, "filename": "vae/diffusion_pytorch_model.safetensors"},
-            "text_encoder": {"repo": model_repo, "filename": text_files[0], "filenames": [*text_files, "text_encoder/model.safetensors.index.json"]},
-        }
-    return {}
+    model_repo = "black-forest-labs/FLUX.2-klein-base-9B" if variant == "klein-base-9b" else "black-forest-labs/FLUX.2-klein-9B"
+    text_files = [f"text_encoder/model-0000{index}-of-00004.safetensors" for index in range(1, 5)]
+    return {
+        "dit": {"repo": model_repo, "filename": f"flux-2-{variant}.safetensors"},
+        "vae": {"repo": model_repo, "filename": "vae/diffusion_pytorch_model.safetensors"},
+        "text_encoder": {"repo": model_repo, "filename": [*text_files, "text_encoder/model.safetensors.index.json"]},
+    }
 
 
-def _krea2_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    override = _musubi_backend_override(run)
-    architecture = _musubi_architecture(run)
-    if architecture != "krea2":
-        return {}
-    bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
-    if bundle in ("none", "off", "false"):
-        return {}
+def _krea2_files(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     downloads: dict[str, dict[str, Any]] = {
         "dit": {"repo": "krea/Krea-2-Raw", "filename": "raw.safetensors"},
         "vae": {"repo": "Comfy-Org/Qwen-Image_ComfyUI", "filename": "split_files/vae/qwen_image_vae.safetensors"},
         "text_encoder": {"repo": "Comfy-Org/Qwen3-VL", "filename": "text_encoders/qwen3vl_4b_bf16.safetensors"},
     }
-    if _truthy(override.get("include_turbo_dit")):
+    if _truthy(_musubi_backend_override(run).get("include_turbo_dit")):
         downloads["turbo_dit"] = {"repo": "krea/Krea-2-Turbo", "filename": "turbo.safetensors"}
     return downloads
 
 
-def _minimax_h3_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    override = _musubi_backend_override(run)
-    architecture = _musubi_architecture(run)
-    if architecture != "minimax_h3":
-        return {}
-    bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
-    if bundle in ("none", "off", "false"):
-        return {}
-    aliases = {
-        "minimax-h3-pruned-int8": "auto",
-        "minimax-h3-fl2va-pruned-int8": "fl2va",
-        "minimax-h3-ref2va-pruned-int8": "ref2va",
-    }
-    bundle = aliases.get(bundle, bundle)
-    if bundle not in ("auto", "fl2va", "ref2va"):
-        raise ValueError(
-            "Musubi MiniMax-H3 model_bundle must be auto, minimax-h3-fl2va-pruned-int8, "
-            "minimax-h3-ref2va-pruned-int8, or none"
-        )
-    task = str(override.get("task") or "t2va").lower()
-    transformer_family = "ref2va" if bundle == "ref2va" or (bundle == "auto" and task == "ref2va") else "fl2va"
+def _minimax_h3_files(family: str) -> dict[str, dict[str, Any]]:
     repo = "Comfy-Org/MiniMax-H3"
     return {
-        "dit": {
-            "repo": repo,
-            "filename": f"diffusion_models/minimax_h3_{transformer_family}_pruned_int8_convrot.safetensors",
-        },
+        "dit": {"repo": repo, "filename": f"diffusion_models/minimax_h3_{family}_pruned_int8_convrot.safetensors"},
         "video_vae": {"repo": repo, "filename": "vae/minimax_h3_video_vae_fp16.safetensors"},
         "audio_vae": {"repo": repo, "filename": "vae/minimax_h3_audio_vae_fp32.safetensors"},
-        "text_encoder": {
-            "repo": repo,
-            "filename": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-        },
+        "text_encoder": {"repo": repo, "filename": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"},
     }
+
+
+# Each model_bundle by its one name: the architecture it is for and the files it downloads.
+MUSUBI_BUNDLES: dict[str, tuple[str, Any]] = {
+    **{f"flux2-{variant}": ("flux2", lambda run, variant=variant: _flux2_klein_files(variant))
+       for variant in ("klein-base-4b", "klein-4b", "klein-base-9b", "klein-9b")},
+    "krea2-raw": ("krea2", _krea2_files),
+    "minimax-h3-fl2va-pruned-int8": ("minimax_h3", lambda run: _minimax_h3_files("fl2va")),
+    "minimax-h3-ref2va-pruned-int8": ("minimax_h3", lambda run: _minimax_h3_files("ref2va")),
+}
+_KLEIN_IN_BASE = re.compile(r"flux\.?2-(klein-(?:base-)?[49]b)\b", re.IGNORECASE)
 
 
 def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    downloads = _flux2_klein_bundle(run)
-    downloads.update(_krea2_bundle(run))
-    downloads.update(_minimax_h3_bundle(run))
-    return downloads
+    """The files the named model_bundle downloads; a run that names none downloads none."""
+    override = _musubi_backend_override(run)
+    name = override.get("model_bundle")
+    if name is None:
+        return {}
+    architecture = _musubi_architecture(run)
+    if name not in MUSUBI_BUNDLES:
+        raise ValueError(f"Musubi model_bundle {name!r} is not one Kura knows; use one of: " + ", ".join(MUSUBI_BUNDLES))
+    bundle_architecture, files = MUSUBI_BUNDLES[name]
+    if bundle_architecture != architecture:
+        raise ValueError(f"Musubi model_bundle {name!r} is for architecture {bundle_architecture}, not {architecture}")
+    if "model_downloads" in override:
+        raise ValueError(
+            f"Musubi model_bundle {name!r} decides every downloaded file; remove model_downloads, "
+            "or remove model_bundle and list each role in model_downloads"
+        )
+    if architecture == "flux2" and name != f"flux2-{_musubi_flux2_model_version(run)}":
+        matching = f"flux2-{override['model_version']}"
+        raise ValueError(
+            f"Musubi model_bundle {name!r} downloads another FLUX.2 variant than model_version "
+            f"{override['model_version']!r}; "
+            + (f"use model_bundle {matching}" if matching in MUSUBI_BUNDLES else "no bundle downloads it; list its files in model_downloads")
+        )
+    return files(run)
 
 
 def _musubi_download_entries(run: dict[str, Any]) -> list[dict[str, Any]]:
     override = _musubi_backend_override(run)
-    authored = override.get("model_downloads")
-    # A known bundle fills the roles the user did not declare; a malformed declaration goes to the owner as is.
-    downloads = {**_known_musubi_bundle(run), **authored} if isinstance(authored, dict) else authored if authored is not None else _known_musubi_bundle(run)
+    # One place decides every downloaded file: the named bundle or model_downloads, never both.
+    downloads = _known_musubi_bundle(run) or override.get("model_downloads")
     return model_downloads(
         downloads, label="Musubi Tuner", explicit=_musubi_explicit_model_paths(override), cache_path=_musubi_model_cache_path,
     )
@@ -300,26 +256,29 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
 
 
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
-    variant = _flux2_klein_variant(run)
+    """The FLUX.2 variant comes from model_version alone; a model.base naming another Klein variant conflicts."""
     model_version = _musubi_model_version(run, default="")
-    if model_version:
-        return model_version
-    if variant:
-        return variant
-    raise ValueError(
-        "Musubi FLUX.2 requires backend.config.model_version (one of "
-        f"{', '.join(FLUX2_MODEL_VERSIONS)}) or a model.base/model_bundle naming a Klein variant, "
-        f"such as {', '.join(sorted(name for name in _FLUX2_KLEIN_NAMES if name.startswith('black-forest-labs/')))}; "
-        "refusing to default to 4B"
-    )
+    if not model_version:
+        raise ValueError(
+            "Musubi FLUX.2 requires backend.config.model_version, one of " + ", ".join(FLUX2_MODEL_VERSIONS)
+        )
+    named = _KLEIN_IN_BASE.search(str((run.get("model") or {}).get("base") or ""))
+    if named and named.group(1).lower() != model_version:
+        raise ValueError(
+            f"Musubi FLUX.2 model.base {run['model']['base']!r} names variant {named.group(1).lower()}, "
+            f"but model_version is {model_version!r}; make them agree"
+        )
+    return model_version
 
 
 def _musubi_model_version(run: dict[str, Any], *, default: str = "original") -> str:
-    """Normalize the authored model version identically for every Musubi consumer."""
+    """The authored model_version, which must be one the architecture's trainer accepts."""
     override = _musubi_backend_override(run)
-    return _normalize_musubi_model_version(
-        override.get("model_version"), default=default,
-    )
+    value = override.get("model_version", default)
+    accepted = MODEL_VERSIONS.get(_musubi_architecture(run), ())
+    if "model_version" in override and value not in accepted:
+        raise ValueError(f"Musubi backend.config.model_version {value!r} is not accepted here; use one of: " + ", ".join(accepted))
+    return value
 
 
 def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
@@ -351,6 +310,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         },
         "minimax_h3": {
             "dit": "safetensors",
+            "base_weights": "safetensors",
             "video_vae": "safetensors",
             "audio_vae": "safetensors",
             "text_encoder": "safetensors",
@@ -407,12 +367,18 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         },
     }
     expectations = dict(defaults.get(architecture, {}))
-    user_expectations = override.get("model_expectations")
-    if isinstance(user_expectations, dict):
-        for key, value in user_expectations.items():
-            if isinstance(key, str) and isinstance(value, str) and value:
-                expectations[key] = value
-    return expectations
+    authored = override.get("model_expectations", {})
+    if not isinstance(authored, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in authored.items()):
+        raise ValueError("Musubi model_expectations must map model roles to a format name")
+    unknown_roles = sorted(set(authored) - set(expectations))
+    unknown_formats = sorted({value for value in authored.values() if value not in MODEL_FORMATS})
+    if unknown_roles or unknown_formats:
+        raise ValueError(
+            "Musubi model_expectations"
+            + (f" names role(s) {', '.join(unknown_roles)} that {architecture} does not use (roles: {', '.join(sorted(expectations))})" if unknown_roles else "")
+            + (f" names format(s) {', '.join(unknown_formats)}; use one of: {', '.join(MODEL_FORMATS)}" if unknown_formats else "")
+        )
+    return {**expectations, **authored}
 
 
 def _musubi_model_sources(run: dict[str, Any], paths: dict[str, str]) -> dict[str, dict[str, str]]:
@@ -451,8 +417,7 @@ def _musubi_model_lock(run: dict[str, Any]) -> dict[str, Any]:
 
 def _musubi_output_compatibility(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
-    value = override.get("output_compatibility") or "comfyui"
-    return {"lora_format": str(value)}
+    return {"lora_format": override.get("output_compatibility", "comfyui")}
 
 
 def _safetensors_validator_code() -> str:
@@ -473,7 +438,7 @@ def _musubi_model_validation_command(run: dict[str, Any], paths: dict[str, str])
 
 
 def _musubi_lora_validation_command(run: dict[str, Any], output_dir: str, output_name: str) -> list[str]:
-    compatibility = _musubi_output_compatibility(run)["lora_format"].lower()
+    compatibility = _musubi_output_compatibility(run)["lora_format"]
     spec = {
         "architecture": _musubi_architecture(run),
         "lora": {

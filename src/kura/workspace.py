@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
+from kura.comfyui_models import MODEL_ENTRY_KEYS
 from kura.images import PINNED_IMAGES
 from kura.paths import DEFAULT_HF_CACHE, HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH, overlaps_hf_cache
 
@@ -79,15 +80,10 @@ _NUMBER = _value("number")
 _BOOLEAN = _value("boolean")
 _STRING_LIST = _sequence(_STRING)
 _DOCKER_MOUNT = _mapping({"source": _STRING, "target": _STRING, "mode": _value("string", choices=("ro", "rw"))})
-_MODEL_ENTRY = _mapping({
-    name: _STRING
-    for name in (
-        "repo", "repo_id", "url", "direct_url", "filename", "file", "revision",
-        "subfolder", "target_dir", "target_name",
-    )
-})
+_MODEL_ENTRY = _mapping({name: _STRING for name in MODEL_ENTRY_KEYS})
 _MODEL_SECTION = _dynamic(_MODEL_ENTRY)
-_MODEL_REGISTRY = _mapping({"models": _dynamic(_MODEL_SECTION)}, additional=_MODEL_SECTION)
+# One shape: model folder name, then ComfyUI model name, then its source.
+_MODEL_REGISTRY = _dynamic(_MODEL_SECTION)
 _OBJECT_STORE = _mapping({
     name: _STRING
     for name in ("endpoint_url", "bucket", "region", "prefix", "access_key_env", "secret_key_env")
@@ -409,6 +405,33 @@ def _move_cloud_type(config: dict[str, Any]) -> list[str]:
     return [f"moved runpod.cloud_type to runpod.cloud_types: {runpod['cloud_types']}"]
 
 
+_RETIRED_MODEL_KEYS = {"repo_id": "repo", "direct_url": "url", "file": "filename"}
+
+
+def _one_model_registry_shape(config: dict[str, Any]) -> list[str]:
+    """Unwrap comfyui.model_registry.models and rename each entry's older key spellings, in place."""
+    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
+    registry = comfyui.get("model_registry")
+    if not isinstance(registry, dict):
+        return []
+    notes: list[str] = []
+    if "models" in registry and not isinstance(registry["models"], dict):
+        return []  # left for validation to refuse, never dropped silently
+    wrapped = registry.pop("models", None)
+    if isinstance(wrapped, dict):
+        for section, entries in wrapped.items():
+            if isinstance(entries, dict) and isinstance(registry.setdefault(section, {}), dict):
+                registry[section].update(entries)
+        notes.append("moved comfyui.model_registry.models.<folder> to comfyui.model_registry.<folder>")
+    for section, entries in registry.items():
+        for name, entry in (entries.items() if isinstance(entries, dict) else ()):
+            for old, new in _RETIRED_MODEL_KEYS.items():
+                if isinstance(entry, dict) and old in entry and new not in entry:
+                    entry[new] = entry.pop(old)
+                    notes.append(f"renamed comfyui.model_registry.{section}.{name}.{old} to {new}")
+    return notes
+
+
 def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
     """Turn a docker.mounts entry for the Hugging Face cache into docker.hf_cache, in place.
 
@@ -458,7 +481,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     version = config.get("schema_version")
     if version in (WORKSPACE_SCHEMA_VERSION, str(WORKSPACE_SCHEMA_VERSION)):
         fixed = deepcopy(config)
-        notes = [*_normalize_host_drive(fixed), *_move_cloud_type(fixed), *_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed), *_drop_empty_strings(fixed)]
+        notes = [*_normalize_host_drive(fixed), *_move_cloud_type(fixed), *_one_model_registry_shape(fixed), *_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed), *_drop_empty_strings(fixed)]
         if version != WORKSPACE_SCHEMA_VERSION:
             fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
             notes.insert(0, "schema_version was the string '2'; it is now the integer 2")
@@ -467,7 +490,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     if version not in (None, 1):
         raise ValueError(f"cannot migrate workspace schema {version!r}; this Kura migrates schema 1 to {WORKSPACE_SCHEMA_VERSION}")
     migrated = deepcopy(config)
-    notes: list[str] = [*_normalize_host_drive(migrated), *_move_cloud_type(migrated), *_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated), *_drop_empty_strings(migrated)]
+    notes: list[str] = [*_normalize_host_drive(migrated), *_move_cloud_type(migrated), *_one_model_registry_shape(migrated), *_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated), *_drop_empty_strings(migrated)]
     candidates: dict[str, list[tuple[str, str]]] = {}
 
     docker = migrated.get("docker") if isinstance(migrated.get("docker"), dict) else None

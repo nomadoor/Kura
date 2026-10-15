@@ -22,7 +22,7 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
         "backend", "model", "datasets", "recipe", "compute", "sampling", "safety", "recovery", "continuation",
     }),
     "backend": frozenset({"name", "config"}),
-    "model": frozenset({"base", "revision"}),
+    "model": frozenset({"base"}),
     "datasets[]": frozenset({"id", "digest", "role"}),
     "compute": frozenset({"executor", "gpu", "capacity"}),
     "compute.capacity": frozenset({"mode", "timeout", "poll_interval"}),
@@ -34,7 +34,7 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
 }
 # Keys older Kura versions wrote that nothing reads now; `kura run resume` and `--from` drop them
 # from the frozen run they copy, which is a record of an older Kura.
-RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider"})
+RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider", "model.revision"})
 
 
 def validate_train_run_fields(run: dict[str, Any]) -> None:
@@ -50,6 +50,13 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
         for key in value:
             path = f"{level}.{key}" if level else str(key)
             if key in TRAIN_RUN_SCHEMA[level]:
+                continue
+            if path == "model.revision":
+                # No trainer receives it, so it would record a pin that never happened.
+                problems.append(
+                    "model.revision is not read by any trainer; remove it (sd-scripts and Musubi Tuner pin a file with "
+                    "backend.config.model_downloads.<role>.revision; the pinned AI-Toolkit loads the repository's default branch)"
+                )
                 continue
             suggestion = closest_key(str(key), TRAIN_RUN_SCHEMA[level])
             hint = f" (did you mean {suggestion!r}?)" if suggestion else ""

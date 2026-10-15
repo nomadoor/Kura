@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry, tagged_entries, trained_arch
+from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry, trained_arch
 from kura.backends.dataset_profiles import (
     caption_presence,
     classify_dataset_shape,
@@ -1181,8 +1181,7 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     override = _ai_toolkit_backend_override(run)
 
-    # The pinned ModelConfig takes no revision, so model.revision stays a label and never
-    # enters the identity: the trainer loads the repository's default branch.
+    # The pinned ModelConfig takes no revision: the trainer loads the repository's default branch.
     def requirement(role: str, reference: Any) -> dict[str, Any] | None:
         if not isinstance(reference, str) or not reference:
             return None
@@ -1258,7 +1257,7 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
     native = override.get("native_config") if isinstance(override.get("native_config"), dict) else {}
     arch = override.get("model_arch")
     selected = (
-        select_baseline_entry(arch, trained_arch(arch), (run.get("model") or {}).get("base"))
+        select_baseline_entry(arch, (run.get("model") or {}).get("base"))
         if isinstance(arch, str) else None
     )
     if selected is None:

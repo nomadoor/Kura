@@ -8,6 +8,132 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: one-field-models-sd-scripts-2026-10-16
+    backend: sd-scripts
+    reason: 'Model sources use one key per meaning: model_downloads takes repo, filename (a name, or a list whose first file is the one the trainer reads), revision, and repo_type, and refuses repo_id, file, and filenames naming the key to write; an empty model_paths entry is refused; model.revision is refused because no trainer receives it, and a Resume copy drops it as a retired key. Every recorded smoke wrote repo and filename and no model.revision a trainer read, so it downloads the same files and builds the same command.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 2946d874e7c0f746261703ec419be49b062d219c16994e25235c243e4623e844
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 611d4dff368179abb92ec3ba679a1b22b06fca706cab6926b42645100f82d941
+  - id: one-field-models-musubi-tuner-2026-10-16
+    backend: musubi-tuner
+    reason: 'Model sources use one key per meaning: model_downloads takes repo, filename (a name, or a list whose first file is the one the trainer reads), revision, and repo_type, and refuses repo_id, file, and filenames naming the key to write; an empty model_paths entry is refused; model.revision is refused because no trainer receives it, and a Resume copy drops it as a retired key. A Musubi model_bundle is used only when named (no auto), never with model_downloads, and by one name each; FLUX.2 takes its variant from model_version alone and refuses a bundle or Klein base for another variant; MiniMax-H3 takes its transformer family from the bundle, not the task; model_version, output_compatibility, and model_expectations accept their listed values only. The smoke harness now names the bundle each recorded FLUX.2 and Krea 2 smoke downloaded (flux2-klein-base-4b, krea2-raw), and the recorded MiniMax-H3 t2va guidance run used the files minimax-h3-fl2va-pruned-int8 names, so the same files and command follow.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8b7e7c140aeb3324096910a5abfa13e8c8cffa27b65f0a8cd1959470bb87d788
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 39723aab73126ca2e43b8a607a73bff11787505e24538bb2061751800b0a2b58
+  - id: one-field-models-ai-toolkit-2026-10-16
+    backend: ai-toolkit
+    reason: 'Model sources use one key per meaning: model_downloads takes repo, filename (a name, or a list whose first file is the one the trainer reads), revision, and repo_type, and refuses repo_id, file, and filenames naming the key to write; an empty model_paths entry is refused; model.revision is refused because no trainer receives it, and a Resume copy drops it as a retired key. model_arch alone picks the UI baseline entry: model.base never chooses one, and a base that is another entry''s model is refused. The UI names the pinned trainer reads as an arch (a :tag entry and flex1, toolkit/config_modules.py:768-775) are accepted model_arch values, written as given. An arch trained by several UI entries (wan21, wan21_i2v) is refused, naming them. Every recorded smoke named the entry it trained, so it fills the same baseline.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 63649a2557364ccf58fc0a88d85f9ab4467a341ce9f1d762c695c02bdeff087b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f7771df3f02b2072b80a1a4332c94865dcde93783bf54c35e4fcdab630439579
+  - id: one-field-models-runpod-executor-2026-10-16
+    executor: runpod
+    reason: 'A RunPod ComfyUI render reads its model sources by one key each (repo or url, filename, revision, subfolder, target_dir, target_name) and refuses repo_id, direct_url, file, and a malformed entry instead of treating it as unknown; comfyui.model_registry has one shape (folder, then model name), which kura workspace migrate produces from the older models: wrapper. Training launches read the same model_downloads as before for every recorded smoke, and no recorded render used an older key.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 3c5f9ff4e8ed5f7834087b9374f1126ffb05bb58b9d8c1cc9a3b298e6f36a110
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 93b52e362e6210d05c7cbb37c86ca59b7d54459ddeceee5e8ac61ec2594eacef
   - id: forwarded-values-sd-scripts-2026-10-15
     backend: sd-scripts
     reason: 'Forwarded values reach sd-scripts exactly as written, through one argv renderer, with no Kura default and no Kura type check: learning_rate, optimizer_type, mixed_precision, (for LoRA) network_dim and network_alpha, the FLUX.1 timestep_sampling, guidance_scale, and model_prediction_type, and the Anima LLLite timestep_sampling and discrete_flow_shift are required, SDXL text-encoder learning rates take the trainer''s one --text_encoder_lr (the numbered flags Kura emitted do not exist upstream, and no smoke set them), and an omitted Anima LoRA flow value or LLLite network value is the trainer''s own default. Every recorded smoke wrote the required values and each FLUX.1 and Anima flow value, so it builds the same training: the argv now leaves out gradient_accumulation_steps 1, the LLLite scalars, and the cache flag a disk cache implies, each of which equals the pinned trainer''s own default or implication.'

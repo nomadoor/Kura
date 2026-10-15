@@ -33,15 +33,18 @@ BASELINE_KEYS = {
 
 
 def trained_arch(model_arch: str) -> str:
-    """The arch AI-Toolkit trains for a listed model_arch: a tagged UI entry such as
-    ``zimage:turbo`` names its own (``zimage``); any other value is the arch itself."""
-    entry = load_baseline()["entries"].get(model_arch) if ":" in model_arch else None
-    return entry["arch"] if isinstance(entry, dict) else model_arch
+    """The arch the pinned trainer trains for ``model_arch``: it drops a UI ``:tag`` and reads
+    ``flex1`` as ``flux`` (toolkit/config_modules.py:768-775), so Kura writes the value as given."""
+    arch = model_arch.split(":", 1)[0]
+    return "flux" if arch == "flex1" else arch
 
 
-def tagged_entries() -> tuple[str, ...]:
-    """The UI entries whose name carries a tag; each is a model_arch value of its own."""
-    return tuple(sorted(name for name in load_baseline()["entries"] if ":" in name))
+def ui_entry_values(pinned_archs: frozenset[str]) -> tuple[str, ...]:
+    """UI entry names that are model_arch values of their own: the trainer reads each as a
+    pinned arch (``zimage:turbo``, ``flex1``), though it is not one by that name."""
+    return tuple(sorted(
+        name for name in load_baseline()["entries"] if name not in pinned_archs and trained_arch(name) in pinned_archs
+    ))
 
 
 @lru_cache(maxsize=1)
@@ -52,31 +55,30 @@ def load_baseline() -> dict[str, Any]:
     return payload
 
 
-def select_baseline_entry(model_arch: str, normalized_arch: str, model_base: object) -> tuple[str, dict[str, Any]] | None:
-    """Pick the UI entry the user would have selected, or None when there is none.
+def select_baseline_entry(model_arch: str, model_base: object) -> tuple[str, dict[str, Any]] | None:
+    """The UI entry the declared ``model_arch`` names, or None when there is none.
 
-    ``model_arch`` is the authored selector (it may carry a UI tag such as
-    ``zimage:turbo`` or the ``flex1`` alias); ``normalized_arch`` is the arch
-    AI-Toolkit trains. Several UI entries can share one arch. The entry whose
-    model path equals ``model.base`` wins when it is the only one; among several
-    such entries (or with no path match) the entry named like the selector,
-    then the entry named after the arch, then a sole candidate. Anything else is
-    ambiguous and returns None.
+    That is the entry of that name, else the one entry whose arch it is (``sd1`` is the UI's
+    ``sd15``). ``model.base`` never chooses: a base that is another entry's model path, and not
+    this entry's, is refused as a conflict.
     """
-    entries = {name: entry for name, entry in load_baseline()["entries"].items() if entry.get("arch") == normalized_arch}
-    if not entries:
+    entries = load_baseline()["entries"]
+    candidates = sorted(name for name, entry in entries.items() if entry.get("arch") == model_arch)
+    if model_arch not in entries and len(candidates) > 1:
+        raise ValueError(
+            f"AI-Toolkit model_arch {model_arch!r} is trained by several UI entries ({', '.join(candidates)}); "
+            "write the one you train as model_arch"
+        )
+    name = model_arch if model_arch in entries else candidates[0] if candidates else None
+    if name is None:
         return None
-    # Several entries can share one model path (krea2 and krea2:o_edit), so a
-    # path match narrows the candidates instead of deciding alone.
-    if isinstance(model_base, str) and model_base:
-        by_path = {name: entry for name, entry in entries.items() if entry.get("name_or_path") == model_base}
-        if len(by_path) == 1:
-            return next(iter(by_path.items()))
-        if by_path:
-            entries = by_path
-    for name in (model_arch, normalized_arch):
-        if name in entries:
-            return name, entries[name]
-    if len(entries) == 1:
-        return next(iter(entries.items()))
-    return None
+    entry = entries[name]
+    if isinstance(model_base, str) and model_base and model_base != entry.get("name_or_path"):
+        others = sorted(other for other, item in entries.items() if item.get("name_or_path") == model_base)
+        if others:
+            raise ValueError(
+                f"AI-Toolkit model.base {model_base!r} is the model of UI entry {', '.join(others)}, "
+                f"but model_arch {model_arch!r} selects entry {name!r} ({entry.get('name_or_path')}); "
+                "set model_arch to the entry you train, or point model.base at its model"
+            )
+    return name, entry

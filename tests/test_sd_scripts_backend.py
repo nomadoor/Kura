@@ -367,7 +367,7 @@ class SdScriptsBackendTests(unittest.TestCase):
         run = base_run()
         run["backend"]["config"].pop("model_paths")
         run["backend"]["config"]["model_downloads"] = {
-            "base": {"repo": "owner/model", "filename": "primary.safetensors", "filenames": ["companion.json"]}
+            "base": {"repo": "owner/model", "filename": ["primary.safetensors", "companion.json"]}
         }
 
         specs, paths = sd_scripts_model_download_specs(run)
@@ -812,13 +812,12 @@ class SdScriptsBackendTests(unittest.TestCase):
         self.assertEqual(by_role["dit"]["pinning"]["strength"], "immutable-revision")
         self.assertEqual(by_role["ae"]["acquisition"], "local-path")
 
-    def test_empty_explicit_model_path_does_not_suppress_download(self) -> None:
+    def test_an_empty_explicit_model_path_is_refused(self) -> None:
         run = base_run()
         run["backend"]["config"]["model_paths"]["base"] = ""
         run["backend"]["config"]["model_downloads"] = {"base": {"repo": "owner/model", "filename": "base.safetensors", "revision": "a" * 40}}
-        script = command_sd_scripts(run)["argv"][2]
-        self.assertIn("hf_hub_download", script)
-        self.assertIn("/workspace/cache/models/sd-scripts/owner--model/base/base.safetensors", script)
+        with self.assertRaisesRegex(ValueError, "model_paths must map model roles to file paths"):
+            command_sd_scripts(run)
 
     def test_disk_cache_plan_does_not_treat_integer_as_boolean(self) -> None:
         run = base_run()

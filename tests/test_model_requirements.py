@@ -64,7 +64,7 @@ class ModelRequirementsTests(unittest.TestCase):
         requirements = declared_model_requirements(
             {
                                 "model": {"base": "krea/Krea-2-Raw"},
-                "backend": {"name": "musubi-tuner", "config": {"architecture": "krea2"}},
+                "backend": {"name": "musubi-tuner", "config": {"architecture": "krea2", "model_bundle": "krea2-raw"}},
             }
         )
 

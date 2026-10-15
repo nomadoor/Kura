@@ -422,7 +422,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "wan":
@@ -486,7 +486,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "minimax_h3":
@@ -507,8 +507,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if loss_method == "training_adapter":
             if not paths.get("base_weights"):
                 raise ValueError(
-                    "Musubi MiniMax-H3 training_adapter requires model_paths.base_weights "
-                    "or model_downloads.base_weights"
+                    "Musubi MiniMax-H3 training_adapter requires model_paths.base_weights"
+                    + ("" if "model_bundle" in override else " or model_downloads.base_weights")
                 )
             if "int8_convrot" in Path(dit).name.lower():
                 raise ValueError(
@@ -608,7 +608,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         )
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "krea2":
@@ -661,7 +661,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "qwen_image":
@@ -711,7 +711,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "zimage":
@@ -752,7 +752,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "flux_kontext":
@@ -795,7 +795,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "ideogram4":
@@ -844,7 +844,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "hidream_o1":
@@ -890,7 +890,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "hunyuan_video":
@@ -932,7 +932,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "hunyuan_video_1_5":
@@ -984,7 +984,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "framepack":
@@ -1036,7 +1036,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "kandinsky5":
@@ -1085,7 +1085,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
         if prune_command is not None:
             commands.append(prune_command)
-        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+        if _musubi_output_compatibility(run)["lora_format"] != "none":
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     else:

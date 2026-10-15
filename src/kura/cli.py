@@ -270,7 +270,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
             "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
             "created": timestamp.isoformat(), "parent_run": None, "intent": "",
             "backend": {"name": args.backend or "ai-toolkit", "config": {}},
-            "model": {"base": "", "revision": None},
+            "model": {"base": ""},
             "datasets": [{"id": ""}],
             "recipe": {"steps": None, "seed": None},
             "compute": {"executor": executor, **({"gpu": [args.gpu]} if args.gpu else {})},

@@ -5626,7 +5626,7 @@ class DatasetHandoffTests(unittest.TestCase):
             ("edit", 1, "qwen-image-edit"),
             ("edit-2509", 3, "qwen-image-edit-multi-control"),
             ("edit-2511", 3, "qwen-image-edit-multi-control"),
-            ("EDIT_2509", 3, "qwen-image-edit-multi-control"),
+            ("edit-2509", 3, "qwen-image-edit-multi-control"),
         )
         for model_version, control_count, expected_profile in cases:
             with self.subTest(model_version=model_version), tempfile.TemporaryDirectory() as directory:

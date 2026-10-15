@@ -57,12 +57,12 @@ Where the weights come from depends on the backend:
   workspace, or under a `docker.mounts` target in `workspace.yaml`) for a local
   Docker run. `backend.config.model_arch` says what the weights are.
 - **sd-scripts** and **musubi-tuner** take their weights from
-  `backend.config.model_paths` and `backend.config.model_downloads` (musubi-tuner
-  also `model_bundle`). `model.base` is optional and only a label, except that
-  for musubi-tuner `architecture: flux2` a FLUX.2 Klein name in it (such as
-  `black-forest-labs/FLUX.2-klein-base-4b`) picks the variant when neither
-  `model_version` nor `model_bundle` does. `backend.config.architecture` says
-  what the weights are.
+  `backend.config.model_paths` and `backend.config.model_downloads`; musubi-tuner
+  can instead name a `model_bundle`, which downloads its own listed files and is
+  never combined with `model_downloads`. `model.base` is optional and only a
+  label. For musubi-tuner `architecture: flux2`, `model_version` alone picks the
+  variant; a bundle or a Klein name in `model.base` for another variant is
+  refused. `backend.config.architecture` says what the weights are.
 
 The family cards are named after the family, not the selector. The selector
 values each shipped card covers:
