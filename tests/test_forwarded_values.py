@@ -80,6 +80,20 @@ class ForwardedValueTests(unittest.TestCase):
         self.assertEqual(argv_value("--args", ["a=1", 2]), ["--args", "a=1", "2"])
         with self.assertRaisesRegex(ValueError, "not a mapping"):
             argv_value("--args", {"a": 1})
+        # A value never becomes another option, such as an output directory Kura owns.
+        for value in ([0.1, "--output_dir", "/elsewhere"], "--resume=/elsewhere"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "may not start with --"):
+                argv_value("--learning_rate", value)
+        self.assertEqual(argv_value("--shift", -1), ["--shift", "-1"])
+
+    @posix_only(DATASET_IO)
+    def test_sdxl_text_encoder_learning_rates_take_the_trainers_one_flag(self) -> None:
+        run = ARGV_RUNS["sd-scripts"]({"architecture": "sdxl", "text_encoder_lr": [1e-5, 2e-5]})
+        run["backend"]["config"] = with_required("sd-scripts", run["backend"]["config"])
+        validate_backend_config(run)
+        with tempfile.TemporaryDirectory() as directory:
+            argv = _compiled_argv(run, Path(directory) / "sd-scripts")
+        self.assertIn("--text_encoder_lr 1e-05 2e-05", argv)
 
     @posix_only(DATASET_IO)
     def test_zero_false_and_a_mistyped_value_reach_every_argv_trainer_as_written(self) -> None:
@@ -112,6 +126,14 @@ class ForwardedValueTests(unittest.TestCase):
         lllite["backend"]["config"]["model_paths"] = {"dit": "/models/dit", "qwen3": "/models/qwen3", "vae": "/models/vae"}
         validate_backend_config({**lllite, "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", lllite["backend"]["config"])}})
         self.assertNotIn("network_dim", with_required("sd-scripts", lllite["backend"]["config"]))
+
+    def test_a_resume_missing_a_required_value_is_sent_to_fork_from_weight(self) -> None:
+        run = ARGV_RUNS["musubi-tuner"]({"learning_rate": 1e-4, "network_dim": 4, "network_alpha": 4})
+        run["continuation"] = {"mode": "resume", "source": {"artifact_id": "state-1"}, "additional_steps": 1}
+        with self.assertRaisesRegex(ValueError, "requires optimizer_type .*cannot be resumed; write them and create a Fork from Weight instead"):
+            validate_backend_config(run)
+        # Planning the frozen manifest of such a run reads it as it is.
+        validate_backend_config(run, frozen=True)
 
     def test_capabilities_list_each_required_value_with_the_default_it_replaces(self) -> None:
         sd_scripts = backend_capabilities("sd-scripts")["required_fields"]

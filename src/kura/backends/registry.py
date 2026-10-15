@@ -360,8 +360,7 @@ SD_SCRIPTS_SURFACE = BackendSurface(
         _when("network_train_unet_only", mode=("lora",)),
         _when("qwen_image_vae_2d", architecture=("anima",)),
         _when("sigmoid_scale", architecture=("flux1", "anima")),
-        _when("text_encoder_lr1", architecture=("sdxl",)),
-        _when("text_encoder_lr2", architecture=("sdxl",)),
+        _when("text_encoder_lr", architecture=("sdxl",)),
         _when("timestep_sampling", architecture=("flux1", "anima")),
         _when("unet_lr", architecture=("sdxl",)),
         _when("unsloth_offload_checkpointing", mode=("lora",)),
@@ -427,8 +426,12 @@ _GENERAL_UNAVAILABLE = {
 }
 
 
-def validate_backend_config(run: dict[str, Any]) -> None:
-    """Reject authored values that have no declared home on the selected adapter."""
+def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> None:
+    """Reject authored values that have no declared home on the selected adapter.
+
+    `frozen` reads a manifest an earlier compile accepted: it is checked as it is, except for
+    values that became required after it was frozen.
+    """
 
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
@@ -516,7 +519,7 @@ def validate_backend_config(run: dict[str, Any]) -> None:
     if adapter.validate_authored is not None:
         adapter.validate_authored(run)
     # Last, so a more specific refusal of a value the run did write comes first.
-    if "command" not in native:
+    if "command" not in native and not frozen:
         missing = [
             item for item in adapter.surface.required if item.field not in native and matches(item.when_any)
         ]
@@ -529,6 +532,11 @@ def validate_backend_config(run: dict[str, Any]) -> None:
                     for item in missing
                 )
                 + ". Kura adds no training default; write the value you chose."
+                + (
+                    " A Resume continues its source exactly, so a source compiled while Kura still filled"
+                    " these values cannot be resumed; write them and create a Fork from Weight instead."
+                    if run.get("continuation") is not None else ""
+                )
                 + f" Run `kura run capabilities {adapter.name}` for required fields."
             )
 

@@ -84,11 +84,14 @@ def argv_value(flag: str, value: Any) -> list[str]:
         return [flag]
     if value is False:
         return []
-    if isinstance(value, list):
-        return [flag, *(str(item) for item in value)]
     if isinstance(value, dict):
         raise ValueError(f"{flag} takes a single value or a list, not a mapping")
-    return [flag, str(value)]
+    tokens = [str(item) for item in value] if isinstance(value, list) else [str(value)]
+    # The trainer would read such a value as another option, outside the flag Kura owns it under.
+    options = [token for token in tokens if token.startswith("--")]
+    if options:
+        raise ValueError(f"{flag} value(s) may not start with --, which the trainer reads as another option: " + ", ".join(options))
+    return [flag, *tokens]
 
 
 def config_argv(config: dict[str, Any], key: str, flag: str | None = None) -> list[str]:

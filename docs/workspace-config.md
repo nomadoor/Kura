@@ -140,7 +140,7 @@ rejected before compilation rather than silently ignored. FLUX and
 Anima flow-matching controls (`timestep_sampling`, `discrete_flow_shift`, and
 `sigmoid_scale`), FLUX `guidance_scale` / `model_prediction_type`, Anima
 `qwen_image_vae_2d` / `vae_chunk_size`, and SDXL `unet_lr` /
-`text_encoder_lr1` / `text_encoder_lr2` are validated native fields and appear
+`text_encoder_lr` (one number, or a list with one per text encoder, as sd-scripts takes it) are declared native fields and appear
 in the run plan. Use `extra_args` only for an audited upstream option not owned
 by Kura. Exact and argparse-abbreviated spellings of adapter-owned flags are
 rejected by the built-in selector; adapter-owned flags cannot be duplicated

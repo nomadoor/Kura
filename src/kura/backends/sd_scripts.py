@@ -97,7 +97,7 @@ OWNED_FLAGS = EPOCH_SAVE_FLAGS | {"--lr_scheduler_type", "--max_train_epochs"} |
     "--deepspeed", "--fused_backward_pass",
     "--timestep_sampling", "--discrete_flow_shift", "--sigmoid_scale", "--guidance_scale", "--model_prediction_type",
     "--attn_mode",
-    "--qwen_image_vae_2d", "--vae_chunk_size", "--unet_lr", "--text_encoder_lr1", "--text_encoder_lr2",
+    "--qwen_image_vae_2d", "--vae_chunk_size", "--unet_lr", "--text_encoder_lr",
     "--cond_emb_dim", "--lllite_mlp_dim", "--lllite_target_layers", "--lllite_cond_dim", "--lllite_cond_resblocks",
     "--lllite_dropout", "--lllite_multiplier", "--lllite_cond_in_channels", "--lllite_use_aspp",
     # The generated dataset TOML owns these values even when a pinned trainer
@@ -119,7 +119,7 @@ CONFIG_KEYS = {
     "cache_latents", "cache_latents_to_disk", "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk",
     "disk_cache_estimate_gb", "cpu_offload_checkpointing", "unsloth_offload_checkpointing",
     "save_every_n_steps", "save_last_n_steps", "timestep_sampling", "discrete_flow_shift", "sigmoid_scale", "guidance_scale",
-    "model_prediction_type", "attn_mode", "qwen_image_vae_2d", "vae_chunk_size", "unet_lr", "text_encoder_lr1", "text_encoder_lr2",
+    "model_prediction_type", "attn_mode", "qwen_image_vae_2d", "vae_chunk_size", "unet_lr", "text_encoder_lr",
     "cond_emb_dim", "lllite_mlp_dim", "lllite_target_layers", "lllite_cond_dim", "lllite_cond_resblocks", "lllite_dropout",
     "lllite_multiplier", "lllite_cond_in_channels", "lllite_use_aspp",
 }
@@ -229,7 +229,7 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
             args.extend(["--network_module", NETWORK_MODULES[architecture]])
     append_config_args(
         args, native,
-        "network_dim", "network_alpha", "unet_lr", "text_encoder_lr1", "text_encoder_lr2",
+        "network_dim", "network_alpha", "unet_lr", "text_encoder_lr",
         "gradient_checkpointing", "gradient_accumulation_steps", "network_train_unet_only", "fp8_base",
     )
     save_args: list[str] = []
@@ -420,7 +420,7 @@ def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
         "batch_size": uniform_dataset_value("batch_size", general.get("batch_size")), "gradient_accumulation_steps": native.get("gradient_accumulation_steps", 1), "resolution": uniform_dataset_value("resolution", general.get("resolution")),
         "optimizer": native.get("optimizer_type"), "precision": native.get("mixed_precision"),
         "flow_matching": flow,
-        "component_learning_rates": {key: native.get(key) for key in ("unet_lr", "text_encoder_lr1", "text_encoder_lr2")},
+        "component_learning_rates": {key: native.get(key) for key in ("unet_lr", "text_encoder_lr")},
         "memory": {
             **{key: native.get(key) for key in ("gradient_checkpointing", "fp8_base", "cache_latents", "cache_latents_to_disk", "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk", "blocks_to_swap", "qwen_image_vae_2d", "vae_chunk_size")},
             "attn_mode": native.get("attn_mode", "sdpa") if architecture == "anima" and mode == "controlnet_lllite" else native.get("attn_mode"),

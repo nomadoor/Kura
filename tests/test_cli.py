@@ -1842,7 +1842,7 @@ class RunPlanTests(unittest.TestCase):
             (run_dir / "resolved").mkdir(parents=True)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit, config: {config: {train: {lr: 1e-4}}}}\n", encoding="utf-8")
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner, config: {learning_rate: 0.00005, optimizer_type: adamw8bit, network_dim: 4, network_alpha: 4}}\ndatasets: [{id: tiny}]\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner, config: {learning_rate: 0.00005}}\ndatasets: [{id: tiny}]\n", encoding="utf-8")
             (run_dir / "resolved" / "dataset-observations.lock.yaml").write_text(
                 yaml.safe_dump({"schema_version": 1, "datasets": [{"dataset": "tiny", "observations": {"sample_count": 2, "captions_missing": 0, "condition_counts": {"source": 2}, "aspect_ratio_mismatches": {}}, "structural_findings": []}]}),
                 encoding="utf-8",
@@ -1862,7 +1862,8 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["intent_source"], "runs/compiled-example/run.yaml")
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
-            self.assertEqual(payload["backend"]["config"], {"learning_rate": 0.00005, "optimizer_type": "adamw8bit", "network_dim": 4, "network_alpha": 4})
+            # A manifest frozen before values became required is still planned as it is.
+            self.assertEqual(payload["backend"]["config"], {"learning_rate": 0.00005})
             self.assertEqual(payload["datasets"][0]["observations"]["samples"], 2)
             self.assertEqual(payload["datasets"][0]["observations"]["conditions"], {"source": 2})
             self.assertIn("preflight", payload)
