@@ -80,7 +80,15 @@ def merged_registry(*registries: Any) -> dict[str, Any]:
 
 
 def _registry_sections(registry: Any) -> dict[str, Any]:
-    return registry if isinstance(registry, dict) else {}
+    """A registry maps a model folder to model names; the older `models:` wrapper is refused, not read as a folder."""
+    if not isinstance(registry, dict):
+        return {}
+    if "models" in registry:
+        raise ValueError(
+            "a ComfyUI model registry lists model folders directly (checkpoints:, loras:, ...); remove the inner "
+            "models: wrapper (for comfyui.model_registry, `kura workspace migrate` does it)"
+        )
+    return registry
 
 
 def _lookup_model(registry: Any, model_type: str, name: str) -> dict[str, Any] | None:

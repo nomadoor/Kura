@@ -35,10 +35,6 @@ why, so it is not raised again.
 - 2026-10-11 | state runner | The Musubi Tuner runner path is written in three places (the contract, `musubi_command.py`, `registry.py`); a drift would make new runs read as compiled before the runner | review of the step-labels pull request | -
 - 2026-10-11 | images | `kura image build` builds from the editable install's checkout, not from the current worktree, so a worktree's Docker changes are silently left out | found while building the step-label images | -
 - 2026-10-11 | plan | For a Resume compiled before the logical-step change (`process_local` frozen in its lock), the plan and disk preflight show the configured cadence and count saves over the logical range, while its frozen command carries the cadence capped at the steps it adds | CodeRabbit on the step-labels pull request | P8
-
-## Rejected
-
-- 2026-10-11 | capabilities | REJECTED: declare field types in `kura run capabilities`; typed fields would break runs that give `learning_rate` as a string | deferred before this backlog existed; source not recorded | -
 - 2026-10-14 | YAML reader | `kura.yamlio` keeps the last value of a duplicate mapping key; YAML 1.2 requires unique keys, so a repeated setting should be refused instead of one copy silently winning | CodeRabbit on the authored-input foundation pull request | P9
 - 2026-10-14 | YAML reader | `kura.yamlio` still accepts the YAML 1.1 merge key `<<: *anchor`, a second way to write a mapping | CodeRabbit on the authored-input foundation pull request | -
 - 2026-10-14 | release gate | The one-YAML-reader check looks only for `import yaml`; another YAML library (for example `ruamel.yaml`) would pass it | CodeRabbit on the authored-input foundation pull request | -
@@ -69,3 +65,7 @@ why, so it is not raised again.
 - 2026-10-16 | one owner | The retired ComfyUI key map is written in `comfyui_models.py` and `workspace.py`; `registry.py` conditions for `model_bundle` and `model_version` copy the architectures of `MUSUBI_BUNDLES` and `MODEL_VERSIONS`; `MODEL_FORMATS` copies the validator's list with no test tying them | review of the model selection pull request | -
 - 2026-10-16 | workspace message | An old-shape `comfyui.model_registry.models.<folder>` is refused as an unsupported key under a folder named `models`, without naming the removed wrapper or `kura workspace migrate` | review of the model selection pull request | P11
 - 2026-10-16 | resume copy | A Resume or `--from` copy of an older Musubi run that relied on the automatic bundle, a bundle alias, `model_bundle: none`, or a bundle-filled `model_downloads` fails at compile (safely); the refusal should say to name the bundle or Fork from Weight | review of the model selection pull request | P9
+
+## Rejected
+
+- 2026-10-11 | capabilities | REJECTED: declare field types in `kura run capabilities`; typed fields would break runs that give `learning_rate` as a string | deferred before this backlog existed; source not recorded | -

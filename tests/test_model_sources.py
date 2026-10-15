@@ -29,6 +29,13 @@ class ModelSourceTests(unittest.TestCase):
             with self.subTest(entry=entry), self.assertRaisesRegex(ValueError, message):
                 resolve_model_specs(WORKFLOW, {"checkpoints": {"model.safetensors": entry}})
 
+    def test_a_wrapped_registry_is_refused_not_read_as_a_folder(self) -> None:
+        with self.assertRaisesRegex(ValueError, "remove the inner models: wrapper"):
+            resolve_model_specs(WORKFLOW, {"models": {"checkpoints": {"model.safetensors": {"repo": "org/model"}}}})
+        broken = {"schema_version": 2, "comfyui": {"model_registry": {"models": "checkpoints"}}}
+        with self.assertRaises(ValueError):
+            migrate_workspace_config(broken)
+
     def test_the_workspace_model_registry_has_one_shape_and_migrate_moves_the_old_one(self) -> None:
         validate_workspace_config({"schema_version": 2, "comfyui": {"model_registry": {"checkpoints": {"m.safetensors": {"repo": "a/b"}}}}})
         old = {"schema_version": 2, "comfyui": {"model_registry": {"models": {"checkpoints": {"m.safetensors": {"repo_id": "a/b", "file": "m.safetensors"}}}}}}

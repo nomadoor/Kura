@@ -415,6 +415,8 @@ def _one_model_registry_shape(config: dict[str, Any]) -> list[str]:
     if not isinstance(registry, dict):
         return []
     notes: list[str] = []
+    if "models" in registry and not isinstance(registry["models"], dict):
+        return []  # left for validation to refuse, never dropped silently
     wrapped = registry.pop("models", None)
     if isinstance(wrapped, dict):
         for section, entries in wrapped.items():
