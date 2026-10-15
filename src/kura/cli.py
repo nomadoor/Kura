@@ -444,6 +444,14 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
     if payload["integer_minimums"]:
         print("backend.config integer fields (whole numbers, at least): " + ", ".join(f"{field} >= {minimum}" for field, minimum in payload["integer_minimums"].items()))
     print("backend.config fields Kura decides from (exact values only; escape hatches may not set them): " + ", ".join(payload["decided_fields"]))
+    if payload["required_fields"]:
+        print("backend.config fields you must write (Kura adds no training default):")
+        for field, contract in payload["required_fields"].items():
+            clauses = " or ".join(
+                " and ".join(f"{selector}=" + "|".join(map(str, allowed)) for selector, allowed in clause.items())
+                for clause in contract["when_any"] if clause
+            )
+            print(f"  {field}" + (f" when {clauses}" if clauses else "") + f"; the trainer would otherwise use {contract['otherwise']}")
     if payload["unsupported_fields"]:
         print("unsupported fields:")
         for field, reason in payload["unsupported_fields"].items():

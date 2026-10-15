@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import re
 import sys
 import tempfile
@@ -13,6 +16,7 @@ import yaml
 
 from kura.backends import BACKENDS, backend_capabilities, validate_backend_config
 from kura.backends.shared import argv_value
+from kura.cli import cmd_run_capabilities
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
@@ -116,6 +120,22 @@ class ForwardedValueTests(unittest.TestCase):
         musubi = backend_capabilities("musubi-tuner")["required_fields"]
         self.assertEqual(musubi["timestep_sampling"]["when_any"], [{"architecture": ["flux2", "wan", "krea2", "hidream_o1"]}])
         self.assertEqual(backend_capabilities("ai-toolkit")["required_fields"], {})
+
+    def test_the_capabilities_text_lists_the_required_values_the_refusal_points_to(self) -> None:
+        for backend, expected in (
+            ("sd-scripts", "  guidance_scale when architecture=flux1; the trainer would otherwise use 3.5 (library/flux_train_utils.py:773)"),
+            ("musubi-tuner", "  learning_rate; the trainer would otherwise use 2e-6 (training/parser_common.py:323)"),
+        ):
+            with self.subTest(backend=backend):
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(cmd_run_capabilities(argparse.Namespace(backend=backend, json=False)), 0)
+                self.assertIn("backend.config fields you must write (Kura adds no training default):", stdout.getvalue())
+                self.assertIn(expected, stdout.getvalue())
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            cmd_run_capabilities(argparse.Namespace(backend="ai-toolkit", json=False))
+        self.assertNotIn("fields you must write", stdout.getvalue())
 
     def test_a_key_written_with_no_value_is_refused_on_every_backend(self) -> None:
         for backend, config in (

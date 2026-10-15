@@ -13,10 +13,12 @@ _VALUES: dict[str, Any] = {
     "network_dim": 32,
     "network_alpha": 32,
     "discrete_flow_shift": 3.0,
+    "guidance_scale": 1.0,
+    "model_prediction_type": "raw",
     "h3_guidance_loss_scale": 4.0,
     "h3_guidance_loss_sigma_min": 0.15,
 }
-_TIMESTEP_SAMPLING = {"flux2": "flux2_shift", "wan": "shift", "krea2": "krea2_shift", "hidream_o1": "uniform"}
+_TIMESTEP_SAMPLING = {"flux2": "flux2_shift", "wan": "shift", "krea2": "krea2_shift", "hidream_o1": "uniform", "flux1": "flux_shift", "anima": "shift"}
 
 
 def with_required(backend: str, config: dict[str, Any]) -> dict[str, Any]:

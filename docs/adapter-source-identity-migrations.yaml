@@ -10,7 +10,7 @@ description: >-
 records:
   - id: forwarded-values-sd-scripts-2026-10-15
     backend: sd-scripts
-    reason: 'Forwarded values reach sd-scripts exactly as written, through one argv renderer, with no Kura default and no Kura type check: learning_rate, optimizer_type, mixed_precision, and (for LoRA) network_dim and network_alpha are required, and an omitted FLUX.1, Anima, or LLLite value is the trainer''s own default. Every recorded smoke wrote the required values and each FLUX.1 and Anima flow value, so it builds the same training: the argv now leaves out gradient_accumulation_steps 1, the LLLite scalars, and the cache flag a disk cache implies, each of which equals the pinned trainer''s own default or implication.'
+    reason: 'Forwarded values reach sd-scripts exactly as written, through one argv renderer, with no Kura default and no Kura type check: learning_rate, optimizer_type, mixed_precision, (for LoRA) network_dim and network_alpha, the FLUX.1 timestep_sampling, guidance_scale, and model_prediction_type, and the Anima LLLite timestep_sampling and discrete_flow_shift are required, and an omitted Anima LoRA flow value or LLLite network value is the trainer''s own default. Every recorded smoke wrote the required values and each FLUX.1 and Anima flow value, so it builds the same training: the argv now leaves out gradient_accumulation_steps 1, the LLLite scalars, and the cache flag a disk cache implies, each of which equals the pinned trainer''s own default or implication.'
     behavior_changed: false
     evidence_ids:
     - sd-scripts-conformance-runpod-2026-10-11
@@ -30,7 +30,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: d1ad68f8ac41086b0875ab8c2c1a5fba0b4758e098588b60cd499508cae318db
+      value: 379a4dbfd506e6641d3ad51c2157e194d4df11dc4869f7a20ec1d9fa28f4c3fb
   - id: forwarded-values-musubi-tuner-2026-10-15
     backend: musubi-tuner
     reason: 'Forwarded values reach Musubi Tuner exactly as written, through one argv renderer, with no Kura default: learning_rate, optimizer_type, network_dim, network_alpha, the timestep_sampling of FLUX.2, Wan, Krea 2, and HiDream-O1, Wan''s discrete_flow_shift, and the MiniMax-H3 guidance values are required, and the fp8 alias and Krea 2''s implied fp8_scaled are removed. The smoke and conformance harness now writes the values Kura used to fill (adamw8bit, save_precision bf16, each timestep_sampling, Wan''s shift 3.0), so a recorded smoke trains the same model: what remains different is the data-loader worker count and persistence and the text-encoder cache batch size, which change loading speed and memory, not what is trained.'
@@ -58,10 +58,10 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: ca521dfd9b86e0d43db53dc3e0e1cdb15e391340d644c0d1ffa0ea3993725702
+      value: 98008d67471b7b592a0541fb2507b8e6e218387611f04fa7f7d2ece05862bc99
   - id: forwarded-values-ai-toolkit-2026-10-15
     backend: ai-toolkit
-    reason: 'A backend.config key written with no value is refused, an extra argument may not set a declared field, and the plan display keeps an authored 0 or false instead of falling through to the native config or baseline. The native config a recorded smoke compiles is unchanged.'
+    reason: 'A backend.config key written with no value is refused, and the plan display keeps an authored 0 or false instead of falling through to the native config or baseline. The native config a recorded smoke compiles is unchanged.'
     behavior_changed: false
     evidence_ids:
     - ai-toolkit-conformance-runpod-2026-10-11

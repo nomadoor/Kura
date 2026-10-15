@@ -27,6 +27,7 @@ from kura.backends.sd_scripts import compile_sd_scripts
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.backend_fixtures import with_required
 from tests.platform_support import DATASET_IO, posix_only
 
 
@@ -62,6 +63,7 @@ def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
     if mode == "controlnet_lllite":
         run["backend"]["config"].pop("network_dim")
         run["backend"]["config"].pop("network_alpha")
+    run["backend"]["config"] = with_required("sd-scripts", run["backend"]["config"])
     return run
 
 
@@ -726,23 +728,30 @@ class SdScriptsBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported key.*netwrok_dim"):
             validate_backend_config(run)
 
-    def test_unset_flow_values_are_the_trainers_own_and_authored_ones_pass_through(self) -> None:
+    def test_flow_values_pass_through_and_unset_anima_lora_ones_are_the_trainers_own(self) -> None:
         flux = base_run("flux1")
         flux_command = command_sd_scripts(flux)["argv"][2]
-        for flag in ("--timestep_sampling", "--guidance_scale", "--model_prediction_type", "--discrete_flow_shift"):
-            self.assertNotIn(flag, flux_command)
-        self.assertIsNone(display_sd_scripts(flux)["flow_matching"]["timestep_sampling"])
+        for flag in ("--timestep_sampling flux_shift", "--guidance_scale 1.0", "--model_prediction_type raw"):
+            self.assertIn(flag, flux_command)
+        self.assertNotIn("--discrete_flow_shift", flux_command)
+        self.assertEqual(display_sd_scripts(flux)["flow_matching"]["timestep_sampling"], "flux_shift")
+        for field in ("timestep_sampling", "guidance_scale", "model_prediction_type"):
+            unset = base_run("flux1")
+            del unset["backend"]["config"][field]
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"requires {field} for architecture='flux1'"):
+                validate_backend_config(unset)
+
+        anima = command_sd_scripts(base_run("anima", "lora"))["argv"][2]
+        for flag in ("--timestep_sampling", "--discrete_flow_shift", "--attn_mode"):
+            self.assertNotIn(flag, anima)
 
         lllite = base_run("anima", "controlnet_lllite")
-        lllite_command = command_sd_scripts(lllite)["argv"][2]
-        for flag in ("--timestep_sampling", "--discrete_flow_shift", "--attn_mode"):
-            self.assertNotIn(flag, lllite_command)
-
-        lllite["backend"]["config"].update({"attn_mode": "flash", "discrete_flow_shift": 3.0, "timestep_sampling": "shift"})
+        lllite["backend"]["config"].update({"attn_mode": "flash", "discrete_flow_shift": 1.0})
         lllite_command = command_sd_scripts(lllite)["argv"][2]
         self.assertEqual(lllite_command.count("--attn_mode flash"), 1)
-        self.assertIn("--discrete_flow_shift 3.0", lllite_command)
-        self.assertEqual(display_sd_scripts(lllite)["flow_matching"]["discrete_flow_shift"], 3.0)
+        self.assertIn("--timestep_sampling shift", lllite_command)
+        self.assertIn("--discrete_flow_shift 1.0", lllite_command)
+        self.assertEqual(display_sd_scripts(lllite)["flow_matching"]["discrete_flow_shift"], 1.0)
 
     def test_anima_lllite_rejects_fp8_base(self) -> None:
         run = base_run("anima", "controlnet_lllite")

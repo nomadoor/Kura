@@ -209,7 +209,7 @@ MUSUBI_SURFACE = BackendSurface(
     # Generic defaults of the pinned trainer (v0.3.5), shared by every architecture.
     required=(
         _required("learning_rate", "2e-6 (training/parser_common.py:323)"),
-        _required("optimizer_type", "'' (training/parser_common.py:310)"),
+        _required("optimizer_type", "'', read as AdamW (training/parser_common.py:310)"),
         _required("network_dim", "4 (networks/lora.py:420)"),
         _required("network_alpha", "1 (training/parser_common.py:561)"),
         _required("timestep_sampling", "sigma (training/parser_common.py:444)", {"architecture": ("flux2", "wan", "krea2", "hidream_o1")}),
@@ -310,14 +310,23 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 1), ("gradient_accumulation_steps", 1)),
     decided=frozenset({"lr_scheduler"}),
-    # Generic defaults of the pinned trainer (37a1cbb), shared by every architecture. FLUX.1,
-    # Anima, and LLLite values left unset take the architecture's own upstream defaults.
+    # Defaults of the pinned trainer (37a1cbb) that no one chose for the model: shared ones, and
+    # FLUX.1 and Anima LLLite flow values whose argparse defaults differ from what upstream's own
+    # guides train with (docs/flux_train_network.md:144-146, docs/anima_train_control_net_lllite.md:112-113).
+    # Anima LoRA flow values and the LLLite network values left unset take the trainer's own defaults.
     required=(
         _required("learning_rate", "2e-6 (library/args.py:87)"),
         _required("optimizer_type", "AdamW (library/optimizer.py:53)"),
         _required("mixed_precision", "no, full fp32 (library/args.py:367)"),
         _required("network_dim", "4 (networks/lora.py:429)", {"mode": ("lora",)}),
         _required("network_alpha", "1 (train_network.py:1926)", {"mode": ("lora",)}),
+        _required(
+            "timestep_sampling", "sigma for FLUX.1 (library/flux_train_utils.py:780), sigmoid for Anima LLLite (library/anima_train_utils.py:103)",
+            {"architecture": ("flux1",)}, {"architecture": ("anima",), "mode": ("controlnet_lllite",)},
+        ),
+        _required("guidance_scale", "3.5 (library/flux_train_utils.py:773)", {"architecture": ("flux1",)}),
+        _required("model_prediction_type", "sigma_scaled (library/flux_train_utils.py:793)", {"architecture": ("flux1",)}),
+        _required("discrete_flow_shift", "1.0 (library/anima_train_utils.py:97)", {"architecture": ("anima",), "mode": ("controlnet_lllite",)}),
     ),
     config_value_choices=(
         ("architecture", tuple(sorted({architecture for architecture, _ in ENTRYPOINTS}))),
