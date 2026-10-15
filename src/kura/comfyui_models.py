@@ -62,6 +62,10 @@ DEFAULT_MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
+# The keys of one model source (comfyui.model_registry and a workflow sidecar's models).
+MODEL_ENTRY_KEYS = ("repo", "url", "filename", "revision", "subfolder", "target_dir", "target_name")
+
+
 def merged_registry(*registries: Any) -> dict[str, Any]:
     merged: dict[str, Any] = deepcopy(DEFAULT_MODEL_REGISTRY)
     for registry in registries:
@@ -76,10 +80,7 @@ def merged_registry(*registries: Any) -> dict[str, Any]:
 
 
 def _registry_sections(registry: Any) -> dict[str, Any]:
-    if not isinstance(registry, dict):
-        return {}
-    sections = registry.get("models", registry)
-    return sections if isinstance(sections, dict) else {}
+    return registry if isinstance(registry, dict) else {}
 
 
 def _lookup_model(registry: Any, model_type: str, name: str) -> dict[str, Any] | None:
@@ -163,29 +164,23 @@ def resolve_model_specs(workflow: dict[str, Any], registry: Any) -> tuple[list[d
         if entry is None:
             unknown.append(ref)
             continue
-        repo = entry.get("repo") or entry.get("repo_id")
-        url = entry.get("url") or entry.get("direct_url")
-        filename = entry.get("filename") or entry.get("file") or ref["name"]
-        if (not isinstance(repo, str) or not repo) and (not isinstance(url, str) or not url):
-            unknown.append(ref)
-            continue
-        if not isinstance(filename, str) or not filename:
-            unknown.append(ref)
-            continue
-        target_dir = entry.get("target_dir") if isinstance(entry.get("target_dir"), str) and entry["target_dir"] else COMFYUI_MODEL_DIRS.get(ref["type"], ref["type"])
+        label = f"model {ref['type']}/{ref['name']}"
+        retired = {"repo_id": "repo", "direct_url": "url", "file": "filename"}
+        unknown_keys = sorted(set(entry) - set(MODEL_ENTRY_KEYS))
+        if unknown_keys:
+            raise ValueError(
+                f"{label} has unsupported key(s): "
+                + ", ".join(f"{key} (write {retired[key]})" if key in retired else key for key in unknown_keys)
+                + "; use " + ", ".join(MODEL_ENTRY_KEYS)
+            )
+        if ("repo" in entry) == ("url" in entry) or not all(isinstance(value, str) and value for value in entry.values()):
+            raise ValueError(f"{label} needs exactly one of repo or url, and every value a non-empty string")
         spec = {
             **ref,
-            "filename": filename,
-            "target_dir": target_dir,
-            "target_name": entry.get("target_name") if isinstance(entry.get("target_name"), str) else ref["name"],
+            "filename": entry.get("filename", ref["name"]),
+            "target_dir": entry.get("target_dir", COMFYUI_MODEL_DIRS.get(ref["type"], ref["type"])),
+            "target_name": entry.get("target_name", ref["name"]),
+            **{key: entry[key] for key in ("repo", "url", "revision", "subfolder") if key in entry},
         }
-        if isinstance(repo, str) and repo:
-            spec["repo"] = repo
-        if isinstance(url, str) and url:
-            spec["url"] = url
-        if isinstance(entry.get("revision"), str) and entry["revision"]:
-            spec["revision"] = entry["revision"]
-        if isinstance(entry.get("subfolder"), str) and entry["subfolder"]:
-            spec["subfolder"] = entry["subfolder"]
         specs.append(spec)
     return specs, unknown

@@ -134,12 +134,10 @@ AI-Toolkit still acquires its own base and companion models. Its backend-owned
 before the training command starts. This does not copy the base model into each
 run or change model-acquisition ownership. AI-Toolkit trains from `model.base`,
 so compile requires it there. The pinned trainer loads the repository's default
-branch and takes no revision, so `model.revision` is only a label for AI-Toolkit,
-as for the other backends: the run keeps it in `run.yaml` and
-`resolved/manifest.lock.yaml`, but its model requirement in
-`resolved/model-requirements.lock.yaml` names no revision. sd-scripts and Musubi
-Tuner take their models from `backend.config`, and `model.base` is an optional
-label for them.
+branch and takes no revision, so a run has no `model.revision`: compile refuses
+it, because it would record a pin that never happened. sd-scripts and Musubi
+Tuner take their models from `backend.config`, where `model_downloads` pins a
+file with `revision`, and `model.base` is an optional label for them.
 
 Training-state capture is on by default at the backend's weight checkpoint
 cadence. Completed state directories are copied into the protected

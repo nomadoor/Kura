@@ -207,7 +207,6 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             "backend": {"name": "musubi-tuner", "config": {
                 "architecture": "minimax_h3",
                 "task": "t2va",
-                "model_bundle": "none",
                 "model_paths": {
                     "dit": "/models/dit.safetensors",
                     "video_vae": "/models/video-vae.safetensors",

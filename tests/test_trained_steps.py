@@ -567,7 +567,7 @@ class FreshRunPlanTests(unittest.TestCase):
                 "safety": {"allow_many_checkpoints": True},
                 "sampling": {"cadence_steps": 10},
                 "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
-                    "architecture": "flux2", "model_bundle": "none", "save_every_n_steps": 50,
+                    "architecture": "flux2", "model_version": "klein-base-4b", "save_every_n_steps": 50,
                     "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}},
                 })},
             }

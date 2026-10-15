@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
-from kura.backends.ai_toolkit_baseline import tagged_entries, trained_arch
+from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
-from kura.backends.musubi_models import musubi_model_download_specs
+from kura.backends.musubi_models import FLUX2_MODEL_VERSIONS, MUSUBI_BUNDLES, QWEN_IMAGE_MODEL_VERSIONS, musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
 from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
@@ -140,7 +140,7 @@ def _compile_sd_scripts(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
 
 def _ai_toolkit_arch_values(arch: str) -> tuple[str, ...]:
     """Every model_arch value that trains `arch`: the arch and its tagged UI entries."""
-    return (arch, *(name for name in tagged_entries() if trained_arch(name) == arch))
+    return (arch, *(name for name in ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS) if trained_arch(name) == arch))
 
 
 AI_TOOLKIT_SURFACE = BackendSurface(
@@ -169,7 +169,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         "dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS,
         **AI_TOOLKIT_DATASET_OPTION_CAPABILITIES,
     },
-    config_value_choices=(("model_arch", tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *tagged_entries()}))),),
+    config_value_choices=(("model_arch", tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS)}))),),
     # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer. Its -1 accumulation
     # (a whole epoch) is refused: Kura counts and resumes by optimizer steps.
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 0), ("gradient_accumulation_steps", 1)),
@@ -220,6 +220,9 @@ MUSUBI_SURFACE = BackendSurface(
     config_value_choices=(
         ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
         ("h3_loss_method", ("guidance", "teacher_matching", "training_adapter")),
+        ("model_bundle", tuple(MUSUBI_BUNDLES)),
+        ("model_version", (*FLUX2_MODEL_VERSIONS, *QWEN_IMAGE_MODEL_VERSIONS)),
+        ("output_compatibility", ("comfyui", "none")),
     ),
     selector_defaults=(
         ("precache", True), ("one_frame", False), ("h3_loss_method", "guidance"),

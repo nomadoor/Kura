@@ -122,30 +122,32 @@ class BackendSurfaceContractTests(unittest.TestCase):
         from kura.backends.sd_scripts_models import sd_scripts_model_lock
 
         locks = {"musubi-tuner": _musubi_model_lock, "sd-scripts": sd_scripts_model_lock}
-        both = {"repo_id": "org/model", "filename": "a.safetensors", "filenames": ["b.safetensors"]}
-        for backend, (role, run) in self._model_download_runs(both).items():
-            with self.subTest(backend=backend, case="filename and filenames"):
+        listed = {"repo": "org/model", "filename": ["a.safetensors", "b.safetensors"]}
+        for backend, (role, run) in self._model_download_runs(listed).items():
+            with self.subTest(backend=backend, case="a list of files"):
                 specs, paths = BACKENDS[backend].download_specs(run)
-                # The file the trainer is pointed at is always one Kura downloads.
+                # Every listed file is fetched; the trainer is pointed at the first.
                 self.assertEqual([item["filename"] for item in specs if item["key"] == role], ["a.safetensors", "b.safetensors"])
                 self.assertTrue(paths[role].endswith("/a.safetensors"))
                 recorded = next(item for item in locks[backend](run)["models"] if item["role"] == role)
                 self.assertEqual((recorded["repo_id"], recorded["filename"], recorded["path"]), ("org/model", "a.safetensors", paths[role]))
-        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filenames": ["x.safetensors"]}).items():
-            with self.subTest(backend=backend, case="filenames only"):
-                recorded = next(item for item in locks[backend](run)["models"] if item["role"] == role)
-                self.assertEqual(recorded["filename"], "x.safetensors")
         for key in ("filname", "local_dir"):
-            for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filename": "a.safetensors", key: "x"}).items():
+            for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors", key: "x"}).items():
                 with self.subTest(backend=backend, case=key):
                     with self.assertRaisesRegex(ValueError, f"model_downloads.{role} contains unsupported key.*{key}"):
+                        BACKENDS[backend].download_specs(run)
+        for key, accepted in (("repo_id", "repo"), ("file", "filename"), ("filenames", "filename \\(a list\\)")):
+            declaration = {"repo": "org/model", "filename": "a.safetensors", key: "x"}
+            for backend, (role, run) in self._model_download_runs(declaration).items():
+                with self.subTest(backend=backend, case=key):
+                    with self.assertRaisesRegex(ValueError, f"model_downloads.{role} uses {key} \\(write {accepted}\\)"):
                         BACKENDS[backend].download_specs(run)
 
     def test_the_plan_counts_every_model_the_adapter_fetches(self) -> None:
         from kura.run_commands.plan import _estimate_backend_download_bytes
 
-        # A Musubi bundle can come from the architecture alone, with no model.base.
-        run = {"id": "r", "type": "train", "backend": {"name": "musubi-tuner", "config": {"architecture": "krea2"}}}
+        # A Musubi bundle is named in model_bundle, with no model.base.
+        run = {"id": "r", "type": "train", "backend": {"name": "musubi-tuner", "config": {"architecture": "krea2", "model_bundle": "krea2-raw"}}}
         specs, _ = BACKENDS["musubi-tuner"].download_specs(run)
         with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 7}):
             estimate = _estimate_backend_download_bytes(run)
@@ -155,7 +157,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
     def test_both_backends_read_model_downloads_through_the_owner(self) -> None:
         from kura.backends import shared
 
-        for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filename": "a.safetensors"}).items():
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors"}).items():
             module = "kura.backends.musubi_models" if backend == "musubi-tuner" else "kura.backends.sd_scripts_models"
             with self.subTest(backend=backend), patch(f"{module}.model_downloads", wraps=shared.model_downloads) as owner:
                 BACKENDS[backend].download_specs(run)
@@ -163,32 +165,27 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_a_malformed_download_value_is_refused_not_dropped(self) -> None:
         for declaration in (
-            {"repo_id": "org/model", "filenames": "a.safetensors"},
-            {"repo_id": "org/model", "filename": "a.safetensors", "filenames": ["b.safetensors", ""]},
-            {"repo_id": "org/model", "filename": "", "file": "a.safetensors"},
-            {"repo_id": "org/model", "filename": "a.safetensors", "revision": 3},
+            {"repo": "org/model", "filename": ["a.safetensors", ""]},
+            {"repo": "org/model", "filename": []},
+            {"repo": "org/model", "filename": ""},
+            {"repo": "org/model", "filename": "a.safetensors", "revision": 3},
+            {"filename": "a.safetensors"},
         ):
             for backend, (role, run) in self._model_download_runs(declaration).items():
-                with self.subTest(backend=backend, declaration=declaration), self.assertRaisesRegex(ValueError, f"model_downloads.{role} has invalid value"):
+                with self.subTest(backend=backend, declaration=declaration), self.assertRaisesRegex(ValueError, f"model_downloads.{role} requires repo and filename"):
                     BACKENDS[backend].download_specs(run)
 
     def test_a_download_mapping_is_checked_even_when_model_paths_names_the_role(self) -> None:
-        for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filname": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filname": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
             with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "unsupported key.*filname"):
                 BACKENDS[backend].download_specs(run)
-        with self.assertRaisesRegex(ValueError, "model_paths must be a mapping"):
+        with self.assertRaisesRegex(ValueError, "model_paths must map model roles to file paths"):
             BACKENDS["musubi-tuner"].download_specs({"backend": {"name": "musubi-tuner", "config": {"architecture": "krea2", "model_paths": ["x"]}}})
 
-    def test_an_empty_model_path_is_not_a_model_the_plan_skips(self) -> None:
-        from kura.run_commands.plan import _estimate_backend_download_bytes
-
-        for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filename": "a.safetensors"}, model_paths="").items():
-            with self.subTest(backend=backend):
-                specs, _ = BACKENDS[backend].download_specs(run)
-                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 7}):
-                    estimate = _estimate_backend_download_bytes(run)
-                self.assertEqual([item["key"] for item in specs], [role])
-                self.assertEqual([item["key"] for item in estimate["items"]], [role])
+    def test_an_empty_model_path_is_refused_not_skipped(self) -> None:
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors"}, model_paths="").items():
+            with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "model_paths must map model roles to file paths"):
+                BACKENDS[backend].download_specs(run)
 
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -407,7 +404,6 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ("musubi-tuner", {"architecture": 5, "fp8_base": True}, "architecture 5 is not accepted"),
             ("musubi-tuner", {"architecture": "unknownarch", "fp8_base": True}, "architecture 'unknownarch' is not accepted"),
             ("ai-toolkit", {"model_arch": "FLUX"}, "model_arch 'FLUX' is not accepted"),
-            ("ai-toolkit", {"model_arch": "flex1"}, "model_arch 'flex1' is not accepted"),
             ("ai-toolkit", {"model_arch": "sd1:portrait"}, "model_arch 'sd1:portrait' is not accepted"),
             ("ai-toolkit", {"model_arch": "Flex2", "bypass_guidance_embedding": True}, "model_arch 'Flex2' is not accepted"),
         )
@@ -520,7 +516,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         run = {"backend": {"name": "musubi-tuner", "config": {
             "architecture": "minimax_h3",
             "task": "t2va",
-            "model_bundle": "minimax-h3-pruned-int8",
+            "model_bundle": "minimax-h3-ref2va-pruned-int8",
             "h3_loss_method": "teacher_matching",
             "h3_teacher_conditions": "subject_ref",
             "h3_teacher_condition_sigma_min": 0.15,
@@ -1078,6 +1074,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
         tagged["backend"]["config"]["model_arch"] = "zimage:turbo"
         tagged["model"]["base"] = "not/a-listed-path"
         self.assertEqual(ai_toolkit_baseline(tagged)["entry"], "zimage:turbo")
+        # model.base never chooses the entry; a base that is another entry's model conflicts.
+        tagged["model"]["base"] = "Tongyi-MAI/Z-Image"
+        with self.assertRaisesRegex(ValueError, r"model.base 'Tongyi-MAI/Z-Image' is the model of UI entry zimage, but model_arch 'zimage:turbo' selects entry 'zimage:turbo'"):
+            ai_toolkit_baseline(tagged)
 
         # krea2:turbo and krea2:o_edit_turbo share one model path; the selector
         # decides, and edit mode never comes from the baseline.
@@ -1087,7 +1087,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 turbo["backend"]["config"] = {"model_arch": selector}
                 turbo["model"]["base"] = "krea/Krea-2-Turbo"
                 if expected is None:
-                    with self.assertRaisesRegex(ValueError, "no unambiguous entry"):
+                    with self.assertRaisesRegex(ValueError, "is the model of UI entry krea2:o_edit_turbo, krea2:turbo, but model_arch 'krea2' selects entry 'krea2'"):
                         ai_toolkit_baseline(turbo)
                     continue
                 selected = ai_toolkit_baseline(turbo)

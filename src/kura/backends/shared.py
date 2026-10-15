@@ -104,17 +104,17 @@ def append_config_args(args: list[str], config: dict[str, Any], *keys: str) -> N
         args.extend(config_argv(config, key))
 
 
-MODEL_DOWNLOAD_KEYS = ("repo_id", "repo", "filename", "file", "filenames", "revision", "repo_type")
+MODEL_DOWNLOAD_KEYS = ("repo", "filename", "revision", "repo_type")
+# Spellings an older Kura also read, and the one key each meant.
+_RETIRED_DOWNLOAD_KEYS = {"repo_id": "repo", "file": "filename", "filenames": "filename (a list)"}
 
 
 def explicit_model_paths(native: dict[str, Any], *, label: str) -> dict[str, str]:
-    """Roles the user points at a file directly; an empty path names no file."""
-    values = native.get("model_paths")
-    if values is None:
-        return {}
-    if not isinstance(values, dict):
-        raise ValueError(f"{label} model_paths must be a mapping")
-    return {key: value for key, value in values.items() if isinstance(key, str) and isinstance(value, str) and value}
+    """Roles the user points at a file directly."""
+    values = native.get("model_paths", {})
+    if not isinstance(values, dict) or not all(isinstance(key, str) and isinstance(value, str) and value for key, value in values.items()):
+        raise ValueError(f"{label} model_paths must map model roles to file paths")
+    return dict(values)
 
 
 def _safe_hf_filename(filename: str, *, label: str) -> str:
@@ -132,8 +132,9 @@ def model_downloads(
 ) -> list[dict[str, Any]]:
     """Read model_downloads once: per role, what to fetch, where the trainer finds it, and what to record.
 
-    The role's file (`filename`, else the first of `filenames`) is always among
-    the files fetched. Roles the user names in model_paths are checked but not fetched.
+    `filename` names the role's file, or a list of files whose first is the one the trainer is
+    pointed at (a sharded model and its index). Roles the user names in model_paths are checked
+    but not fetched.
     """
     if downloads is None:
         return []
@@ -143,6 +144,11 @@ def model_downloads(
     for role, value in downloads.items():
         if not isinstance(role, str) or not isinstance(value, dict):
             raise ValueError(f"{label} model_downloads must map model roles to download mappings")
+        retired = sorted(set(value) & set(_RETIRED_DOWNLOAD_KEYS))
+        if retired:
+            raise ValueError(
+                f"{label} model_downloads.{role} uses " + ", ".join(f"{key} (write {_RETIRED_DOWNLOAD_KEYS[key]})" for key in retired)
+            )
         unknown = sorted(set(value) - set(MODEL_DOWNLOAD_KEYS), key=str)
         if unknown:
             raise ValueError(
@@ -150,35 +156,30 @@ def model_downloads(
                 + "; use " + ", ".join(MODEL_DOWNLOAD_KEYS)
                 + " (model_paths points a role at a file you already have)"
             )
+        filename = value.get("filename")
+        filenames = filename if isinstance(filename, list) else [filename]
         malformed = [
             key for key in MODEL_DOWNLOAD_KEYS if key in value and not (
-                isinstance(value[key], list) and value[key] and all(isinstance(item, str) and item for item in value[key])
-                if key == "filenames" else isinstance(value[key], str) and value[key]
+                filenames and all(isinstance(item, str) and item for item in filenames)
+                if key == "filename" else isinstance(value[key], str) and value[key]
             )
         ]
-        if malformed:
+        if malformed or "repo" not in value or "filename" not in value:
             raise ValueError(
-                f"{label} model_downloads.{role} has invalid value(s) for: {', '.join(malformed)}; "
-                "filenames takes a list of non-empty file names, every other key a non-empty string"
+                f"{label} model_downloads.{role} requires repo and filename; repo, revision, and repo_type "
+                "take a non-empty string, filename a non-empty file name or a list of them"
             )
-        repo_id = value.get("repo_id") or value.get("repo")
-        filenames = list(value.get("filenames") or [])
-        filename = value.get("filename") or value.get("file") or (filenames[0] if filenames else None)
-        if not isinstance(repo_id, str) or not repo_id or not isinstance(filename, str) or not filename:
-            raise ValueError(f"{label} model_downloads.{role} requires repo_id and filename")
-        filename = _safe_hf_filename(filename, label=label)
         filenames = [_safe_hf_filename(item, label=label) for item in filenames]
-        if filename not in filenames:
-            filenames.insert(0, filename)
         if role in explicit:
             continue  # checked like any other declaration, but the user's own file wins
+        repo_id = value["repo"]
         entry: dict[str, Any] = {
-            "role": role, "repo_id": repo_id, "filename": filename, "filenames": filenames,
-            "path": cache_path(repo_id, role, filename),
+            "role": role, "repo_id": repo_id, "filename": filenames[0], "filenames": filenames,
+            "path": cache_path(repo_id, role, filenames[0]),
             "links": {item: cache_path(repo_id, role, item) for item in filenames},
         }
         for key in ("revision", "repo_type"):
-            if isinstance(value.get(key), str) and value[key]:
+            if key in value:
                 entry[key] = value[key]
         entries.append(entry)
     return entries

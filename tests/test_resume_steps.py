@@ -664,7 +664,7 @@ def _plannable_musubi_run() -> dict[str, Any]:
     run["experiment"] = "steps"
     run["compute"] = {"executor": "docker"}
     run["backend"]["config"] = with_required("musubi-tuner", {
-        "architecture": "flux2", "model_bundle": "none", "save_every_n_steps": 500,
+        "architecture": "flux2", "model_version": "klein-base-4b", "save_every_n_steps": 500,
         "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}},
     })
     return run

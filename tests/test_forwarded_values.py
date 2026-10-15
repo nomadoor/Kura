@@ -159,6 +159,13 @@ class ForwardedValueTests(unittest.TestCase):
             cmd_run_capabilities(argparse.Namespace(backend="ai-toolkit", json=False))
         self.assertNotIn("fields you must write", stdout.getvalue())
 
+    def test_the_ai_toolkit_ui_names_the_trainer_reads_are_model_arch_values(self) -> None:
+        # The pinned trainer drops a :tag and reads flex1 as flux (toolkit/config_modules.py:768-775).
+        choices = backend_capabilities("ai-toolkit")["config_value_choices"]["model_arch"]
+        for value in ("flex1", "zimage:turbo", "flux"):
+            self.assertIn(value, choices)
+        self.assertNotIn("sd15", choices)  # a UI name the trainer does not read; the arch is sd1
+
     def test_a_key_written_with_no_value_is_refused_on_every_backend(self) -> None:
         for backend, config in (
             ("sd-scripts", {"architecture": "sd15", "learning_rate": None}),

@@ -199,11 +199,11 @@ SMOKES: dict[str, Smoke] = {
     # Musubi Tuner image families.
     "musubi-flux2-klein-4b": _musubi(
         "flux2", "black-forest-labs/FLUX.2-klein-base-4B", IMAGE_DATASET, "flux_2_train_network.py",
-        model_version="klein-base-4b", timestep_sampling="flux2_shift", fp8_base=True, fp8_scaled=True, blocks_to_swap=8,
+        model_version="klein-base-4b", model_bundle="flux2-klein-base-4b", timestep_sampling="flux2_shift", fp8_base=True, fp8_scaled=True, blocks_to_swap=8,
     ),
     "musubi-krea2": _musubi(
         "krea2", "krea/Krea-2-Raw", IMAGE_DATASET, "krea2_train_network.py",
-        timestep_sampling="krea2_shift", fp8_base=True, fp8_scaled=True, blocks_to_swap=26, prune_checkpoints_before_step=1,
+        model_bundle="krea2-raw", timestep_sampling="krea2_shift", fp8_base=True, fp8_scaled=True, blocks_to_swap=26, prune_checkpoints_before_step=1,
     ),
     "musubi-qwen-image": _musubi(
         "qwen_image", "Comfy-Org/Qwen-Image_ComfyUI", IMAGE_DATASET, "qwen_image_train_network.py",
@@ -455,7 +455,7 @@ def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, ste
     return {
         "intent": intent or f"Real one-step {smoke.backend} smoke of {smoke.architecture} through the manifest-v2 handoff ({smoke_id}). Not a quality run.",
         "backend": {"name": smoke.backend, "config": config},
-        "model": {"base": smoke.model_base, "revision": None},
+        "model": {"base": smoke.model_base},
         "datasets": [{"id": smoke.dataset}],
         "recipe": {"steps": steps, "seed": 1},
         "compute": {
