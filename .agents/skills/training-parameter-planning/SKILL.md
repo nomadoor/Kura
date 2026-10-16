@@ -35,7 +35,7 @@ Before proposing parameters, inspect:
    reads a run, so first create it with `kura run new --experiment <name>
    --slug <words> --backend <backend>` and fill a draft
    `backend.config` that `kura run capabilities <backend>` accepts (for
-   sd-scripts, a `dataset_config` whose datasets have their `subsets`);
+   sd-scripts, a `dataset_config` whose datasets have their `subsets`, each naming its manifest dataset with `dataset_id`);
    revise the draft as the proposal takes shape;
 4. the matching family card, when present: `.kura/knowledge/model-families/<family>.md`
    (shipped) and `knowledge/model-families/<family>.md` (the user's, which wins);

@@ -36,6 +36,11 @@ that command reads.
                             # warns about captions the trainer receives without it
    ```
 
+   These, plus an optional free-text `description`, `excluded_files`,
+   `excluded_directories`, and `stats: {count: <n>}`, are the only keys a v2
+   `dataset.yaml` takes; validation refuses any other (such as an older
+   `layout` or `modality`), and the draft candidate leaves them out.
+
 3. `kura dataset draft <id> --write` writes `items.jsonl`. Check that each
    row pairs the right image and caption (each row points at its caption file
    as `caption.file`). It never replaces a file and never half adopts a draft:
@@ -107,7 +112,8 @@ particular, Musubi FLUX.2 reference images are authored with `role: "control"`
 because its generated JSONL consumes them as `control_path` /
 `control_path_N`; do not author a separate `reference` role for that path.
 Use `sha256` on an individual file reference only when the author intends to
-assert that exact digest. `kura dataset validate` refuses rows outside the
+assert that exact digest, written as 64 lowercase hex digits with no `sha256:`
+prefix, as every `*_sha256` record field is. `kura dataset validate` refuses rows outside the
 closed schema.
 
 ## Migrating old AI-Toolkit dataset selectors

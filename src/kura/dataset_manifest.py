@@ -24,6 +24,25 @@ ORDINARY_DATASET_SUFFIXES = {".caption", ".json", ".jsonl", ".md", ".txt", ".yam
 CAPTION_SUFFIXES = (".txt", ".caption")
 
 
+# Every key a manifest-v2 dataset.yaml may hold; `description` is free text Kura only shows.
+# `stats.count` is compared with the observed sample count.
+DATASET_YAML_KEYS = frozenset({"items_schema_version", "id", "description", "trigger_word", "excluded_files", "excluded_directories", "stats"})
+
+
+def dataset_yaml_problems(metadata: dict[str, Any]) -> list[str]:
+    """What a manifest-v2 dataset.yaml holds that Kura does not read, or holds in another form."""
+    problems = [f"{key} is not a dataset.yaml setting (use {', '.join(sorted(DATASET_YAML_KEYS))})" for key in sorted(map(str, set(metadata) - DATASET_YAML_KEYS))]
+    trigger = metadata.get("trigger_word")
+    if "trigger_word" in metadata and (not isinstance(trigger, str) or not trigger.strip() or trigger != trigger.strip()):
+        problems.append(f"trigger_word must be a non-empty string with no space at either end, not {trigger!r}")
+    stats = metadata.get("stats", {})
+    if not isinstance(stats, dict) or set(stats) - {"count"} or ("count" in stats and (isinstance(stats["count"], bool) or not isinstance(stats["count"], int))):
+        problems.append(f"stats takes only count, a whole number, not {stats!r}")
+    if "description" in metadata and not isinstance(metadata["description"], str):
+        problems.append("description must be text")
+    return problems
+
+
 def declares_items_v2(metadata: Any) -> bool:
     """Whether a parsed dataset.yaml declares manifest v2 (the integer 2, not 2.0 or true)."""
     return isinstance(metadata, dict) and type(metadata.get("items_schema_version")) is int and metadata["items_schema_version"] == 2
@@ -142,10 +161,10 @@ def _reference(
     if assertion is not None:
         if not isinstance(assertion, str):
             raise ValueError(f"{context}: sha256 must be a string")
-        expected = assertion.removeprefix("sha256:")
-        if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
-            raise ValueError(f"{context}: invalid sha256 assertion")
-        if digest != expected:
+        # One form, as every *_sha256 record field: 64 lowercase hex digits, no prefix.
+        if len(assertion) != 64 or any(character not in "0123456789abcdef" for character in assertion):
+            raise ValueError(f"{context}: sha256 must be 64 lowercase hex digits with no prefix, not {assertion!r}")
+        if digest != assertion:
             raise ValueError(f"{context}: sha256 assertion does not match {logical}")
     return logical, physical, digest, stat, content
 
@@ -275,6 +294,9 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
     if not declares_items_v2(metadata):
         raise ValueError("dataset.yaml requires items_schema_version: 2")
+    problems = dataset_yaml_problems(metadata)
+    if problems:
+        raise ValueError("dataset.yaml: " + "; ".join(problems))
     # A run selects a dataset by its directory name. A different declared id
     # would record one name while training another, so the two must agree.
     # The unresolved name is compared so a symlinked dataset directory is not
@@ -453,9 +475,20 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     metadata = load_yaml(metadata_path)
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
-    # Propose a dataset.yaml only when the authored one does not declare v2 yet.
-    proposed_metadata = None if declares_items_v2(metadata) else {**metadata, "items_schema_version": 2}
+    # Propose a dataset.yaml when the authored one does not declare v2 yet, or holds what v2 refuses.
     issues: list[str] = []
+    proposed_metadata = None
+    if not declares_items_v2(metadata) or dataset_yaml_problems(metadata):
+        proposed_metadata = {key: value for key, value in metadata.items() if key in DATASET_YAML_KEYS}
+        proposed_metadata["items_schema_version"] = 2
+        dropped = sorted(map(str, set(metadata) - DATASET_YAML_KEYS))
+        stats = proposed_metadata.get("stats")
+        if isinstance(stats, dict) and set(stats) - {"count"}:
+            dropped += [f"stats.{key}" for key in sorted(map(str, set(stats) - {"count"}))]
+            proposed_metadata["stats"] = {key: value for key, value in stats.items() if key == "count"}
+        if dropped:
+            issues.append("dataset.yaml keys manifest v2 does not read were left out of the candidate: " + ", ".join(dropped))
+        issues.extend(f"dataset.yaml candidate needs review: {problem}" for problem in dataset_yaml_problems(proposed_metadata))
     root = directory.resolve(strict=True)
     legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues, v2_rows_expected=proposed_metadata is None)
     choices: list[tuple[str, list[Path]]] = []
@@ -487,8 +520,10 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
                 issues.append(f"{relative}: generated/imported id {sample_id!r} is not unique; author must choose stable IDs")
             generated_ids.add(sample_id)
             target = {"type": "file", "role": "target", "path": relative}
-            if legacy is not None and isinstance(legacy.get("hash"), str):
-                target["sha256"] = legacy["hash"]
+            if legacy is not None and "hash" in legacy:
+                digest = _legacy_sha256(legacy["hash"], f"{relative}: legacy hash", issues)
+                if digest is not None:
+                    target["sha256"] = digest
             references = [target]
             if legacy is not None:
                 for field, role in (
@@ -510,8 +545,10 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
                         continue
                     reference = {"type": "file", "role": role, "path": legacy_path}
                     hash_field = f"{role}_hash"
-                    if isinstance(legacy.get(hash_field), str):
-                        reference["sha256"] = legacy[hash_field]
+                    if hash_field in legacy:
+                        digest = _legacy_sha256(legacy[hash_field], f"{relative}: legacy {hash_field}", issues)
+                        if digest is not None:
+                            reference["sha256"] = digest
                     references.append(reference)
             items.append({
                 "id": sample_id,
@@ -522,6 +559,15 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     if unmatched:
         issues.append("legacy rows do not match drafted media: " + ", ".join(unmatched))
     return {"dataset": root.name, "dataset_yaml": proposed_metadata, "items": items, "issues": issues}
+
+
+def _legacy_sha256(value: Any, context: str, issues: list[str]) -> str | None:
+    """A legacy row's digest in the one v2 form; a legacy row wrote it with a `sha256:` prefix."""
+    digest = value.removeprefix("sha256:") if isinstance(value, str) else None
+    if digest is None or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        issues.append(f"{context} {value!r} is not a SHA-256 digest; it was left out")
+        return None
+    return digest
 
 
 def _legacy_draft_rows(path: Path, issues: list[str], *, v2_rows_expected: bool) -> dict[str, dict[str, Any]]:
