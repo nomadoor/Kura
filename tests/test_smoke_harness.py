@@ -413,9 +413,93 @@ class RealSmokeHarnessTests(unittest.TestCase):
             _torch_archive(payload / "scheduler.bin", {"last_epoch": Path("x")})
             self.assertTrue(str(MODULE.state_counters(payload)["scheduler.bin:last_epoch"]).startswith("unreadable"))
 
-    def test_disk_problems_compare_the_peak_with_the_launch_estimate(self) -> None:
-        self.assertEqual(MODULE.disk_problems({"count": 3, "bytes": 10}, {"count": 3, "bytes": 3 * 1024**3}), [])
-        self.assertEqual(len(MODULE.disk_problems({"count": 4, "bytes": 10}, {"count": 3, "bytes": 3 * 1024**3})), 1)
+    def test_disk_problems_compare_the_peak_count_with_the_launch_estimate(self) -> None:
+        self.assertEqual(MODULE.disk_problems({"count": 3}, {"count": 3, "bytes": 3 * 1024**3}), [])
+        self.assertEqual(len(MODULE.disk_problems({"count": 4}, {"count": 3, "bytes": 3 * 1024**3})), 1)
+
+    def test_a_peak_sample_survives_a_folder_that_disappears_while_it_is_listed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "r1"
+            (run_dir / "outputs").mkdir(parents=True)
+            _safetensors(run_dir / "outputs" / "r1-step00000002.safetensors", b"\0\0\0\0")
+            peak = {"count": 0}
+            with patch.object(Path, "rglob", side_effect=FileNotFoundError("staging folder moved")):
+                MODULE._sample_peak(run_dir, peak)
+            self.assertEqual(peak, {"count": 0})
+            MODULE._sample_peak(run_dir, peak)
+            self.assertEqual(peak, {"count": 1})
+
+    def test_the_ai_toolkit_model_is_held_to_its_pinned_revision(self) -> None:
+        smoke = MODULE.conformance_smoke("ai-toolkit", "one")
+        self.assertEqual(smoke.model_revision, "3ee6c9f225f088ad5d35b624b6514b091e6a4849")
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            self.assertIn("not cached", MODULE.model_revision_problems(cache, smoke)[0])
+            ref = cache / "hub" / "models--hf-internal-testing--tiny-stable-diffusion-pipe" / "refs" / "main"
+            ref.parent.mkdir(parents=True)
+            ref.write_text("0" * 40, encoding="utf-8")
+            self.assertIn("0" * 40, MODULE.model_revision_problems(cache, smoke)[0])
+            self.assertIn("main", MODULE._cache_state(cache, smoke))
+            ref.write_text(smoke.model_revision, encoding="utf-8")
+            self.assertEqual(MODULE.model_revision_problems(cache, smoke), [])
+        self.assertEqual(MODULE.model_revision_problems(Path(directory), MODULE.conformance_smoke("sd-scripts", "one")), [])
+
+    def test_the_runpod_pass_shows_its_ceiling_before_creating_anything_and_needs_a_known_one(self) -> None:
+        known = {"max_lease": "12h", "max_lease_sec": 43200, "hourly_price": 0.5, "max_cost": 6.0, "basis": "the highest current quote", "unpriced": [], "reason": None}
+        unknown = {**known, "hourly_price": None, "max_cost": None, "reason": "RUNPOD_API_KEY is not set"}
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "workspace.yaml").write_text("{}\n", encoding="utf-8")
+            with patch.object(MODULE, "runpod_cost_ceiling", return_value=known), patch.object(MODULE, "_kura") as kura, contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(MODULE.conformance(workspace, ["ai-toolkit"], runpod=True, gpu="NVIDIA A40", yes=False), 0)
+            kura.assert_not_called()
+            self.assertIn("at most about $6.00", out.getvalue())
+            self.assertIn("Nothing launched", out.getvalue())
+            with patch.object(MODULE, "runpod_cost_ceiling", return_value=unknown), patch.object(MODULE, "_kura") as kura, contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(MODULE.conformance(workspace, ["ai-toolkit"], runpod=True, gpu="NVIDIA A40", yes=False), 0)
+            self.assertIn("unknown: RUNPOD_API_KEY is not set", out.getvalue())
+            self.assertNotIn("Add --yes", out.getvalue())
+            with patch.object(MODULE, "runpod_cost_ceiling", return_value=unknown), patch.object(MODULE, "_kura") as kura, contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(SystemExit, "known cost ceiling.*RUNPOD_API_KEY"):
+                    MODULE.conformance(workspace, ["ai-toolkit"], runpod=True, gpu="NVIDIA A40", yes=True)
+            kura.assert_not_called()
+            self.assertEqual(sorted(path.name for path in workspace.iterdir()), ["workspace.yaml"])
+
+    def test_conformance_refuses_a_workspace_on_a_windows_drive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "workspace.yaml").write_text("{}\n", encoding="utf-8")
+            with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "9p"}):
+                with self.assertRaisesRegex(SystemExit, "Windows drive.*WSL disk"):
+                    MODULE.conformance(workspace, ["sd-scripts"], runpod=False, gpu="x", yes=False)
+            with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4"}):
+                self.assertIsNone(MODULE.windows_drive_problem(workspace))
+            with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": False}):
+                self.assertIn(str(Path("/mnt/d/kura")), str(MODULE.windows_drive_problem(Path("/mnt/d/kura"))))
+            # findmnt's filesystem wins over the path: an ext4 disk mounted under /mnt/<letter> is fine.
+            with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4"}):
+                self.assertIsNone(MODULE.windows_drive_problem(Path("/mnt/d/kura")))
+        with patch("kura.storage.is_wsl", return_value=False):
+            self.assertIsNone(MODULE.windows_drive_problem(Path("/mnt/d/kura")))
+
+    def test_a_resume_that_does_not_run_fails_p3(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "workspace.yaml").write_text("{}\n", encoding="utf-8")
+            passing = {"P1": [], "P2": [], "P4": [], "P7": []}
+            with (
+                patch.object(MODULE, "ensure_dataset"), patch.object(MODULE, "_tree_digest", return_value="d"),
+                patch.object(MODULE, "_create_run", side_effect=lambda workspace, experiment, slug, smoke, fields: slug),
+                patch.object(MODULE, "_kura", side_effect=lambda workspace, *args, **kwargs: subprocess.CompletedProcess(args, 0, args[args.index("--slug") + 1] + "\n", "")),
+                patch.object(MODULE, "_compile"),
+                patch.object(MODULE, "_execute", side_effect=lambda workspace, run_id, runpod: (1 if "resume" in run_id else 0, {"count": 1}, "trainer failed")),
+                patch.object(MODULE, "check_run", return_value=passing), patch.object(MODULE, "_checkpoint_estimate", return_value={"count": 5}),
+                contextlib.redirect_stdout(io.StringIO()) as out,
+            ):
+                self.assertEqual(MODULE.conformance(workspace, ["sd-scripts"], runpod=False, gpu="x", yes=True), 1)
+            rows = {line.split()[0]: line.split()[1] for line in out.getvalue().splitlines() if line[:2] in {"P1", "P3"} and len(line.split()) == 2}
+            self.assertEqual(rows, {"P1": "FAIL", "P3": "FAIL"})
+            self.assertIn("sd-scripts P3 one-resume: not checked: one-resume did not complete", out.getvalue())
 
     @posix_only(DATASET_IO)
     def test_every_conformance_run_compiles_and_the_bucket_dataset_is_valid(self) -> None:

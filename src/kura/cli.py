@@ -23,7 +23,7 @@ from copy import deepcopy
 from kura import __version__
 from kura.yamlio import YAMLError, dump_yaml, load_yaml_text
 from kura import checks
-from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image
+from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image, enclosing_checkout
 from kura.managed import ensure_current
 from kura.install_source import kura_continuity_warning, kura_provenance
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
@@ -1401,6 +1401,16 @@ def cmd_image_build(args: argparse.Namespace) -> int:
     if development is None:
         return 1
     checkout, tag = development
+    # The running Kura builds its own checkout's docker/ files; a worktree's would be silently left out.
+    here = enclosing_checkout(Path.cwd().resolve())
+    if here is not None and here != checkout.resolve():
+        print(
+            f"cannot build image: this kura runs from the editable checkout {checkout} and builds its docker/ files, "
+            f"but the current directory is in another checkout, {here}; run `uv run kura image build {args.name}` "
+            f"there to build its files, or run this command from {checkout}",
+            file=sys.stderr,
+        )
+        return 1
     if not getattr(args, "allow_large_build_cache", False):
         # A development checkout may build outside any workspace; there the default limit applies.
         try:
@@ -1418,6 +1428,7 @@ def cmd_image_build(args: argparse.Namespace) -> int:
     ref_arg, default_ref = BUILD_SOURCES[args.name]
     dockerfile = checkout / "docker" / args.name / "Dockerfile"
     command = ["docker", "build", "--tag", tag, "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(checkout)]
+    print(f"building {tag} from {checkout}", file=sys.stderr)
     try:
         result = _docker_run(command)
     except FileNotFoundError:
@@ -1684,7 +1695,7 @@ def main() -> None:
 
     image = sub.add_parser("image", help="Build, inspect, and publish runtime images (editable Kura installs only)")
     image_sub = image.add_subparsers(dest="image_command", required=True)
-    build = image_sub.add_parser("build", help="Build a runtime image from the Kura checkout")
+    build = image_sub.add_parser("build", help="Build a runtime image from the editable checkout this kura runs from")
     build.add_argument("name", choices=tuple(PINNED_IMAGES))
     build.add_argument("--ref")
     build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds docker.build_cache_limit_gb (default 30)")

@@ -122,6 +122,15 @@ def launch_image_warnings(image: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def enclosing_checkout(start: Path) -> Path | None:
+    """The Kura source checkout (a `src/kura` package beside `docker/`) that holds `start`, or None."""
+
+    for directory in (start, *start.parents):
+        if (directory / "src" / "kura" / "__init__.py").is_file() and (directory / "docker").is_dir():
+            return directory
+    return None
+
+
 def development_checkout() -> Path | None:
     """The checkout of an editable install, which alone may build images."""
 
