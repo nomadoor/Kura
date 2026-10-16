@@ -1298,10 +1298,10 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def ai_toolkit_disk_cache(run: dict[str, Any]) -> str | None:
-    """What run-scoped disk cache the trainer writes, or None: latents (`cache_latents_to_disk`)
-    or text embeddings (`cache_text_embeddings`), which it stores beside each image in
-    `_latent_cache` and `_t_e_cache` (toolkit/dataloader_mixins.py), as authored or filled by the
-    pinned baseline."""
+    """What run-scoped disk cache the trainer writes, or None: latents (`cache_latents_to_disk`,
+    which only the pinned baseline sets on a dataset) or text embeddings (`train.cache_text_embeddings`,
+    authored in native_config or from the baseline, which the trainer copies onto every dataset),
+    stored beside each image in `_latent_cache` and `_t_e_cache` (toolkit/dataloader_mixins.py)."""
     override = _ai_toolkit_backend_override(run)
     if override.get("command") is not None:
         return None
@@ -1310,15 +1310,10 @@ def ai_toolkit_disk_cache(run: dict[str, Any]) -> str | None:
         baseline = ai_toolkit_baseline(run) or {}
     except ValueError:
         baseline = {}
-    datasets = [item for item in native.get("datasets") or [] if isinstance(item, dict)] if isinstance(native.get("datasets"), list) else []
     written = []
-    if any(item.get("cache_latents_to_disk") is True for item in datasets) or (baseline.get("dataset") or {}).get("cache_latents_to_disk") is True:
+    if (baseline.get("dataset") or {}).get("cache_latents_to_disk") is True:
         written.append("cache_latents_to_disk")
-    if (
-        _nested(native, "train", "cache_text_embeddings") is True
-        or any(item.get("cache_text_embeddings") is True for item in datasets)
-        or (baseline.get("train") or {}).get("cache_text_embeddings") is True
-    ):
+    if _first_set(_nested(native, "train", "cache_text_embeddings"), (baseline.get("train") or {}).get("cache_text_embeddings")) is True:
         written.append("cache_text_embeddings")
     return f"AI-Toolkit writes an on-disk cache ({', '.join(written)})" if written else None
 

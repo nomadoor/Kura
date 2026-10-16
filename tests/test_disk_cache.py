@@ -19,7 +19,7 @@ def _runs_that_write_a_cache() -> dict[str, dict]:
         "sd-scripts": {"backend": {"name": "sd-scripts", "config": {"architecture": "sd15", "cache_latents_to_disk": True}}},
         "musubi-tuner": {"backend": {"name": "musubi-tuner", "config": {"architecture": "wan"}}},
         "ai-toolkit authored": {"backend": {"name": "ai-toolkit", "config": {
-            "model_arch": "sd1", "native_config": {"datasets": [{"cache_latents_to_disk": True}]},
+            "model_arch": "sd1", "native_config": {"train": {"cache_text_embeddings": True}},
         }}},
         "ai-toolkit baseline": {"backend": {"name": "ai-toolkit", "config": {"model_arch": "ltx2.3"}}},
     }
@@ -41,9 +41,18 @@ class DiskCacheTests(unittest.TestCase):
             {"backend": {"name": "sd-scripts", "config": {"architecture": "sd15"}}},
             {"backend": {"name": "ai-toolkit", "config": {"model_arch": "sd1"}}},
             {"backend": {"name": "musubi-tuner", "config": {"command": ["true"]}}},
+            # An explicit command is the author's own; Kura cannot tell what it caches.
+            {"backend": {"name": "sd-scripts", "config": {"command": ["true"], "cache_latents_to_disk": True}}},
         ):
             with self.subTest(backend=run["backend"]["name"]):
                 self.assertEqual(plan._disk_cache_preflight_report(run), [])
+
+    def test_ai_toolkit_reads_the_authored_text_embedding_setting_over_its_baseline(self) -> None:
+        from kura.backends.ai_toolkit import ai_toolkit_disk_cache
+
+        # minimax_h3's baseline caches latents and text embeddings; authoring the embeddings off leaves the latents.
+        run = {"backend": {"name": "ai-toolkit", "config": {"model_arch": "minimax_h3", "native_config": {"train": {"cache_text_embeddings": False}}}}}
+        self.assertEqual(ai_toolkit_disk_cache(run), "AI-Toolkit writes an on-disk cache (cache_latents_to_disk)")
 
     def test_local_and_runpod_disk_checks_count_the_declared_cache(self) -> None:
         run = _runs_that_write_a_cache()["musubi-tuner"]
@@ -71,7 +80,7 @@ class DiskCacheTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "safety.disk_cache_estimate_gb must be a positive number"):
             validate_train_run_fields({"safety": {"disk_cache_estimate_gb": "1"}})
         retired = {"backend": {"name": "sd-scripts", "config": {"architecture": "sd15", "disk_cache_estimate_gb": 1}}}
-        with self.assertRaisesRegex(ValueError, "disk_cache_estimate_gb"):
+        with self.assertRaisesRegex(ValueError, "the disk cache size is safety.disk_cache_estimate_gb"):
             validate_backend_config(retired)
         self.assertNotIn("disk_cache_estimate_gb", without_retired_train_run_keys(retired)["backend"]["config"])
         # A run an older Kura compiled keeps its estimate where it wrote it.

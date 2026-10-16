@@ -450,6 +450,7 @@ _GENERAL_ML_ALIASES = {
 
 _GENERAL_UNAVAILABLE = {
     "epochs": "Kura training recipes are step-based; use recipe.steps",
+    "disk_cache_estimate_gb": "the disk cache size is safety.disk_cache_estimate_gb, one key for every backend",
 }
 
 

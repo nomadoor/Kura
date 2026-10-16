@@ -129,8 +129,8 @@ sd-scripts downloads and explicit paths are frozen in
 
 A run whose trainer writes a disk cache (Musubi Tuner always caches latents and
 text-encoder outputs; sd-scripts with `cache_latents_to_disk` or
-`cache_text_encoder_outputs_to_disk`; AI-Toolkit with `cache_latents_to_disk`
-or `cache_text_embeddings`, authored or from its pinned baseline) counts
+`cache_text_encoder_outputs_to_disk`; AI-Toolkit when its pinned baseline caches
+latents to disk or `train.cache_text_embeddings` is on, authored or from that baseline) counts
 `safety.disk_cache_estimate_gb` in both disk checks. Without it the plan warns
 that the cache size is unknown and not counted. Cache files stay below the
 individual run; the shared dataset remains unchanged.
