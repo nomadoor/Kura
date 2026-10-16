@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -385,6 +386,30 @@ class DevelopmentImageTests(unittest.TestCase):
         self.assertEqual(build[-1], str(ROOT))
         self.assertIn("SD_SCRIPTS_REF=37a1cbbc5725ed2a3575506e7bd2001c9908ac92", build)
         self.assertEqual(build[build.index("--tag") + 1], "kura-sd-scripts:dev")
+
+    def test_build_refuses_inside_another_checkout_and_names_the_one_it_builds(self) -> None:
+        # An editable install builds its own checkout's docker/ files; a worktree's are another checkout's.
+        with tempfile.TemporaryDirectory() as directory:
+            other = Path(directory).resolve() / "worktree"
+            (other / "src" / "kura").mkdir(parents=True)
+            (other / "src" / "kura" / "__init__.py").write_text("", encoding="utf-8")
+            (other / "docker").mkdir()
+            (other / "datasets").mkdir()
+            stderr = io.StringIO()
+            previous = Path.cwd()
+            os.chdir(other / "datasets")
+            try:
+                with patch("kura.cli.development_checkout", return_value=ROOT), patch("kura.cli._docker_run") as docker_run, patch("sys.stderr", stderr):
+                    self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None, allow_large_build_cache=True)), 1)
+            finally:
+                os.chdir(previous)
+            docker_run.assert_not_called()
+            self.assertIn(str(ROOT), stderr.getvalue())
+            self.assertIn(str(other), stderr.getvalue())
+        stderr = io.StringIO()
+        with patch("kura.cli.development_checkout", return_value=ROOT), patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "sha256:built\n", "")), patch("sys.stdout", io.StringIO()), patch("sys.stderr", stderr):
+            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None, allow_large_build_cache=True)), 0)
+        self.assertIn(f"from {ROOT}", stderr.getvalue())
 
     def test_publish_needs_a_target_tag(self) -> None:
         stdout = io.StringIO()

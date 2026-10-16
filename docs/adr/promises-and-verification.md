@@ -58,13 +58,25 @@ table:
   that is not a multiple of the steps per epoch; uninterrupted controls (two on
   the one-item dataset);
 - checks: steps trained, saved steps and names, published state steps,
-  Resume against the controls, disk peak against the estimate.
+  Resume against the controls (a Resume or control that did not complete fails
+  P3), disk peak against the estimate.
+
+P8 is checked on the checkpoint count: the most checkpoint files on local disk
+at once (sampled every half second and once after the run ends) must not exceed
+the count the launch estimate uses. That count is Kura's decision; the
+estimate's bytes are the count times `safety.checkpoint_estimate_gb`, a size the
+user sets and the small conformance models never approach, so bytes are not
+compared. No scenario run prunes while it trains, so its files only accumulate
+and the sample after the run sees the peak; the retention arithmetic of pruning
+trainers is held by py tests written from the pinned trainer sources.
 
 It runs on local Docker without billing. A RunPod pass runs the same scenario
 on one backend, Musubi Tuner or AI-Toolkit (the trainers most runs use), with
-the cost ceiling shown first, before a release. It checks every promise above
-except P8: the disk peak is sampled on the local disk, so P8 is checked on
-Docker only.
+the cost ceiling shown first (before any dataset or run is created; it launches
+only under a known ceiling), before a release. It checks every promise above
+except P8 and the pinned revision of a model the trainer downloads itself: the
+disk peak and the Hugging Face cache are read on the local disk, so those are
+checked on Docker only.
 
 Required: before a pull request that touches training state, Resume, saving,
 checkpoint naming, step accounting, model or dataset handoff, or an image or

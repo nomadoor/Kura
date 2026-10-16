@@ -19,6 +19,7 @@ validated with `kura dataset validate` and used as is.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import io
 import json
@@ -76,6 +77,9 @@ class Smoke:
     expected_script: str | None = None
     note: str = ""
     dataset_options: dict[str, Any] = field(default_factory=dict)
+    # The commit of `model_base` a run must train from, for a backend that downloads the
+    # repository itself and takes no revision (AI-Toolkit); the harness checks the cache for it.
+    model_revision: str | None = None
 
 
 def _download(repo: str, filename: str, revision: str | None = None) -> dict[str, str]:
@@ -296,6 +300,8 @@ SMOKES: dict[str, Smoke] = {
     "ai-toolkit-sd1": Smoke(
         "ai-toolkit", "sd1", "hf-internal-testing/tiny-stable-diffusion-pipe", IMAGE_DATASET,
         {"model_arch": "sd1", **_AITK_COMMON}, executor="docker", gpu="gpu", expected_script="run.py",
+        # The snapshot the maintainer's Hugging Face cache holds for this repository.
+        model_revision="3ee6c9f225f088ad5d35b624b6514b091e6a4849",
     ),
     "ai-toolkit-sdxl": Smoke(
         "ai-toolkit", "sdxl", "stabilityai/stable-diffusion-xl-base-1.0", IMAGE_DATASET,
@@ -893,13 +899,15 @@ def check_run(workspace: Path, run_id: str, start: int, end: int, cadence: int =
 
 
 def disk_problems(peak: dict[str, int], estimate: dict[str, Any]) -> list[str]:
-    """P8: the checkpoints on disk at once never exceed the launch estimate."""
-    problems = []
+    """P8 as the scenario can check it: the checkpoint files on disk at once never exceed the
+    count the launch estimate uses (`peak_checkpoints`). That count is Kura's decision; the
+    estimate's bytes are the count times `safety.checkpoint_estimate_gb`, a size the user sets,
+    which the small conformance models never approach, so bytes are not compared. No scenario
+    run prunes while it trains, so its files only accumulate and the sample taken after the run
+    ends sees the peak; pruning arithmetic is held by py tests (docs/adr/promises-and-verification.md)."""
     if peak["count"] > estimate.get("count", 0):
-        problems.append(f"{peak['count']} checkpoint files at once, estimated {estimate.get('count')}")
-    if peak["bytes"] > estimate.get("bytes", 0):
-        problems.append(f"{peak['bytes']} checkpoint bytes at once, estimated {estimate.get('bytes')}")
-    return problems
+        return [f"{peak['count']} checkpoint files at once, estimated {estimate.get('count')}"]
+    return []
 
 
 def _checkpoint_estimate(run_dir: Path) -> dict[str, Any]:
@@ -909,25 +917,22 @@ def _checkpoint_estimate(run_dir: Path) -> dict[str, Any]:
 
 
 def _sample_peak(run_dir: Path, peak: dict[str, int]) -> None:
+    """Raise `peak["count"]` to the checkpoint files on disk now. A folder that disappears while
+    it is listed (a training state being staged and moved) skips this sample; the next one counts."""
     outputs = run_dir / "outputs"
-    sizes = 0
+    try:
+        paths = [path.relative_to(outputs) for path in outputs.rglob("*.safetensors")] if outputs.is_dir() else []
+    except OSError:
+        return
     # A hidden directory is a training state being staged, not a checkpoint.
-    paths = [path.relative_to(outputs) for path in outputs.rglob("*.safetensors")] if outputs.is_dir() else []
     weights = checkpoint_files([path for path in paths if not any(part.startswith(".") for part in path.parts)], run_dir.name)
-    files = [*weights.stepped, *weights.final]
-    for path in files:
-        try:
-            sizes += (outputs / path).stat().st_size
-        except OSError:
-            pass
-    peak["count"] = max(peak["count"], len(files))
-    peak["bytes"] = max(peak["bytes"], sizes)
+    peak["count"] = max(peak["count"], len(weights.stepped) + len(weights.final))
 
 
 def _execute(workspace: Path, run_id: str, *, runpod: bool) -> tuple[int, dict[str, int], str]:
     """`kura run execute`, sampling the checkpoints on local disk while it runs."""
     run_dir = workspace / "runs" / run_id
-    peak = {"count": 0, "bytes": 0}
+    peak = {"count": 0}
     env = {**os.environ, "KURA_NOTIFY": "none"}
     with tempfile.TemporaryFile("w+", encoding="utf-8") as log:
         process = subprocess.Popen(_kura_argv("run", "execute", run_id, *(["--yes"] if runpod else [])), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
@@ -947,12 +952,28 @@ def _tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def model_revision_problems(hf_cache: Path, smoke: Smoke) -> list[str]:
+    """P4 for a backend that downloads `model_base` itself and takes no revision: the trainer
+    loads the repository's default branch, which the Hugging Face cache records in `refs/main`
+    when it resolves it, so after a run that ref names the commit the trainer loaded."""
+    if smoke.model_revision is None:
+        return []
+    ref = hf_cache / "hub" / f"models--{smoke.model_base.replace('/', '--')}" / "refs" / "main"
+    found = ref.read_text(encoding="utf-8").strip() if ref.is_file() else None
+    if found == smoke.model_revision:
+        return []
+    return [f"{smoke.model_base} resolves main to {found or 'nothing (not cached)'}, not the pinned {smoke.model_revision}"]
+
+
 def _cache_state(hf_cache: Path, smoke: Smoke) -> str:
     """Whether the backend's model files are already in the workspace's Hugging Face cache."""
     downloads = smoke.config.get("model_downloads") or {}
     if not downloads:
         repo = hf_cache / "hub" / f"models--{smoke.model_base.replace('/', '--')}"
-        return "cached" if repo.is_dir() else "not cached (downloaded at launch)"
+        if not repo.is_dir():
+            return "not cached (downloaded at launch)" + (f"; P4 needs main at {smoke.model_revision}" if smoke.model_revision else "")
+        problems = model_revision_problems(hf_cache, smoke)
+        return f"cached; {problems[0]}" if problems else "cached" + (f" at the pinned {smoke.model_revision}" if smoke.model_revision else "")
     parts = []
     for role, item in sorted(downloads.items()):
         path = hf_cache / "hub" / f"models--{item['repo'].replace('/', '--')}" / "snapshots" / item["revision"] / item["filename"]
@@ -960,11 +981,44 @@ def _cache_state(hf_cache: Path, smoke: Smoke) -> str:
     return ", ".join(parts)
 
 
+def windows_drive_problem(workspace: Path) -> str | None:
+    """Why a workspace cannot hold the scenario, or None: under WSL a Windows drive (drvfs,
+    for example /mnt/d) leaves a dataset directory unreadable after `ensure_dataset` renames it."""
+    from kura.storage import _drive_from_mnt_path, _findmnt_for, is_wsl
+
+    if not is_wsl():
+        return None
+    # The filesystem decides; only when findmnt names none does a /mnt/<letter> path stand for drvfs.
+    fstype = str(_findmnt_for(workspace).get("fstype") or "")
+    if fstype not in ("drvfs", "9p", "v9fs") if fstype else _drive_from_mnt_path(workspace) is None:
+        return None
+    return (
+        f"{workspace} is on a Windows drive ({fstype or 'drvfs'}) under WSL, where a renamed dataset directory is left "
+        "unreadable and dataset creation fails; create the conformance workspace on the WSL disk instead "
+        "(for example `mkdir ~/kura-conformance && cd ~/kura-conformance && kura init`) and keep docker.hf_cache "
+        "pointing at the cache that holds the models"
+    )
+
+
+def runpod_cost_ceiling(workspace: Path, config: dict[str, Any], smoke: Smoke) -> dict[str, Any]:
+    """The cost ceiling of one Pod of the RunPod pass, from the function `kura run plan` shows it
+    with, before any dataset or run exists. It reads RunPod prices; it creates nothing."""
+    from kura.run_commands.plan import _runpod_capacity_payload
+    from kura.secrets import load_secrets
+
+    with contextlib.chdir(workspace):
+        load_secrets()
+        return _runpod_capacity_payload(build_run_fields("conformance", smoke), config)["cost_ceiling"]
+
+
 def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str, yes: bool) -> int:
     if workspace.resolve() == REPO.resolve():
         raise SystemExit("conformance creates runs; give it a separate workspace (`kura init` one), not this checkout")
     if not (workspace / "workspace.yaml").is_file():
         raise SystemExit(f"{workspace} is not a Kura workspace; create it with `kura init`")
+    problem = windows_drive_problem(workspace)
+    if problem:
+        raise SystemExit(problem)
     if runpod and len(backends) != 1:
         raise SystemExit("the RunPod pass runs one backend; name it with --backend")
     config = load_yaml(workspace / "workspace.yaml") or {}
@@ -976,9 +1030,22 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
     datasets = sorted({dataset for backend in backends for dataset in conformance_datasets(backend).values()})
     print("  runs per backend, in order: " + "; ".join(f"{run.key} {'Resume to ' if run.resume_of else ''}{run.steps} steps" for run in SCENARIO))
     print(f"  datasets {', '.join(datasets)} (1 item, or 3 items in 3 buckets): created when absent, never rewritten")
-    if not runpod and not yes:
-        print("Nothing launched. Add --yes to run it.")
+    ceiling: dict[str, Any] = {}
+    if runpod:
+        from kura.executors.runpod import format_cost_ceiling
+
+        ceiling = runpod_cost_ceiling(workspace, config, replace(conformance_smoke(backends[0], "one"), executor="runpod", gpu=gpu))
+        print(f"  RunPod: {len(SCENARIO)} Pods one after another, each deleted by its maximum lease ({ceiling['max_lease']}) at the latest")
+        print(f"  cost ceiling per Pod: {format_cost_ceiling(ceiling)}")
+    unknown_ceiling = (
+        f"the RunPod pass launches only under a known cost ceiling, and this one is unknown: {ceiling.get('reason')}; "
+        "fix that (or choose a --gpu RunPod has a current price for) and run again"
+    ) if runpod and ceiling.get("max_cost") is None else None
+    if not yes:
+        print(f"Nothing launched. {unknown_ceiling[0].upper() + unknown_ceiling[1:]}." if unknown_ceiling else "Nothing launched. Add --yes to run it.")
         return 0
+    if unknown_ceiling:
+        raise SystemExit(unknown_ceiling)
 
     digests = {}
     for dataset in datasets:
@@ -1007,16 +1074,8 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
                 ids[run.key] = created.stdout.strip().splitlines()[-1]
                 _compile(workspace, ids[run.key])
             else:
-                fail("P3", ["its source run did not complete"], run.key)
-                continue
+                continue  # its source did not complete; P3 reports the Resume as not checked below
             run_id = ids[run.key]
-            if runpod and len(ids) == 1:
-                plan = _kura(workspace, "run", "plan", run_id).stdout
-                print("\n".join(line for line in plan.splitlines() if "cost_ceiling" in line or "max_lease" in line))
-                print(f"  this pass starts {len(SCENARIO)} Pods one after another, each bounded by that ceiling")
-                if not yes:
-                    print(f"Nothing launched. Add --yes to run it, or remove the compiled run with `kura run discard {run_id} --yes`.")
-                    return 0
             print(f"{backend} {run.key}: executing {run_id}", flush=True)
             code, peak, log = _execute(workspace, run_id, runpod=runpod)
             if code:
@@ -1028,18 +1087,24 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
             for promise, messages in check_run(workspace, run_id, source.steps if source else 0, run.steps).items():
                 fail(promise, messages, run.key)
             if not runpod:
+                # The disk peak and the model cache are sampled on this machine, not on a Pod.
                 fail("P8", disk_problems(peak, _checkpoint_estimate(workspace / "runs" / run_id)), run.key)
+                fail("P4", model_revision_problems(hf_cache, smoke), run.key)
         for resumed, controls in COMPARISONS.items():
-            if all(key in ids for key in (resumed, *controls)):
-                steps = next(item.steps for item in SCENARIO if item.key == resumed)
-                states = [_run_states(workspace, ids[key]).get(steps) for key in (resumed, *controls)]
-                if None in states:
-                    fail("P3", ["final state missing"], resumed)
-                    continue
-                image = str(_env_lock(workspace / "runs" / ids[resumed]).get("selected_image"))
-                failures, informational = resume_problems(states[0][1], [state[1] for state in states[1:]], image)
-                fail("P3", failures, resumed)
-                notes += [f"{backend} P3 {resumed}: {note} (informational)" for note in informational]
+            # A Resume, or a control it is held to, that did not complete leaves P3 unproven: a failure.
+            missing = [key for key in (resumed, *controls) if key not in ids]
+            if missing:
+                fail("P3", [f"not checked: {', '.join(missing)} did not complete"], resumed)
+                continue
+            steps = next(item.steps for item in SCENARIO if item.key == resumed)
+            states = [_run_states(workspace, ids[key]).get(steps) for key in (resumed, *controls)]
+            if None in states:
+                fail("P3", ["final state missing"], resumed)
+                continue
+            image = str(_env_lock(workspace / "runs" / ids[resumed]).get("selected_image"))
+            failures, informational = resume_problems(states[0][1], [state[1] for state in states[1:]], image)
+            fail("P3", failures, resumed)
+            notes += [f"{backend} P3 {resumed}: {note} (informational)" for note in informational]
         fail("P7", [f"dataset {dataset} changed" for dataset, digest in digests.items() if _tree_digest(workspace / "datasets" / dataset) != digest], "datasets")
         table[backend] = results
 
