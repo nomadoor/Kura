@@ -73,7 +73,7 @@ class ConfirmationShowsCeilingTests(unittest.TestCase):
         ):
             confirm_runpod_billing({"gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]}, "registry/image:tag", yes=True, max_lease_sec=6 * 3600)
         text = stderr.getvalue()
-        self.assertIn("  Maximum lease: 6h\n", text)
+        self.assertIn("  Maximum lease: 6h after the Pod starts; then the Pod deletes itself, collected or not\n", text)
         self.assertIn("  Cost ceiling: at most about $2.40 (6h at $0.400/hr, the highest current quote); disk storage is billed separately\n", text)
 
     def test_billed_confirmation_says_when_the_ceiling_is_unknown(self) -> None:

@@ -1,5 +1,4 @@
 import json
-import importlib.util
 import sys
 import tempfile
 import unittest
@@ -418,50 +417,6 @@ class BindingNameSafetyTest(unittest.TestCase):
                 compile_render(root, run_dir)
             self.assertIn("plain names", str(caught.exception))
             self.assertFalse(escape.exists())
-
-
-class WorkflowRepositoryCheckTest(unittest.TestCase):
-    def test_standalone_promptset_rejects_unsafe_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            promptsets = root / "promptsets"
-            promptsets.mkdir()
-            (promptsets / "unsafe.jsonl").write_text(
-                json.dumps({"id": "../../escape", "prompt": "x"}) + "\n",
-                encoding="utf-8",
-            )
-            spec = importlib.util.spec_from_file_location(
-                "kura_check_workflows_test",
-                Path(__file__).resolve().parents[1] / "scripts" / "check_workflows.py",
-            )
-            assert spec is not None and spec.loader is not None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            module.ROOT = root
-            module.WORKFLOWS = root / "workflows"
-            module.PROMPTSETS = promptsets
-            self.assertEqual(module.main(), 1)
-
-    def test_standalone_promptset_rejects_duplicate_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            promptsets = root / "promptsets"
-            promptsets.mkdir()
-            (promptsets / "duplicate.jsonl").write_text(
-                json.dumps({"id": "same", "prompt": "x"}) + "\n" + json.dumps({"id": "same", "prompt": "y"}) + "\n",
-                encoding="utf-8",
-            )
-            spec = importlib.util.spec_from_file_location(
-                "kura_check_workflows_duplicate_test",
-                Path(__file__).resolve().parents[1] / "scripts" / "check_workflows.py",
-            )
-            assert spec is not None and spec.loader is not None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            module.ROOT = root
-            module.WORKFLOWS = root / "workflows"
-            module.PROMPTSETS = promptsets
-            self.assertEqual(module.main(), 1)
 
 
 class WorkflowFixedRecordTest(unittest.TestCase):

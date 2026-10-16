@@ -1311,11 +1311,11 @@ def cmd_workflow_check(args: argparse.Namespace) -> int:
         paths = _named_paths(args.paths, "check workflows")
         if paths is None:
             return 1
-        unsupported = [str(path) for path in paths if path.is_file() and path.suffix not in {".json", ".jsonl"}]
+        unsupported = [str(path) for path in paths if path.is_file() and path.suffix != ".json"]
         if unsupported:
-            print(f"cannot check workflows: not workflow JSON or promptset JSONL: {', '.join(unsupported)}", file=sys.stderr)
+            print(f"cannot check workflows: not workflow JSON: {', '.join(unsupported)}; `kura render compile` checks a case queue", file=sys.stderr)
             return 1
-        files = [path for path in checks.expand(paths) if path.suffix in {".json", ".jsonl"} or path.name.endswith(":Zone.Identifier")]
+        files = [path for path in checks.expand(paths) if path.suffix == ".json" or path.name.endswith(":Zone.Identifier")]
         workflows_root = None
     else:
         try:
@@ -1324,9 +1324,9 @@ def cmd_workflow_check(args: argparse.Namespace) -> int:
             print(f"cannot check workflows: {_safe_error(exc)}", file=sys.stderr)
             return 1
         workflows_root = root / "workflows"
-        files = checks.default_workflow_files(workflows_root, root / "promptsets")
+        files = checks.default_workflow_files(workflows_root)
     if not files:
-        print("cannot check workflows: no workflow JSON or promptset JSONL was found", file=sys.stderr)
+        print("cannot check workflows: no workflow JSON was found", file=sys.stderr)
         return 1
     findings = checks.workflow_findings(files, Path.cwd(), workflows_root)
     if not findings:
@@ -1626,7 +1626,7 @@ def main() -> None:
     execute.add_argument("run_id")
     execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
     execute.add_argument("--max-lease", default=f"{DEFAULT_MAX_LEASE_SEC // 3600}h", help="RunPod only: the Pod deletes itself this long after it starts, whatever happens locally, e.g. 12h; it must be longer than zero, since Kura never starts a Pod without it.")
-    execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after training, how long the Pod waits for Kura to collect outputs before deleting itself: auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
+    execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after the job ends, how long the Pod waits for Kura to collect outputs before deleting itself (the maximum lease still applies): auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
     execute.set_defaults(func=cmd_run_execute)
     logs = run_sub.add_parser("logs", help="Print the last 200 lines (at most 50 KB) of a run log, naming the full log, or follow it")
     logs.add_argument("run_id")
@@ -1678,7 +1678,7 @@ def main() -> None:
     render_new = render_sub.add_parser("new", help="Create a ComfyUI render run")
     render_new.add_argument("--slug", required=True)
     render_new.set_defaults(func=cmd_render_new)
-    render_compile = render_sub.add_parser("compile", help="Freeze workflow and promptset inputs")
+    render_compile = render_sub.add_parser("compile", help="Freeze the workflow and case queue inputs")
     render_compile.add_argument("run_id")
     render_compile.set_defaults(func=cmd_run_compile)
     render_launch = render_sub.add_parser("launch", help="Generate images through ComfyUI")
@@ -1709,10 +1709,10 @@ def main() -> None:
     publish.add_argument("--dry-run", action="store_true")
     publish.set_defaults(func=cmd_image_publish)
 
-    workflow_parser = sub.add_parser("workflow", help="Check ComfyUI workflow and promptset files")
+    workflow_parser = sub.add_parser("workflow", help="Check ComfyUI workflow files")
     workflow_sub = workflow_parser.add_subparsers(dest="workflow_command", required=True)
-    workflow_check = workflow_sub.add_parser("check", help="Validate workflow JSON and promptset JSONL files")
-    workflow_check.add_argument("paths", nargs="*", help="Files or directories; defaults to the workspace's workflows/ and promptsets/")
+    workflow_check = workflow_sub.add_parser("check", help="Validate ComfyUI workflow JSON files; `kura render compile` checks case queues")
+    workflow_check.add_argument("paths", nargs="*", help="Files or directories; defaults to the workspace's workflows/")
     workflow_check.set_defaults(func=cmd_workflow_check)
 
     check_parser = sub.add_parser("check", help="Check files before sharing or publishing them")
@@ -1726,7 +1726,7 @@ def main() -> None:
 
     runner_parser = sub.add_parser("runner", help="The job runner that keeps launched runs going when your session ends")
     runner_sub = runner_parser.add_subparsers(dest="runner_command", required=True, metavar="{status,start,stop}")
-    runner_sub.add_parser("status", help="Show whether a runner is running, its epoch and version, and requests it cannot take").set_defaults(func=cmd_runner_status)
+    runner_sub.add_parser("status", help="Show whether a runner is running (and why not when it is not), its epoch and version, and requests it cannot take").set_defaults(func=cmd_runner_status)
     runner_sub.add_parser("start", help="Start the runner by hand; launching commands start it on their own").set_defaults(func=cmd_runner_start)
     runner_sub.add_parser("stop", help="Stop the runner; containers keep running and the next runner follows them").set_defaults(func=cmd_runner_stop)
     # Started by Kura itself: the runner, and one follower per launch.
@@ -1801,11 +1801,15 @@ def cmd_runner_status(_: argparse.Namespace) -> int:
 
     root = _workspace()
     info = runner.runner_info(root) or {}
+    state, detail = runner.runner_state(root)
     print(json.dumps({
-        "running": runner.runner_alive(root),
+        "running": state == "running",
+        "state": state,
+        "detail": detail,
         "stopped_on_purpose": runner.stopped_on_purpose(root),
+        # The current runner, or the last one when none is running.
         "epoch": info.get("epoch"), "pid": info.get("pid"), "kura_version": info.get("kura_version"),
-        "started_at": info.get("started_at"),
+        "started_at": info.get("started_at"), "ended_at": info.get("ended_at"),
         "requests_for_another_version": runner.foreign_requests(root),
         "log": str(runner.runner_dir(root).relative_to(root) / "runner.log"),
     }, indent=2))

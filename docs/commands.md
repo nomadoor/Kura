@@ -244,7 +244,7 @@ completing starts again, as a new run from its settings:
 | Command | Purpose |
 | --- | --- |
 | `uv run kura render new --slug <slug>` | Create a ComfyUI render run |
-| `uv run kura render compile <run-id>` | Freeze workflow and the explicit or legacy-normalized render case queue |
+| `uv run kura render compile <run-id>` | Freeze the workflow and the render case queue (`inputs.cases`); a new `inputs.promptset` is refused |
 | `uv run kura render launch <run-id>` | Generate images through ComfyUI |
 | `uv run kura render launch <run-id> --executor runpod` | Generate images through a disposable RunPod ComfyUI Pod |
 
@@ -267,6 +267,10 @@ inputs:
   cases: {path: cases/checkpoint-review.jsonl, digest: null}
   workflow: {path: workflows/example-api.json, digest: null}
 ```
+
+A `digest` of `null` asserts nothing: compile records the file's digest in the
+run lock. A `sha256:...` digest asserts the file, and compile refuses the run
+when the file no longer matches it.
 
 Each JSONL row has this shape:
 
@@ -350,7 +354,8 @@ and cleaned up afterwards. RunPod case queues support trained LoRAs through a `l
 or the workflow sidecar's `lora_insert`; Kura uploads every selected LoRA before
 starting the remote render. Frozen `type: image` inputs are also deduplicated,
 verified, and uploaded before ComfyUI starts. Dynamic full-checkpoint and
-model-patch staging remain local-executor features.
+model-patch staging remain local-executor features: compile refuses a RunPod
+render whose workflow binds `model_patch`, before any Pod starts.
 
 ### Legacy promptsets
 
@@ -407,7 +412,7 @@ authored checkpoint hash must match its file.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura workflow check [<path>...]` | Validate ComfyUI workflow JSON and promptset JSONL; a named `.json` must be API format unless an `_api.json` twin sits beside it. With no path, the workspace's `workflows/*.json` and `promptsets/*.jsonl` |
+| `uv run kura workflow check [<path>...]` | Validate ComfyUI workflow JSON; a named `.json` must be API format unless an `_api.json` twin sits beside it. With no path, the workspace's `workflows/*.json`. Case queues are checked by `kura render compile` |
 | `uv run kura check secrets <path>...` | Scan exactly the named files and directories, before sharing them, for the secret values Kura holds and for token shapes (`hf_`, `rpa_`, `Bearer`); reports `path:line` without the value, skips binary and model files, refuses `.env.local` and the user secrets file, and reports an unreadable file as a finding |
 | `uv run kura check artifacts <path>...` | List model weight files in the named files and directories |
 

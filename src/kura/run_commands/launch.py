@@ -49,11 +49,11 @@ def _latest_realization_id(run_dir: Path) -> str | None:
 def _unattended_wait(value: Any) -> tuple[int | None, str]:
     """Parse --unattended-wait: ``auto`` is the ADR's automatic wait, 0 turns it off."""
     if value is None or str(value).strip().lower() == "auto":
-        return None, "longer of 2h and the job time, then the Pod deletes itself if outputs were not collected"
+        return None, "longer of 2h and the job time after the job ends; then the Pod deletes itself unless outputs were collected"
     seconds = _parse_duration_seconds(value)
     if seconds <= 0:
-        return 0, "off; only the maximum lease bounds an unattended Pod"
-    return seconds, f"{value} after training, then the Pod deletes itself if outputs were not collected"
+        return 0, "off; only the maximum lease deletes the Pod"
+    return seconds, f"{value} after the job ends; then the Pod deletes itself unless outputs were collected"
 
 
 def run_remote(run_id: str, **kwargs: Any) -> int:
@@ -109,7 +109,7 @@ def _run_remote_locked(
     launched = False
     safe_to_stop = False
     exit_code = 1
-    unattended_label = "longer of 2h and the job time"
+    unattended_label = _unattended_wait("auto")[1]
     try:
         unattended_wait_sec, unattended_label = _unattended_wait(unattended_wait)
         wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
@@ -202,10 +202,10 @@ def _run_remote_locked(
         message = _safe_error(exc)
         print(f"cannot run remote job: {message}", file=sys.stderr)
         deadline_note = (
-            "Once its job has ended, the Pod deletes itself (with its outputs) after "
-            + ("the unattended wait armed at launch (see the run's stdout.log) " if reattach else f"the unattended wait ({unattended_label}) ")
-            + "unless they are collected first, and in any case at the maximum lease. "
-            f"Run `kura run execute {run_id}` again to follow the job and collect."
+            "The Pod deletes itself (with its outputs) at the maximum lease after it started, collected or not, "
+            "and earlier by the unattended wait: "
+            + ("as armed at launch (see the run's stdout.log)" if reattach else unattended_label)
+            + f". Run `kura run execute {run_id}` again to follow the job and collect."
         )
         print(deadline_note, file=sys.stderr)
         _notify(

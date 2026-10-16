@@ -99,15 +99,15 @@ class ManagedStateCadenceTests(unittest.TestCase):
     def test_the_plan_shows_the_cadence_each_trainer_saves_state_at(self) -> None:
         # A 1000-step recipe with no cadence set: sd-scripts saves state only at the end and
         # Musubi Tuner is given the recipe's steps, while AI-Toolkit is given `save: {}` and
-        # saves at its own default. A set cadence is shown as is; an sd-scripts Resume with none
+        # saves at its own default (null; the text plan says "trainer default"). A set cadence is shown as is; an sd-scripts Resume with none
         # saves at its end, after the steps it adds, and Musubi Tuner keeps the recipe's steps.
         from kura.run_commands.plan import _training_state_cadence
 
         def shown(run: dict[str, Any]) -> Any:
             return _training_state_cadence(run)
 
-        unset = {"sd-scripts": 1000, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
-        resumed = {"sd-scripts": 200, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
+        unset = {"sd-scripts": 1000, "musubi-tuner": 1000, "ai-toolkit": None}
+        resumed = {"sd-scripts": 200, "musubi-tuner": 1000, "ai-toolkit": None}
         for build in (sd_scripts_run, musubi_run, ai_toolkit_run):
             run = build()
             name = run["backend"]["name"]

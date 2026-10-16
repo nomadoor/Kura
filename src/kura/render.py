@@ -551,6 +551,26 @@ def _stage_mode(value: Any, name: str, endpoint: str | None) -> str:
     return "copy"
 
 
+def _frozen_stage(comfyui: dict[str, Any], subdir_key: str, cleanup_key: str) -> tuple[str, str]:
+    """A stage subfolder and cleanup as a frozen manifest holds them.
+
+    Compile freezes both in their one form. A manifest an older Kura froze may hold
+    null or an empty string (the default), a folder wrapped in slashes, or a cleanup
+    in another case; it is read as that Kura read it, never rewritten.
+    """
+    subdir = str(comfyui.get(subdir_key) or "Kura_tmp").strip("/\\")
+    if not plain_relative_folder(subdir):
+        raise ValueError(f"comfyui.{subdir_key} must be a relative folder name such as Kura_tmp, not {subdir!r}")
+    cleanup = str(comfyui.get(cleanup_key) or "remove_after_render").strip().lower()
+    if cleanup not in ("remove_after_render", "keep"):
+        raise ValueError(f"comfyui.{cleanup_key} must be remove_after_render or keep, not {cleanup!r}")
+    return subdir, cleanup
+
+
+# How a manifest an older Kura froze wrote `render.lora_stage: off` (no longer a setting).
+_OLD_LORA_STAGE_OFF = ("0", "false", "off", "none", "no")
+
+
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any], endpoint: str | None = None) -> dict[str, Any] | None:
     """Where a checkpoint is staged so ComfyUI loads it as a LoRA; None when the workflow takes no LoRA.
 
@@ -558,6 +578,12 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     """
     if not checkpoint or ("lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert")):
         return None
+    render = frozen.get("render") if isinstance(frozen.get("render"), dict) else {}
+    if "lora_stage" in render and str(render["lora_stage"]).strip().lower() in _OLD_LORA_STAGE_OFF:
+        raise ValueError(
+            "this render was compiled by an older Kura with render.lora_stage off, which sent the checkpoint path to ComfyUI "
+            "as the LoRA name; Kura now always stages the checkpoint, so create a new render run to render it"
+        )
     source = _workspace_path(workspace, checkpoint.get("path"))
     if source is None or not source.is_file() or source.suffix != ".safetensors":
         raise ValueError(f"a LoRA render needs each checkpoint to be a .safetensors file; {checkpoint.get('path')!r} is not")
@@ -565,8 +591,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     lora_dir = _workspace_path(workspace, comfyui.get("lora_dir"))
     if lora_dir is None:
         raise ValueError("a local LoRA render stages each checkpoint into ComfyUI's LoRA folder; set comfyui.lora_dir in workspace.yaml")
-    stage_subdir = comfyui.get("lora_stage_subdir", "Kura_tmp")
-    cleanup = comfyui.get("lora_stage_cleanup", "remove_after_render")
+    stage_subdir, cleanup = _frozen_stage(comfyui, "lora_stage_subdir", "lora_stage_cleanup")
     stage_dir = (lora_dir / stage_subdir).resolve()
     mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", endpoint)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
@@ -593,8 +618,7 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     directory = _workspace_path(workspace, comfyui.get("model_patches_dir"))
     if directory is None:
         raise ValueError("a local model_patch render stages each checkpoint into ComfyUI's model patch folder; set comfyui.model_patches_dir in workspace.yaml")
-    stage_subdir = comfyui.get("model_patch_stage_subdir", "Kura_tmp")
-    cleanup = comfyui.get("model_patch_stage_cleanup", "remove_after_render")
+    stage_subdir, cleanup = _frozen_stage(comfyui, "model_patch_stage_subdir", "model_patch_stage_cleanup")
     stage_dir = (directory / stage_subdir).resolve()
     mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", endpoint)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
@@ -659,7 +683,7 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     directory = _workspace_path(workspace, comfyui.get("input_dir"))
     if directory is None:
         raise ValueError("workspace.yaml comfyui.input_dir is required to render a promptset with image bindings")
-    stage_subdir = comfyui.get("input_stage_subdir", "Kura_tmp")
+    stage_subdir, cleanup = _frozen_stage(comfyui, "input_stage_subdir", "input_stage_cleanup")
     # Copy, not symlink: ComfyUI resolves LoadImage paths and rejects one that
     # leaves its input directory, so a symlinked input fails validation at queue
     # time even though a symlinked model loads fine.
@@ -675,9 +699,6 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
             "(\"Invalid image file\"). Use copy unless this endpoint is known to accept them.",
             flush=True,
         )
-    cleanup = str(comfyui.get("input_stage_cleanup") or "remove_after_render").strip().lower()
-    if cleanup not in ("remove_after_render", "keep"):
-        raise ValueError("comfyui.input_stage_cleanup must be remove_after_render or keep")
     plans: dict[str, dict[str, Any]] = {}
     for name in names:
         for source in sorted((run_dir / "resolved" / "images" / name).glob("*")):
@@ -745,12 +766,13 @@ def remove_leftover_stages(workspace: Path, run_dir: Path) -> list[str]:
     comfyui = frozen.get("comfyui") if isinstance(frozen.get("comfyui"), dict) else {}
     removed = []
     for dir_key, subdir_key, cleanup_key in STAGE_KINDS:
-        if comfyui.get(cleanup_key, "remove_after_render") == "keep":
-            continue
         base = _workspace_path(workspace, comfyui.get(dir_key))
-        subdir = comfyui.get(subdir_key, "Kura_tmp")
-        # A manifest frozen by an older Kura was never validated; cleanup never leaves its base.
-        if base is None or not plain_relative_folder(subdir):
+        try:
+            subdir, cleanup = _frozen_stage(comfyui, subdir_key, cleanup_key)
+        except ValueError:
+            # A manifest frozen by an older Kura was never validated; cleanup never leaves its base.
+            continue
+        if cleanup == "keep" or base is None:
             continue
         # Run ids end in a random hex suffix (`<time>_<slug>_<hex>`), so `<id>-` never starts another run's id.
         for path in sorted((base / subdir).glob(f"{run_dir.name}-*")):
@@ -1189,8 +1211,8 @@ class ComfyUIClient:
 # then overwritten, so a value there would be silently ignored.
 COMPILED_RENDER_KEYS = ("lora_insert", "comfyui", "comfyui_models", "comfyui_model_registry", "comfyui_endpoint_identity", "comfyui_required_models", "promptset_images", "_kura")
 RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength")
-# Every key a render run.yaml may hold, by level. `render` is RENDER_SETTINGS, and
-# `workflow_patches` is closed by validate_patch_bindings.
+# Every key a render run.yaml may hold, by level. `workflow_patches` is closed by
+# validate_patch_bindings, and `inputs.cases` is checked where compile reads it.
 RENDER_RUN_SCHEMA: dict[str, frozenset[str]] = {
     "": frozenset({
         "schema_version", "id", "type", "created", "intent", "inputs", "generator", "executor", "compute",
@@ -1200,6 +1222,7 @@ RENDER_RUN_SCHEMA: dict[str, frozenset[str]] = {
     }),
     "inputs": frozenset({"train_run", "workflow", "cases", "promptset", "checkpoint"}),
     "inputs.workflow": frozenset({"path", "digest"}),
+    "render": frozenset(RENDER_SETTINGS),
     "generator": frozenset({"name", "endpoint"}),
     "executor": frozenset({"name"}),
     "compute": frozenset({"gpu"}),
@@ -1216,6 +1239,12 @@ def _refuse_missing_models(missing: list[dict[str, Any]], endpoint: str) -> None
             f"ComfyUI at {_redact_url_userinfo(endpoint)} does not have model(s) this workflow loads: {labels}. "
             "Add them to that ComfyUI's model folders or change the workflow; a local render never downloads models."
         )
+
+
+def _refuse_runpod_model_patch(executor: Any, patches: Any) -> None:
+    """A RunPod render cannot stage a model patch; compile refuses it before any Pod, launch for a run compiled earlier."""
+    if executor == "runpod" and isinstance(patches, dict) and "model_patch" in patches:
+        raise ValueError("ComfyUI model patch staging is not supported for the runpod executor; render a model_patch workflow locally")
 
 
 def render_timeout_sec(frozen: dict[str, Any]) -> int:
@@ -1236,10 +1265,13 @@ def _validate_render_run_fields(run: dict[str, Any]) -> None:
             problems.append(f"{level} must be a mapping of {', '.join(sorted(keys))}, not {holder!r}")
             continue
         for key in holder if isinstance(holder, dict) else ():
-            if key not in keys:
+            if key in keys:
+                continue
+            if not level and key in COMPILED_RENDER_KEYS:
+                hint = "; to change the inserted LoRA's strength, set render.lora_strength" if key == "lora_insert" else ""
+                problems.append(f"{key} is written by compile from the workflow, its sidecar, and workspace.yaml{hint}")
+            else:
                 problems.append(f"{level + '.' if level else ''}{key} is not a render run setting")
-    if problems:
-        raise ValueError("render run.yaml: " + "; ".join(problems))
     generator = run.get("generator") if isinstance(run.get("generator"), dict) else {}
     if generator.get("name", "comfyui") != "comfyui":
         problems.append(f"generator.name must be comfyui, not {generator['name']!r}")
@@ -1255,6 +1287,9 @@ def _validate_render_run_fields(run: dict[str, Any]) -> None:
     timeout = render.get("timeout_sec", DEFAULT_RENDER_TIMEOUT_SEC)
     if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
         problems.append(f"render.timeout_sec must be a whole number of seconds of at least 1, not {timeout!r}")
+    workflow = (run.get("inputs") or {}).get("workflow") if isinstance(run.get("inputs"), dict) else None
+    if isinstance(workflow, dict) and workflow.get("digest") is not None and not isinstance(workflow["digest"], str):
+        problems.append(f"inputs.workflow.digest must be a string or null, not {workflow['digest']!r}")
     if "output_dir" in render and not plain_relative_folder(render["output_dir"]):
         problems.append(f"render.output_dir must be a folder inside the run, such as samples/images (no leading or trailing slash, . or ..), not {render['output_dir']!r}")
     if problems:
@@ -1274,21 +1309,8 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
     if workspace_config:
         validate_workspace_config(workspace_config)
-    compiled_only = [key for key in COMPILED_RENDER_KEYS if key in run]
-    if compiled_only:
-        hint = "; to change the inserted LoRA's strength, set render.lora_strength" if "lora_insert" in compiled_only else ""
-        raise ValueError(
-            f"render run.yaml cannot set {', '.join(compiled_only)}: compile writes these from the workflow, its sidecar, and workspace.yaml{hint}"
-        )
-    if run.get("render") is not None and not isinstance(run.get("render"), dict):
-        raise ValueError("render must be a mapping")
-    unknown_settings = sorted(str(key) for key in (run.get("render") or {}) if key not in RENDER_SETTINGS)
-    if unknown_settings:
-        raise ValueError(f"render has unsupported keys: {', '.join(unknown_settings)}; supported: {', '.join(RENDER_SETTINGS)}")
-    inputs = run.get("inputs", {})
-    if not isinstance(inputs, dict):
-        raise ValueError("render inputs must be a mapping")
     _validate_render_run_fields(run)
+    inputs = run.get("inputs", {})
     if "promptset" in inputs:
         # Runs compiled with one stay readable; a new one authors inputs.cases.
         raise ValueError("render inputs.promptset is replaced by inputs.cases; write one row per case in a cases.jsonl")
@@ -1307,6 +1329,14 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     source_path = workspace / descriptor["path"]
     if not workflow_path.is_file() or not source_path.is_file():
         raise ValueError("render inputs.workflow.path and inputs.cases.path must exist")
+    for name, path in (("workflow", workflow_path), ("cases", source_path)):
+        # An authored digest asserts the file; null asserts nothing and compile records the file's.
+        authored, actual = inputs[name].get("digest"), digest(path)
+        if authored is not None and authored != actual:
+            raise ValueError(
+                f"render inputs.{name}.digest {authored} does not match {inputs[name]['path']} ({actual}); "
+                "set it to null to render the file as it is now, or restore the file it names"
+            )
     try:
         workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -1345,6 +1375,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     _freeze_case_checkpoints(workspace, cases)
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     is_runpod = executor.get("name") == "runpod"
+    _refuse_runpod_model_patch(executor.get("name", "local"), patches)
     if is_runpod and any(case.get("checkpoint") for case in cases) and not lora_insert and "lora" not in patches:
         raise ValueError(
             "RunPod case checkpoints currently require a lora workflow binding or sidecar lora_insert; "
@@ -1441,8 +1472,7 @@ def launch_render(
     resolved_executor = executor_name or frozen.get("executor", {}).get("name")
     if frozen.get("generator", {}).get("name") != "comfyui" or resolved_executor not in ("local", "runpod"):
         raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
-    if resolved_executor == "runpod" and "model_patch" in frozen.get("workflow_patches", {}):
-        raise ValueError("ComfyUI model patch staging is not supported for the runpod executor")
+    _refuse_runpod_model_patch(resolved_executor, frozen.get("workflow_patches", {}))
     current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     allowed_states = {"compiled"} if resolved_executor == "local" else {"compiled", "running"}
     if current_status.get("state") not in allowed_states:

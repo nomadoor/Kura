@@ -39,11 +39,45 @@ class ModelSourceTests(unittest.TestCase):
     def test_the_workspace_model_registry_has_one_shape_and_migrate_moves_the_old_one(self) -> None:
         validate_workspace_config({"schema_version": 2, "comfyui": {"model_registry": {"checkpoints": {"m.safetensors": {"repo": "a/b"}}}}})
         old = {"schema_version": 2, "comfyui": {"model_registry": {"models": {"checkpoints": {"m.safetensors": {"repo_id": "a/b", "file": "m.safetensors"}}}}}}
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, r"comfyui.model_registry: .*remove the inner models: wrapper.*kura workspace migrate"):
             validate_workspace_config(old)
         migrated, notes = migrate_workspace_config(old)
         self.assertEqual(migrated["comfyui"]["model_registry"], {"checkpoints": {"m.safetensors": {"repo": "a/b", "filename": "m.safetensors"}}})
         self.assertIn("moved comfyui.model_registry.models.<folder> to comfyui.model_registry.<folder>", notes)
+
+    def test_one_map_names_the_retired_model_entry_keys(self) -> None:
+        import kura.workspace
+        from kura.comfyui_models import MODEL_ENTRY_KEYS, RETIRED_MODEL_ENTRY_KEYS
+
+        self.assertEqual(RETIRED_MODEL_ENTRY_KEYS, {"repo_id": "repo", "direct_url": "url", "file": "filename"})
+        self.assertTrue(set(RETIRED_MODEL_ENTRY_KEYS.values()) <= set(MODEL_ENTRY_KEYS))
+        self.assertFalse(hasattr(kura.workspace, "_RETIRED_MODEL_KEYS"))
+
+    def test_musubi_bundle_and_version_conditions_come_from_their_tables(self) -> None:
+        from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES
+        from kura.backends.registry import MUSUBI_SURFACE
+
+        conditions = {item.field: item.when_any for item in MUSUBI_SURFACE.conditions}
+        self.assertEqual(conditions["model_bundle"], ((("architecture", tuple(dict.fromkeys(arch for arch, _ in MUSUBI_BUNDLES.values()))),),))
+        self.assertEqual(conditions["model_version"], ((("architecture", tuple(MODEL_VERSIONS)),),))
+        choices = dict(MUSUBI_SURFACE.config_value_choices)
+        self.assertEqual(choices["model_version"], tuple(version for versions in MODEL_VERSIONS.values() for version in versions))
+
+    def test_model_formats_are_the_formats_the_container_validator_accepts(self) -> None:
+        import ast
+        from pathlib import Path
+
+        from kura.backends.musubi_models import MODEL_FORMATS
+
+        source = Path(__file__).resolve().parents[1] / "src" / "kura" / "container_scripts" / "safetensors_validator.py"
+        function = next(node for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))) if isinstance(node, ast.FunctionDef) and node.name == "validate_model")
+        accepted: set[str] = set()
+        for node in ast.walk(function):
+            if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) and node.left.id == "expected":
+                for comparator in node.comparators:
+                    values = comparator.elts if isinstance(comparator, ast.Tuple) else [comparator]
+                    accepted.update(value.value for value in values if isinstance(value, ast.Constant))
+        self.assertEqual(set(MODEL_FORMATS), accepted)
 
     def test_a_musubi_model_expectation_names_a_role_and_format_kura_knows(self) -> None:
         def run(expectations: object) -> dict:

@@ -11,6 +11,9 @@ inputs:
   cases: {path: cases/example.jsonl, digest: null}
 ```
 
+`digest: null` lets compile record each file's digest; a written `sha256:...`
+digest must match the file, or compile refuses the run.
+
 Write one JSON object per logical ComfyUI prompt. Kura has no Cartesian-product
 DSL; explicitly list every intended combination in deterministic order.
 

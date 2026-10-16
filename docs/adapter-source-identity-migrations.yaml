@@ -8,6 +8,130 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: strict-yaml-reader-sd-scripts-2026-10-16
+    backend: sd-scripts
+    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<`. A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is now refused where it is loaded, before anything launches, and is never compiled differently.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8f26891427c8f9cfeeec4005abdb630bed2f730acdc667012b6f470c0a84a820
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 45971ad6acb0929cc391e380212dcfae588121552a9dd8755fb258414786fe23
+  - id: strict-yaml-reader-musubi-tuner-2026-10-16
+    backend: musubi-tuner
+    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<`. A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is now refused where it is loaded, before anything launches, and is never compiled differently. The Musubi Tuner surface takes the architectures for model_bundle and model_version and the accepted model_version values from MUSUBI_BUNDLES and MODEL_VERSIONS instead of copies of them; the values are the same (flux2, krea2, and minimax_h3 for model_bundle; flux2 and qwen_image for model_version, with the same versions in the same order).'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 9ebe582ece6789471f6c198d6d4e35578e2108740ab89726962bb839a986d11c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 1d01457ac8e730fd1a4f8db7b26155d931fa2ac7bd54116b65297f26dadd9026
+  - id: strict-yaml-reader-ai-toolkit-2026-10-16
+    backend: ai-toolkit
+    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<`. A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is now refused where it is loaded, before anything launches, and is never compiled differently.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 06bc3feb9cac06b1cb19ef40cb6ba7591617cf0f3d7c1b4cec3ad72d2286a241
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 25934c3dd1b8f5174c232d4bba13014488064e803d9a5beeb32d2ddb0965148a
+  - id: lease-and-wait-wording-runpod-executor-2026-10-16
+    executor: runpod
+    reason: 'Wording only: the billing confirmation says the maximum lease counts from the Pod start and deletes the Pod collected or not, the unattended-wait label says it counts from the end of the job, and the controller''s deadline note names both. The lease seconds, the unattended-wait seconds, and every Pod request are computed as before, so every recorded smoke builds the same launch.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: c01803e7dde5c81d6c8ee46949b29fc074037329968c03eea27a5262dba958bd
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 5621e32936913c226be7b56d2075138cacff09372d20af11ea9a6aae4a098969
   - id: dataset-files-one-form-sd-scripts-2026-10-16
     backend: sd-scripts
     reason: 'Dataset files are closed and read in one form: a manifest-v2 dataset.yaml takes items_schema_version, id, description, trigger_word (a non-empty string), excluded_files, excluded_directories, and stats.count, and refuses any other key; a file reference''s sha256 is 64 lowercase hex digits with no prefix, as every *_sha256 record field is; the draft candidate leaves out keys v2 does not read. Every recorded smoke''s dataset declares only id, description, and items_schema_version and asserts no file digest, so it hands the same dataset to the trainer. sd-scripts dataset settings take resolution as one side or [width, height], refuse a key written with no value, and require dataset_id on every subset; every recorded smoke wrote a two-item or integer resolution and a dataset_id on each subset.'

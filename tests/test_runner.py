@@ -450,7 +450,7 @@ class StopAndQueueTests(unittest.TestCase):
                 polls[0] += 1
                 if polls[0] == 3:
                     self.assertEqual(runner.pending_requests(second), [waiting])
-                    self.assertTrue(runner.local_slots_full(root))
+                    self.assertIn("every local training slot is in use", runner.local_slot_wait(root))
                     _launched(first, busy, state="completed", publication_state="completed")
 
             def spawn(workspace, run_id, request):
@@ -463,6 +463,71 @@ class StopAndQueueTests(unittest.TestCase):
                 runner.serve(root, spawn_child=spawn, sleep=sleep)
             self.assertEqual(runner.pending_requests(second), [])
             self.assertGreaterEqual(polls[0], 3)
+
+
+class RunnerStateTests(unittest.TestCase):
+    def test_status_says_why_no_runner_is_running(self) -> None:
+        with _workspace() as (root, _):
+            self.assertEqual(runner.runner_state(root)[0], "never_started")
+            runner.serve(root, spawn_child=lambda *_: self.fail("spawned"), sleep=lambda _: None)
+            state, detail = runner.runner_state(root)
+            self.assertEqual(state, "idle")
+            self.assertIn("nothing left to control", detail)
+            self.assertIn("the next launch starts it", detail)
+            with file_lock(root / ".kura" / "runner" / "runner.lock", blocking=False):
+                self.assertEqual(runner.runner_state(root)[0], "running")
+            runner.stop_runner(root)
+            self.assertEqual(runner.runner_state(root)[0], "stopped_on_purpose")
+            # A runner that ended without recording why (a crash, a kill, or an older Kura).
+            (root / ".kura" / "runner" / "stopped").unlink()
+            info = runner.runner_info(root)
+            info.pop("ended")
+            (root / ".kura" / "runner" / "runner.json").write_text(json.dumps(info), encoding="utf-8")
+            state, detail = runner.runner_state(root)
+            self.assertEqual(state, "ended_unexpectedly")
+            self.assertIn(".kura/runner/runner.log", detail)
+
+
+class InvalidWorkspaceTests(unittest.TestCase):
+    def test_an_invalid_workspace_is_named_once_and_follow_says_so(self) -> None:
+        with _workspace() as (root, run_dir):
+            (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 0}\n", encoding="utf-8")
+            self.assertIn("workspace.yaml is not valid", runner.local_slot_wait(root))
+            request = runner.write_launch_request(run_dir, executor="docker")
+            logged: list[str] = []
+            polls = [0]
+
+            def sleep(_):
+                polls[0] += 1
+                if polls[0] == 4:
+                    (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+
+            def spawn(workspace, run_id, request):
+                _launched(run_dir, request, state="completed", publication_state="completed")
+                return Child(0)
+
+            with patch.object(runner, "_log", side_effect=logged.append):
+                runner.serve(root, spawn_child=spawn, sleep=sleep)
+            waits = [line for line in logged if "workspace.yaml is not valid" in line]
+            self.assertEqual(len(waits), 1, logged)
+            self.assertEqual(runner.pending_requests(run_dir), [])
+
+    def test_follow_names_the_invalid_workspace_not_another_run(self) -> None:
+        with _workspace() as (root, run_dir):
+            (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 0}\n", encoding="utf-8")
+            request = runner.write_launch_request(run_dir, executor="docker")
+            out = io.StringIO()
+            calls = [0]
+
+            def sleep(_):
+                calls[0] += 1
+                runner._record_request_outcome(request, ".not-launched.json", "not_launched", error="test end")
+
+            with patch.object(runner, "runner_alive", return_value=True):
+                runner.follow(root, run_dir, request, out=out, sleep=sleep)
+            text = out.getvalue()
+            self.assertIn("waiting to launch: workspace.yaml is not valid", text)
+            self.assertNotIn("another local", text)
 
 
 class OrderAndCancelTests(unittest.TestCase):

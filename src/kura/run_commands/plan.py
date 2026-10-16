@@ -1024,15 +1024,16 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
     }
 
 
-def _training_state_cadence(run: dict[str, Any]) -> Any:
-    """The steps between training-state saves the plan shows: `checkpoint_save_cadence`, formatted.
-    A trainer saving at its own default shows "trainer default"; one given no cadence
-    (sd-scripts) saves state only at the end, shown as the steps the run trains (`trained_steps`)."""
+def _training_state_cadence(run: dict[str, Any]) -> int | None:
+    """The steps between training-state saves the plan shows: `checkpoint_save_cadence`.
+    A trainer saving at its own default gives None (the text plan says "trainer default"); one
+    given no cadence (sd-scripts) saves state only at the end, shown as the steps the run trains
+    (`trained_steps`)."""
     # The configured cadence is what the backend's display reads from its own config.
     checkpoint = _adapter_display(run).get("checkpoint") or {}
     cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
     if cadence == "trainer_default":
-        return "trainer default"
+        return None
     return trained_steps(run) if cadence is None else cadence
 
 
@@ -1342,7 +1343,8 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("Training state")
         _append_kv(lines, "enabled", "yes" if training_state.get("enabled") else "no")
         _append_kv(lines, "keep", training_state.get("keep_generations"))
-        _append_kv(lines, "cadence", training_state.get("cadence_steps"))
+        cadence = training_state.get("cadence_steps")
+        _append_kv(lines, "cadence", "trainer default" if cadence is None else cadence)
         _append_kv(lines, "capability", training_state.get("capability"))
         _append_kv(lines, "saved", "yes" if training_state.get("saved") else "no")
         if training_state.get("warning"):

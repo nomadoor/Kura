@@ -761,7 +761,6 @@ class MonitorProjectionTests(unittest.TestCase):
                     [
                         "id: musubi-batch",
                         "type: train",
-                        "backend: {name: musubi-tuner}",
                         "recipe: {steps: 100}",
                         "backend:",
                         "  name: musubi-tuner",

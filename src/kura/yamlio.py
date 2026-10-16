@@ -1,7 +1,8 @@
 """The one reader and writer of every YAML file Kura reads or writes.
 
 Reading follows the YAML 1.2 core schema: `1e-4` is a number, only true/false
-are booleans, and `on`, `yes`, or a bare date stay strings. Writing quotes any
+are booleans, and `on`, `yes`, or a bare date stay strings. A mapping key may
+appear once, and the YAML 1.1 merge key `<<` is refused. Writing quotes any
 string that a YAML 1.2 or a YAML 1.1 reader would turn into another type, so a
 file Kura writes reads back the same here and in a trainer's PyYAML loader.
 """
@@ -9,11 +10,13 @@ file Kura writes reads back the same here and in a trainer's PyYAML loader.
 from __future__ import annotations
 
 import re
+from collections.abc import Hashable
 from pathlib import Path
 from typing import Any
 
 import yaml
 from yaml import YAMLError
+from yaml.constructor import ConstructorError
 
 __all__ = ["YAMLError", "dump_yaml", "load_yaml", "load_yaml_1_1", "load_yaml_mapping", "load_yaml_text"]
 
@@ -33,7 +36,22 @@ _CORE = (
 
 
 class _Loader(yaml.SafeLoader):
-    pass
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise ConstructorError(
+                    "while constructing a mapping", node.start_mark,
+                    "the YAML 1.1 merge key `<<` is not read; write the keys out", key_node.start_mark,
+                )
+            key = self.construct_object(key_node, deep=True)
+            if isinstance(key, Hashable):
+                if key in seen:
+                    raise ConstructorError(
+                        "while constructing a mapping", node.start_mark, f"found duplicate key {key!r}", key_node.start_mark,
+                    )
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
 _Loader.yaml_implicit_resolvers = {

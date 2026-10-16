@@ -815,18 +815,21 @@ def _capacity_wait_activity(wait: CapacityWaitInfo, *, stale: bool) -> str:
     return " · ".join(parts)
 
 
+def step_fraction(step: int | None, total: int | None) -> str:
+    """`step/total` as every progress view shows it; a count not observed yet is `-`, never 0."""
+    return f"{'-' if step is None else step}/{total or '-'}"
+
+
 def _format_progress(progress: RunProgress) -> str:
     if progress.step is None and progress.total is None:
         return "unknown"
     if progress.total is None:
-        return "unknown" if progress.step is None else str(progress.step)
-    step = "unknown" if progress.step is None else str(progress.step)
-    rendered = f"{step}/{progress.total}"
+        return str(progress.step)
+    rendered = step_fraction(progress.step, progress.total)
     if progress.current_case_id:
         rendered += f" · {progress.current_case_id}"
     if progress.current_run_total is not None:
-        current = "unknown" if progress.current_run_step is None else str(progress.current_run_step)
-        rendered += f" · current {current}/{progress.current_run_total}"
+        rendered += f" · current {step_fraction(progress.current_run_step, progress.current_run_total)}"
     return rendered
 
 

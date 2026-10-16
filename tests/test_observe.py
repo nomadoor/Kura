@@ -14,7 +14,7 @@ from unittest.mock import patch
 from kura.cli import cmd_run_status
 from kura.executors import observe_run
 from kura.executors.common import _run_operation_lock
-from kura.monitor import RunProgress, RunSummary, collect_run_summaries
+from kura.monitor import RunProgress, RunSummary, collect_run_summaries, progress_line
 from kura.run_commands.plan import stage_run
 from kura.tui import _progress_text
 
@@ -222,8 +222,10 @@ class ObserveRunTests(unittest.TestCase):
     def test_unknown_step_is_not_displayed_as_zero(self) -> None:
         summary = RunSummary(id="draft", experiment=None, type="train", executor=None, state="draft", progress=RunProgress(step=None, total=10))
         rendered = str(_progress_text(summary))
-        self.assertIn("step unknown/10", rendered)
+        self.assertIn("step -/10", rendered)
         self.assertNotIn("step 0/10", rendered)
+        self.assertNotIn("unknown", rendered)
+        self.assertEqual(progress_line(summary), "draft · -/10")
 
     def test_stage_guard_rejects_observed_completed_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
