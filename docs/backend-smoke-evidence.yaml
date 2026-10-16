@@ -58,6 +58,28 @@ records:
     outcome: passed
     observed_at: '2026-10-11'
     artifact: smoke-evidence/2026-10-11-conformance.yaml
+  - id: ai-toolkit-conformance-runpod-2026-10-17
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 06e90bae28926c24f7018dd37fc04b004a4d831b8832baa8bda806a9aab0ba70
+    executor_source:
+      kind: source-tree-sha256
+      value: a806ae7e2b171506a232a186e128494a8fe305f2b50d8511c59b8e80996223ce
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-17'
+    artifact: smoke-evidence/2026-10-17-ai-toolkit-runpod-conformance.yaml
   - id: ai-toolkit-conformance-runpod-2026-10-11
     backend: ai-toolkit
     adapter_source:

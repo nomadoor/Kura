@@ -478,6 +478,8 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     flat = Path(*relative.parts[1:])
                     if f"outputs/{flat.as_posix()}" in recorded and f"outputs/{relative.as_posix()}" not in recorded:
                         relative = flat
+                if relative in publications:
+                    raise ValueError(f"download outputs collide at the recorded path outputs/{relative.as_posix()}")
                 publications[relative] = source
             for relative, source in publications.items():
                 target = primary / relative

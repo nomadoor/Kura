@@ -9263,6 +9263,28 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["outputs"], ["outputs/config.yaml", "outputs/example.safetensors"])
             self.assertFalse((run_dir / "outputs" / "example").exists())
 
+    def test_collecting_again_refuses_two_files_for_one_recorded_flat_path(self) -> None:
+        from kura.artifact_publication import publish_outputs
+
+        contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
+        pod_files = {"example.safetensors": "outer", "example/example.safetensors": "inner"}
+        with tempfile.TemporaryDirectory() as directory, patch("kura.artifact_publication.validate_safetensors_file"):
+            root = Path(directory)
+            run_dir = self._ai_toolkit_download_fixture(root, "example", pod_files)
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"output_contract": contract}), encoding="utf-8")
+            (run_dir / "outputs").mkdir(parents=True)
+            (run_dir / "outputs" / "example.safetensors").write_text("outer", encoding="utf-8")
+            publish_outputs(run_dir, "r1", contract)
+            (run_dir / "status.json").write_text(json.dumps({
+                "state": "recovery_required", "pod_id": "pod-1", "last_realization": "realizations/r1.json", "publication_state": "blocked",
+            }), encoding="utf-8")
+
+            # Neither file is dropped in silence: the collection is refused and a person decides.
+            self.assertEqual(self._download(root, "example"), 3)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertIn("collide", status["publication_error"])
+            self.assertEqual((run_dir / "outputs" / "example.safetensors").read_text(encoding="utf-8"), "outer")
+
     def test_a_run_id_ending_in_state_publishes_the_same_outputs_on_docker_and_runpod(self) -> None:
         from kura.artifact_publication import publish_outputs
 
