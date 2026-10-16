@@ -332,6 +332,37 @@ class BackendSurfaceContractTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
+    def test_run_plan_reads_a_compiled_run_that_holds_a_retired_backend_key(self) -> None:
+        # An older Kura compiled Musubi FLUX.2 runs with allow_a40_*; plan reads that manifest as it
+        # is, while a draft that still holds the key is refused.
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            run = {
+                "schema_version": 2, "id": "old-run", "type": "train",
+                "backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "allow_a40_uncheckpointed_9b": True}},
+                "model": {"base": "example/model"}, "recipe": {"steps": 1, "seed": 1},
+            }
+            run_dir = root / "runs" / "old-run"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            os.chdir(root)
+            try:
+                results, codes = {}, {}
+                for compiled in (False, True):
+                    if compiled:
+                        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+                    error = io.StringIO()
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(error):
+                        codes[compiled] = cmd_run_plan(argparse.Namespace(run_id="old-run", json=True))
+                    results[compiled] = error.getvalue()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(codes, {False: 1, True: 0})
+        self.assertIn("allow_a40_uncheckpointed_9b", results[False])
+        self.assertEqual(results[True], "")
+
     def test_contract_is_required_by_the_registry_type(self) -> None:
         adapter = BACKENDS["ai-toolkit"]
         with self.assertRaises(TypeError):
