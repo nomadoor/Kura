@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from kura.backends import backend_capabilities, validate_backend_config
-from kura.backends.sd_scripts import OWNED_FLAGS, command_sd_scripts, display_sd_scripts
+from kura.backends.sd_scripts import CONFIG_KEYS, OWNED_FLAGS, command_sd_scripts, display_sd_scripts
 from kura.backends.sd_scripts_datasets import (
     DATASET_KEYS,
     GENERAL_KEYS,
@@ -677,8 +677,8 @@ class SdScriptsBackendTests(unittest.TestCase):
             with self.subTest(flag=flag):
                 run = base_run("anima", "controlnet_lllite")
                 run["backend"]["config"]["extra_args"] = [flag, "128"]
-                with self.assertRaisesRegex(ValueError, "duplicates"):
-                    command_sd_scripts(run)
+                with self.assertRaisesRegex(ValueError, "write the declared field instead"):
+                    validate_backend_config(run)
 
     def test_extra_args_cannot_abbreviate_or_override_dataset_caption_fields(self) -> None:
         for extra_args in (
@@ -690,7 +690,8 @@ class SdScriptsBackendTests(unittest.TestCase):
             with self.subTest(extra_args=extra_args):
                 run = base_run()
                 run["backend"]["config"]["extra_args"] = extra_args
-                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag|write the declared field instead"):
+                    validate_backend_config(run)
                     command_sd_scripts(run)
 
     def test_every_generated_option_is_adapter_owned(self) -> None:
@@ -711,7 +712,10 @@ class SdScriptsBackendTests(unittest.TestCase):
                 self.assertIsNotNone(match)
                 tokens = json.loads(match.group(1))
             generated.update(token.split("=", 1)[0] for token in tokens if token.startswith("--"))
-        self.assertEqual(generated - OWNED_FLAGS, {"--num_cpu_threads_per_process"})
+        # Every option is owned by the adapter or names a declared field the registry owns.
+        field_flags = {f"--{key}" for key in CONFIG_KEYS}
+        self.assertEqual(generated - OWNED_FLAGS - field_flags, {"--num_cpu_threads_per_process"})
+        self.assertFalse(OWNED_FLAGS & field_flags)
 
     def test_boolean_config_values_are_strict(self) -> None:
         for key in ("gradient_checkpointing", "cache_latents_to_disk", "network_train_unet_only", "lllite_use_aspp"):

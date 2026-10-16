@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import runpy
 import sys
 
@@ -82,6 +83,16 @@ def normalize_saved_state(output_dir, backend, num_processes):
     optimizer_step = optimizer_completed_step(optimizer)
     if optimizer_step is not None and optimizer_step != scheduler_step:
         fail(f"optimizer step {optimizer_step} does not match scheduler step {scheduler_step}")
+    # The trainer names a step save by its own step counter; the image's patch keeps that counter
+    # logical on Resume, and without it the counter restarts, so the name falls below the
+    # scheduler step and the run would train past its target. A name above it is an update the
+    # optimizer skipped (an fp16 overflow), which the scheduler step already accounts for.
+    named = re.search(r"-step(\d{8})-state$", output.name)
+    if named and int(named.group(1)) < scheduler_step:
+        fail(
+            f"state {output.name} is named for step {int(named.group(1))} but holds {scheduler_step} updates; "
+            "this image lacks Kura's step patch, so use the pinned image"
+        )
     info = {"schema_version": 1, "backend": backend, "logical_step": scheduler_step}
     if backend == "sd-scripts":
         train_state_path = output / "train_state.json"

@@ -9,7 +9,7 @@ from typing import Any
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths, musubi_native_dataset_architecture
-from kura.backends.shared import _extra_args as _shared_extra_args, _reject_owned_extra_args, append_config_args, argv_value, config_argv, _script_command as _shared_script_command, _truthy, state_runner_argv, write_state_runner
+from kura.backends.shared import _extra_args as _shared_extra_args, _reject_owned_extra_args, append_config_args, argv_value, config_argv, _script_command as _shared_script_command, _truthy, STATE_RUNNER, state_runner_argv, write_state_runner
 from kura.backends.musubi_datasets import (
     MUSUBI_AUDIO_SUFFIXES,
     FRAMEPACK_LATENT_WINDOW_SIZE,
@@ -27,6 +27,10 @@ from kura.training_artifacts import EPOCH_SAVE_FLAGS, checkpoint_save_cadence, m
 from kura.run_envelope import resume_intent, validated_recipe
 
 
+# The folder under a run's resolved/ that compile writes Musubi Tuner's files into.
+MUSUBI_RESOLVED_DIR = "musubi"
+
+
 def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     del run
     return {
@@ -42,7 +46,7 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
         "native_target": "logical",
         # A run compiled before Kura launched Musubi through the state runner has no runner here
         # and no marker; `compiled_training_state_contract` reads its states as before.
-        "state_runner": "musubi/state-runner.py",
+        "state_runner": f"{MUSUBI_RESOLVED_DIR}/{STATE_RUNNER}",
         "state_step": {
             "path": "kura-state-info.json", "field": "logical_step", "space": "logical",
             "schema_version": 1, "backend": "musubi-tuner",
@@ -60,36 +64,21 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Flags Kura owns for every architecture. Flags Kura emits only for some
-# architectures (for example --timestep_sampling) are refused by
-# _reject_emitted_duplicates only where that architecture's command carries them.
+# Flags Kura owns for every architecture that no declared field names. The flag of a declared
+# field is refused in extra_args by validate_backend_config wherever the field applies, and a
+# flag Kura emits for some architectures only by _reject_emitted_duplicates.
 # --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps, both
 # decided by Kura (trainer_base.py:373 and :1771 at v0.3.5), so they are owned too.
 MUSUBI_OWNED_FLAGS = EPOCH_SAVE_FLAGS | frozenset({"--lr_scheduler_type", "--max_train_epochs"}) | frozenset({
-    "--audio_vae", "--base_weights", "--batch_size", "--block_swap_h2d_only",
-    "--block_swap_ring_size", "--blocks_to_swap", "--byt5", "--cache_seed",
-    "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config", "--dit",
-    "--dit_dtype", "--dit_high_noise", "--f1", "--fp8", "--fp8_base", "--fp8_llm",
-    "--fp8_scaled", "--fp8_t5", "--fp8_te", "--fp8_text_encoder", "--fp8_vl",
-    "--gradient_accumulation_steps", "--gradient_checkpointing",
-    "--gradient_checkpointing_cpu_offload", "--h3_guidance_loss_scale",
-    "--h3_guidance_loss_sigma_min", "--h3_guidance_loss_uncond_cache",
-    "--h3_teacher_conditions", "--h3_teacher_matching", "--i2v", "--image_encoder",
-    "--latent_window_size", "--learning_rate", "--lr_scheduler",
-    "--max_data_loader_n_workers", "--max_train_steps", "--mixed_precision",
-    "--model_type", "--model_version", "--network_alpha", "--network_dim",
-    "--network_module", "--noise_clip_std", "--noise_scale_end",
-    "--noise_scale_start", "--one_frame", "--one_frame_no_2x", "--one_frame_no_4x",
-    "--optimizer_type", "--output_dir", "--output_name",
-    "--quantized_qwen", "--resume",
-    "--save_every_n_steps", "--save_last_n_steps", "--save_last_n_steps_state",
-    "--save_precision", "--save_state", "--save_state_on_train_end", "--sdpa",
-    "--seed", "--skip_existing", "--t5", "--task", "--teacher_conditions",
-    "--text_cache_dtype", "--text_encoder", "--text_encoder1", "--text_encoder2",
-    "--text_encoder_blocks_to_swap", "--text_encoder_clip", "--text_encoder_qwen",
-    "--turbo_dit", "--uncond_output", "--use_pinned_memory_for_block_swap", "--vae",
-    "--vae_chunk_size", "--vae_dtype", "--vae_tiling", "--video_only",
-    "--video_vae",
+    "--audio_vae", "--base_weights", "--byt5", "--cache_seed", "--clip", "--dataset_config",
+    "--dit", "--dit_high_noise", "--fp8", "--h3_guidance_loss_uncond_cache",
+    "--h3_teacher_matching", "--i2v", "--image_encoder", "--latent_window_size",
+    "--max_train_steps", "--mixed_precision", "--network_module", "--output_dir",
+    "--output_name", "--resume", "--save_last_n_steps", "--save_last_n_steps_state",
+    "--save_state", "--save_state_on_train_end", "--sdpa", "--seed", "--skip_existing", "--t5",
+    "--teacher_conditions", "--text_cache_dtype", "--text_encoder", "--text_encoder1",
+    "--text_encoder2", "--text_encoder_clip", "--text_encoder_qwen", "--turbo_dit",
+    "--uncond_output", "--vae", "--video_vae",
 })
 
 
@@ -168,7 +157,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
     if training_state_managed(run, training_state_contract_musubi(run)):
         entrypoint = next(index for index, argument in enumerate(train) if argument.endswith(".py"))
         train[entrypoint:] = state_runner_argv(
-            "musubi-tuner", f"/workspace/runs/{run['id']}/resolved/musubi", train[entrypoint], train[entrypoint + 1:],
+            "musubi-tuner", f"/workspace/runs/{run['id']}/resolved/{MUSUBI_RESOLVED_DIR}", train[entrypoint], train[entrypoint + 1:],
         )
     return _shared_script_command(commands, step_name="musubi")
 
@@ -369,7 +358,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     recipe = validated_recipe(run, required=True)
     paths = _musubi_model_paths(run)
     download_commands, _ = _musubi_model_downloads(run)
-    dataset_config = f"/workspace/runs/{run['id']}/resolved/musubi/dataset.toml"
+    dataset_config = f"/workspace/runs/{run['id']}/resolved/{MUSUBI_RESOLVED_DIR}/dataset.toml"
     output_dir = f"/workspace/runs/{run['id']}/outputs"
     output_name = run_output_name(run)
     common = [
@@ -619,6 +608,9 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with fp8_base or fp8_scaled")
         if convrot_int8 and _truthy(override.get("include_turbo_dit")):
             raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with include_turbo_dit")
+        if _truthy(override.get("fp8_base")) and not _truthy(override.get("fp8_scaled")):
+            # The pinned trainer refuses this only after downloads and caching (krea2_train_network.py:78-79).
+            raise ValueError("Musubi Krea 2 supports only scaled fp8: set fp8_scaled: true together with fp8_base")
         train_argv = [
             *common, "src/musubi_tuner/krea2_train_network.py",
             "--dit", dit, "--vae", vae,

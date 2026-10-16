@@ -166,7 +166,9 @@ MUSUBI_BUNDLES: dict[str, tuple[str, Any]] = {
     "minimax-h3-fl2va-pruned-int8": ("minimax_h3", lambda run: _minimax_h3_files("fl2va")),
     "minimax-h3-ref2va-pruned-int8": ("minimax_h3", lambda run: _minimax_h3_files("ref2va")),
 }
-_KLEIN_IN_BASE = re.compile(r"flux\.?2-(klein-(?:base-)?[49]b)\b", re.IGNORECASE)
+# A Klein variant named in a model.base such as black-forest-labs/FLUX.2-klein-base-4B,
+# flux-2-klein-9b.safetensors, or flux2-klein-9b_fp8.
+_KLEIN_IN_BASE = re.compile(r"flux[.\-_]?2[-_]klein[-_](base[-_])?([49])b", re.IGNORECASE)
 
 
 def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -263,9 +265,10 @@ def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
             "Musubi FLUX.2 requires backend.config.model_version, one of " + ", ".join(FLUX2_MODEL_VERSIONS)
         )
     named = _KLEIN_IN_BASE.search(str((run.get("model") or {}).get("base") or ""))
-    if named and named.group(1).lower() != model_version:
+    variant = f"klein-{'base-' if named.group(1) else ''}{named.group(2)}b" if named else None
+    if variant and variant != model_version:
         raise ValueError(
-            f"Musubi FLUX.2 model.base {run['model']['base']!r} names variant {named.group(1).lower()}, "
+            f"Musubi FLUX.2 model.base {run['model']['base']!r} names variant {variant}, "
             f"but model_version is {model_version!r}; make them agree"
         )
     return model_version

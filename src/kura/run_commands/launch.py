@@ -112,8 +112,8 @@ def _run_remote_locked(
     unattended_label = _unattended_wait("auto")[1]
     try:
         unattended_wait_sec, unattended_label = _unattended_wait(unattended_wait)
-        wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
-        capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval)
+        wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity, recorded=True)
+        capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval, recorded=True)
         if reattach:
             # Checked again under the controller lock: the run may have changed
             # since execute looked, and a stale decision must not follow or relaunch.
@@ -534,7 +534,7 @@ def launch_run(
                 confirm_runpod_billing(
                     runpod_config, remote_image, yes=yes,
                     max_lease_sec=max_lease_sec,
-                    wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity), unattended_wait=unattended_wait,
+                    wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity, recorded=True), unattended_wait=unattended_wait,
                 )
                 return 0
             with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
@@ -544,8 +544,8 @@ def launch_run(
                     image=remote_image,
                     config=runpod_config,
                     dry_run=dry_run,
-                    wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity),
-                    capacity_poll_interval_sec=_parse_duration_seconds(capacity_poll_interval),
+                    wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity, recorded=True),
+                    capacity_poll_interval_sec=_parse_duration_seconds(capacity_poll_interval, recorded=True),
                     yes=yes,
                     max_lease_sec=max_lease_sec,
                     unattended_wait=unattended_wait,
@@ -743,7 +743,7 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
         )
         if code:
             return code
-        if _parse_duration_seconds(options.get("wait_for_capacity")) > 0:
+        if _parse_duration_seconds(options.get("wait_for_capacity"), recorded=True) > 0:
             print("  The runner may wait for capacity; prices can change before the Pod is created.", file=sys.stderr)
         try:
             request = runner.write_launch_request(run_dir, executor="runpod", image=options.get("image"), notify=options.get("notify_channels"), extra={

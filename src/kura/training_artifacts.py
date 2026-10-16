@@ -559,7 +559,10 @@ def displayed_final_step(run: dict[str, Any]) -> int | None:
 
 
 def _retention_value(value: Any) -> int | None:
-    """A checkpoint display value as a positive integer; zero, less, or unreadable is no value."""
+    """A checkpoint display value as a positive integer; zero, less, or unreadable is no value.
+
+    validate_backend_config accepts only a whole number of at least its minimum, so this reads
+    every authored value as written; its leniency is for runs an older Kura froze."""
     if isinstance(value, bool) or value in (None, ""):
         return None
     try:
@@ -571,7 +574,8 @@ def _retention_value(value: Any) -> int | None:
 
 def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps: int | None) -> int | None:
     """How many checkpoints a run leaves: one per save at `checkpoint_save_cadence` (the
-    cadence the trainer is given) over the `steps` it trains (`trained_steps`), at least one.
+    cadence the trainer is given) over the steps it trains (`steps`, from `trained_steps`; a
+    Resume counts the logical multiples between its source and target steps), at least one.
     `checkpoint` is the backend display's `checkpoint` block. None when the trainer is given
     no cadence or saves at its own default, when there are no steps, or when a retention
     policy prunes step checkpoints, so fewer are left: a positive `prune_before_step` (Musubi
@@ -594,7 +598,11 @@ def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps:
         return None
     if checkpoint.get("keep_last") is None and checkpoint.get("unset_keep_last") == "trainer_default":
         return None
-    return max(steps // every, 1)
+    # Every trainer saves on logical multiples of the cadence, so a Resume counts them over its
+    # logical range, as peak_checkpoints does.
+    span = resume_steps(run, contract={})
+    saves = span["target_step"] // every - span["source_step"] // every if span is not None else steps // every
+    return max(saves, 1)
 
 
 def checkpoint_save_cadence(run: dict[str, Any], configured: Any, *, contract: dict[str, Any] | None = None) -> int | str | None:
