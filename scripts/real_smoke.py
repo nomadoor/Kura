@@ -1039,7 +1039,14 @@ def runpod_cost_ceiling(workspace: Path, config: dict[str, Any], smoke: Smoke) -
     with contextlib.chdir(workspace):
         load_secrets()
         payload = _runpod_capacity_payload(build_run_fields("conformance", smoke), config)
-    return pod_ceiling(payload["measurement"], payload["selected_gpu_type_ids"], max_lease_sec=CONFORMANCE_MAX_LEASE_SEC)
+    # The runs ask only for GPU types RunPod prices now, so the approved ceiling covers each of them.
+    candidates = {item.get("gpu_type_id"): item for item in payload["measurement"].get("candidates", []) if isinstance(item, dict)}
+    priced = [
+        gpu for gpu in payload["selected_gpu_type_ids"]
+        if any(isinstance(cloud, dict) and cloud.get("price_per_hour") is not None for cloud in candidates.get(gpu, {}).get("clouds") or [])
+    ]
+    ceiling = pod_ceiling(payload["measurement"], priced or payload["selected_gpu_type_ids"], max_lease_sec=CONFORMANCE_MAX_LEASE_SEC)
+    return {**ceiling, "priced_gpu_type_ids": priced}
 
 
 def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str | tuple[str, ...], yes: bool) -> int:
@@ -1066,6 +1073,9 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
         from kura.executors.runpod import format_cost_ceiling
 
         ceiling = runpod_cost_ceiling(workspace, config, replace(conformance_smoke(backends[0], "one"), executor="runpod", gpu=gpu))
+        if ceiling.get("priced_gpu_type_ids"):
+            gpu = tuple(ceiling["priced_gpu_type_ids"])
+            print(f"  RunPod GPUs with a current price, the only ones the runs ask for: {', '.join(gpu)}")
         print(f"  RunPod: {len(SCENARIO)} Pods one after another, each deleted by its maximum lease ({ceiling['max_lease']}) at the latest")
         print(f"  cost ceiling per Pod: {format_cost_ceiling(ceiling)}")
         if ceiling.get("max_cost") is not None:

@@ -462,13 +462,19 @@ class RealSmokeHarnessTests(unittest.TestCase):
         self.assertEqual(captured[0][-3:], ["--yes", "--max-lease", "1h"])
         self.assertNotIn("--max-lease", captured[1])
 
-        measurement = {"status": "ok", "candidates": [{"gpu_type_id": "NVIDIA RTX A4500", "clouds": [{"cloud_type": "COMMUNITY", "available": True, "price_per_hour": 0.19}]}]}
-        payload = {"measurement": measurement, "selected_gpu_type_ids": ["NVIDIA RTX A4500"]}
+        measurement = {"status": "ok", "candidates": [
+            {"gpu_type_id": "NVIDIA RTX A4500", "clouds": [{"cloud_type": "COMMUNITY", "available": True, "price_per_hour": 0.19}]},
+            {"gpu_type_id": "NVIDIA RTX A5000", "clouds": [{"cloud_type": "COMMUNITY", "available": False, "price_per_hour": None, "stock_status": None}]},
+        ]}
+        payload = {"measurement": measurement, "selected_gpu_type_ids": ["NVIDIA RTX A4500", "NVIDIA RTX A5000"]}
         with tempfile.TemporaryDirectory() as directory, \
                 patch("kura.run_commands.plan._runpod_capacity_payload", return_value=payload), patch("kura.secrets.load_secrets"):
             ceiling = MODULE.runpod_cost_ceiling(Path(directory), {}, MODULE.replace(MODULE.conformance_smoke("ai-toolkit", "one"), executor="runpod"))
         self.assertEqual(ceiling["max_lease_sec"], MODULE.CONFORMANCE_MAX_LEASE_SEC)
         self.assertAlmostEqual(ceiling["max_cost"], 0.19)
+        # A GPU with no current price is left out of the runs, so the ceiling covers every GPU they ask for.
+        self.assertEqual(ceiling["priced_gpu_type_ids"], ["NVIDIA RTX A4500"])
+        self.assertEqual(ceiling["unpriced"], [])
         self.assertEqual(MODULE.build_run_fields("c", MODULE.replace(MODULE.conformance_smoke("ai-toolkit", "one"), executor="runpod", gpu=MODULE.CONFORMANCE_GPUS))["compute"]["gpu"], list(MODULE.CONFORMANCE_GPUS))
 
     def test_the_runpod_pass_shows_its_ceiling_before_creating_anything_and_needs_a_known_one(self) -> None:
