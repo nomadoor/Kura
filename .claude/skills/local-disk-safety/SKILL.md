@@ -163,9 +163,10 @@ or WSL/VHDX/Windows-side operations.
   checkpoint retention (`kura run capabilities <backend>` lists it:
   `save_last_n_steps` for sd-scripts and AI-Toolkit,
   `prune_checkpoints_before_step` for Musubi Tuner).
-- A run-scoped disk cache whose size is not declared is shown as unknown and
-  is not counted in the disk estimate; sd-scripts takes
-  `backend.config.disk_cache_estimate_gb` to count it.
+- A run whose trainer writes a disk cache (every Musubi Tuner run; sd-scripts
+  or AI-Toolkit when the run caches latents or text encodings to disk) gets a
+  plan warning that the cache is not counted until `safety.disk_cache_estimate_gb`
+  declares its size; then both disk checks count it.
 
 ## Safety map
 

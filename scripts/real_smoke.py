@@ -153,7 +153,7 @@ SMOKES: dict[str, Smoke] = {
             "dataset_config": _sd_scripts_dataset(IMAGE_DATASET),
             "learning_rate": 1e-4, "optimizer_type": "AdamW8bit", "mixed_precision": "bf16", "gradient_checkpointing": True,
             "network_dim": 4, "network_alpha": 1, "network_train_unet_only": True,
-            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True, "disk_cache_estimate_gb": 1,
+            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True,
         },
         executor="docker", gpu="gpu", expected_script="sdxl_train_network.py",
     ),
@@ -170,7 +170,7 @@ SMOKES: dict[str, Smoke] = {
             "dataset_config": _sd_scripts_dataset(IMAGE_DATASET),
             "learning_rate": 1e-4, "optimizer_type": "AdamW8bit", "mixed_precision": "bf16", "gradient_checkpointing": True,
             "network_dim": 4, "network_alpha": 1, "network_train_unet_only": True, "fp8_base": True,
-            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True, "disk_cache_estimate_gb": 1,
+            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True,
             "timestep_sampling": "flux_shift", "guidance_scale": 1.0, "model_prediction_type": "raw",
         },
         expected_script="flux_train_network.py",
@@ -188,7 +188,7 @@ SMOKES: dict[str, Smoke] = {
             "learning_rate": 1e-4, "optimizer_type": "AdamW8bit", "mixed_precision": "bf16", "gradient_checkpointing": True,
             "network_dim": 8, "network_alpha": 1, "network_train_unet_only": True,
             "timestep_sampling": "sigmoid", "discrete_flow_shift": 1.0, "qwen_image_vae_2d": True,
-            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True, "disk_cache_estimate_gb": 1,
+            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True,
         },
         executor="docker", gpu="gpu", expected_script="anima_train_network.py",
     ),
@@ -205,7 +205,7 @@ SMOKES: dict[str, Smoke] = {
             "learning_rate": 5e-5, "optimizer_type": "AdamW8bit", "mixed_precision": "bf16", "gradient_checkpointing": True,
             "timestep_sampling": "shift", "discrete_flow_shift": 3.0, "attn_mode": "sdpa", "qwen_image_vae_2d": True,
             "cond_emb_dim": 32, "lllite_cond_dim": 64, "lllite_cond_resblocks": 1, "lllite_mlp_dim": 64, "lllite_target_layers": "self_attn_q",
-            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True, "disk_cache_estimate_gb": 1,
+            "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True,
         },
         executor="docker", gpu="gpu", expected_script="anima_train_control_net_lllite.py",
     ),
@@ -498,7 +498,8 @@ def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, ste
             # Wait for the recorded GPU instead of failing or silently switching it.
             **({"capacity": {"mode": "wait", "timeout": "30m", "poll_interval": "30s"}} if smoke.executor == "runpod" else {}),
         },
-        "safety": {"allow_large_model_downloads": True},
+        # Every smoke dataset is a few items, so a 1 GiB cache estimate covers any backend's disk cache.
+        "safety": {"allow_large_model_downloads": True, "disk_cache_estimate_gb": 1},
     }
 
 

@@ -535,10 +535,30 @@ def _run_adapter(run: dict[str, Any]) -> Any:
 
 
 def _disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+    """The run-scoped disk cache both disk checks count, for every backend: whether the trainer
+    writes one (its adapter says) and the size the author declared in `safety.disk_cache_estimate_gb`."""
     adapter = _run_adapter(run)
-    if adapter is None or adapter.disk_cache_estimate is None:
+    written = adapter.disk_cache(run) if adapter is not None and adapter.disk_cache is not None else None
+    if written is None:
         return {"enabled": False, "bytes": 0, "status": "not-applicable"}
-    return adapter.disk_cache_estimate(run)
+    gib = _declared_disk_cache_gib(run)
+    if gib is None:
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": f"{written}; set safety.disk_cache_estimate_gb to count it"}
+    return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate", "detail": written}
+
+
+def _declared_disk_cache_gib(run: dict[str, Any]) -> float | None:
+    """`safety.disk_cache_estimate_gb` as written; compile refuses any other form. A run an older
+    Kura compiled may hold the estimate as sd-scripts `backend.config.disk_cache_estimate_gb`."""
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    value = safety.get("disk_cache_estimate_gb")
+    if value is None:
+        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+        config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+        value = config.get("disk_cache_estimate_gb")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
 
 
 def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -547,8 +567,7 @@ def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     check = f"{_run_adapter(run).name}-disk-cache"
     if estimate["status"] == "unknown":
-        # A warning, not a refusal: the disk checks leave this one write out, as they do for
-        # the backends that declare no cache estimate at all.
+        # A warning, not a refusal: the disk checks leave this one write out until its size is declared.
         return [_preflight_record(check, "warning", f"disk cache size is unknown and not counted in the disk estimate; {estimate.get('detail')}", "run.yaml")]
     return [_preflight_record(check, "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
 

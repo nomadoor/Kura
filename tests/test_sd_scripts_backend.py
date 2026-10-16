@@ -379,7 +379,8 @@ class SdScriptsBackendTests(unittest.TestCase):
         for value in (True, float("nan"), float("inf")):
             with self.subTest(value=value):
                 run = base_run()
-                run["backend"]["config"].update({"cache_latents_to_disk": True, "disk_cache_estimate_gb": value})
+                run["backend"]["config"]["cache_latents_to_disk"] = True
+                run["safety"] = {"disk_cache_estimate_gb": value}
                 self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
 
     def test_tier1_entrypoints_and_model_roles(self) -> None:
@@ -785,14 +786,14 @@ class SdScriptsBackendTests(unittest.TestCase):
             command_sd_scripts(secret)
 
     def test_an_undeclared_disk_cache_is_a_warning_and_never_refused(self) -> None:
-        # Musubi Tuner and AI-Toolkit caches are not declared either; no backend refuses a run for it.
+        # Every backend reads the same safety.disk_cache_estimate_gb (tests/test_disk_cache.py); none refuses a run for it.
         run = base_run()
         run["backend"]["config"]["cache_latents_to_disk"] = True
         self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
         report = _sd_scripts_cache_preflight_report(run)
         self.assertEqual(report[0]["severity"], "warning")
         self.assertIn("not counted in the disk estimate", report[0]["fact"])
-        run["backend"]["config"]["disk_cache_estimate_gb"] = 1.5
+        run["safety"] = {"disk_cache_estimate_gb": 1.5}
         estimate = _sd_scripts_disk_cache_estimate(run)
         self.assertEqual(estimate["status"], "declared-estimate")
         self.assertEqual(estimate["bytes"], int(1.5 * 1024**3))

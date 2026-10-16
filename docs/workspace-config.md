@@ -125,12 +125,15 @@ lock file is the reproducible source of truth for which Hugging Face repo/files
 were selected.
 
 sd-scripts downloads and explicit paths are frozen in
-`resolved/sd-scripts/model-bundle.lock.yaml`. If
-`cache_latents_to_disk` or `cache_text_encoder_outputs_to_disk` is enabled,
-`backend.config.disk_cache_estimate_gb` adds a positive estimate of the cache
-to the disk check. Without it the plan shows the cache size as unknown and does
-not count it. Cache files stay below the individual run; the shared dataset
-remains unchanged.
+`resolved/sd-scripts/model-bundle.lock.yaml`.
+
+A run whose trainer writes a disk cache (Musubi Tuner always caches latents and
+text-encoder outputs; sd-scripts with `cache_latents_to_disk` or
+`cache_text_encoder_outputs_to_disk`; AI-Toolkit when its pinned baseline caches
+latents to disk or `train.cache_text_embeddings` is on, authored or from that baseline) counts
+`safety.disk_cache_estimate_gb` in both disk checks. Without it the plan warns
+that the cache size is unknown and not counted. Cache files stay below the
+individual run; the shared dataset remains unchanged.
 
 All registered training adapters reject unknown top-level `backend.config`
 keys. Use `uv run kura run capabilities <backend>` (or `--json`) to inspect the

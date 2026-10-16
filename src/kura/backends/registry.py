@@ -7,17 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
-from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
+from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, musubi_disk_cache, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES, musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
-from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
+from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
-from kura.run_envelope import COMMON_RECIPE_FIELDS, SettingsRefused, backend_config
+from kura.run_envelope import COMMON_RECIPE_FIELDS, RETIRED_TRAIN_RUN_KEYS, SettingsRefused, backend_config
 
 
 Compile = Callable[[dict[str, Any], Path], dict[str, Any]]
@@ -127,7 +127,9 @@ class BackendAdapter:
     training_state: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     # Planning facts the adapter owns; plan renders them without backend tables.
     runtime_checks: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
-    disk_cache_estimate: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # What run-scoped disk cache the trainer writes (a phrase), or None; its size is the
+    # author's `safety.disk_cache_estimate_gb`, which plan counts for every backend.
+    disk_cache: Callable[[dict[str, Any]], str | None] | None = None
     general_resolution: Callable[[dict[str, Any]], Any] | None = None
     default_ports: tuple[str, ...] = ("22/tcp",)
 
@@ -401,6 +403,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         project_dataset=project_ai_toolkit_dataset,
         training_state=training_state_contract_ai_toolkit,
         runtime_checks=runtime_checks_ai_toolkit,
+        disk_cache=ai_toolkit_disk_cache,
         default_ports=("8675/http", "22/tcp"),
     ),
     "musubi-tuner": BackendAdapter(
@@ -411,6 +414,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         download_specs=musubi_model_download_specs,
         training_state=training_state_contract_musubi,
         runtime_checks=runtime_checks_musubi,
+        disk_cache=musubi_disk_cache,
         general_resolution=musubi_general_resolution,
     ),
     "sd-scripts": BackendAdapter(
@@ -420,7 +424,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         validate_authored=validate_sd_scripts_dataset_config,
         download_specs=sd_scripts_model_download_specs,
         training_state=training_state_contract_sd_scripts,
-        disk_cache_estimate=sd_scripts_disk_cache_estimate,
+        disk_cache=sd_scripts_disk_cache,
     ),
 }
 
@@ -446,6 +450,7 @@ _GENERAL_ML_ALIASES = {
 
 _GENERAL_UNAVAILABLE = {
     "epochs": "Kura training recipes are step-based; use recipe.steps",
+    "disk_cache_estimate_gb": "the disk cache size is safety.disk_cache_estimate_gb, one key for every backend",
 }
 
 
@@ -471,6 +476,9 @@ def _validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> No
     adapter = get_backend(backend.get("name"))
     native = backend_config(run, adapter.name)
     accepted = adapter.surface.fields | adapter.surface.escape_hatches
+    if frozen:
+        # A manifest an older Kura compiled may still hold a key that Kura has since retired.
+        accepted |= {path.removeprefix("backend.config.") for path in RETIRED_TRAIN_RUN_KEYS if path.startswith("backend.config.")}
     unknown = sorted(set(native) - accepted)
     details: list[str] = []
     unavailable = {**_GENERAL_UNAVAILABLE, **dict(adapter.surface.unavailable)}

@@ -8,6 +8,132 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: disk-cache-every-backend-sd-scripts-2026-10-17
+    backend: sd-scripts
+    reason: 'Each backend says whether its trainer writes a run-scoped disk cache, and both disk checks count the size the author declares in safety.disk_cache_estimate_gb, one key for every backend; until it is declared the plan warns that the cache is not counted. sd-scripts backend.config.disk_cache_estimate_gb is retired (refused when written with a message that names the safety key, carried to safety.disk_cache_estimate_gb by copies, still read from a run an older Kura compiled), and a compiled manifest that holds a retired backend.config key is read as it is. Kura never forwarded the estimate to a trainer, so every recorded smoke compiles the same native configuration and command; the smoke harness now declares its 1 GiB estimate in safety.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: ce95b32cc6608d529721a4aeabe75f97122d1a4406eb29f65be0201be08bfd55
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 109335f0359de17b709c2c6700eb10a0bc9d0641d9fdf8d46939207511983c9f
+  - id: disk-cache-every-backend-musubi-tuner-2026-10-17
+    backend: musubi-tuner
+    reason: 'Each backend says whether its trainer writes a run-scoped disk cache, and both disk checks count the size the author declares in safety.disk_cache_estimate_gb, one key for every backend; until it is declared the plan warns that the cache is not counted. sd-scripts backend.config.disk_cache_estimate_gb is retired (refused when written with a message that names the safety key, carried to safety.disk_cache_estimate_gb by copies, still read from a run an older Kura compiled), and a compiled manifest that holds a retired backend.config key is read as it is. Kura never forwarded the estimate to a trainer, so every recorded smoke compiles the same native configuration and command; the smoke harness now declares its 1 GiB estimate in safety. Musubi Tuner runs, which cache latents and text-encoder outputs unless precache is false, now get that warning.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: b371431aa582c0b9e3d308e250e4f9862158ed490553f2ba2e71970e085eb659
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 3d21d3928a92a417e07d6aeee5d54e0e79125e228879ac0f3287cdbf2c0fd99c
+  - id: disk-cache-every-backend-ai-toolkit-2026-10-17
+    backend: ai-toolkit
+    reason: 'Each backend says whether its trainer writes a run-scoped disk cache, and both disk checks count the size the author declares in safety.disk_cache_estimate_gb, one key for every backend; until it is declared the plan warns that the cache is not counted. sd-scripts backend.config.disk_cache_estimate_gb is retired (refused when written with a message that names the safety key, carried to safety.disk_cache_estimate_gb by copies, still read from a run an older Kura compiled), and a compiled manifest that holds a retired backend.config key is read as it is. Kura never forwarded the estimate to a trainer, so every recorded smoke compiles the same native configuration and command; the smoke harness now declares its 1 GiB estimate in safety. AI-Toolkit runs whose pinned baseline caches latents to disk, or whose train.cache_text_embeddings is on (authored or from the baseline), now get that warning.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 06e90bae28926c24f7018dd37fc04b004a4d831b8832baa8bda806a9aab0ba70
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 573b2f01b51711e4680ae18d53d5b13c64f3a781c9c32f45a5ca4dbc4bd3acfa
+  - id: disk-cache-every-backend-runpod-executor-2026-10-17
+    executor: runpod
+    reason: 'Each backend says whether its trainer writes a run-scoped disk cache, and both disk checks count the size the author declares in safety.disk_cache_estimate_gb, one key for every backend; until it is declared the plan warns that the cache is not counted. sd-scripts backend.config.disk_cache_estimate_gb is retired (refused when written with a message that names the safety key, carried to safety.disk_cache_estimate_gb by copies, still read from a run an older Kura compiled), and a compiled manifest that holds a retired backend.config key is read as it is. Kura never forwarded the estimate to a trainer, so every recorded smoke compiles the same native configuration and command; the smoke harness now declares its 1 GiB estimate in safety.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: ee225a20430047ad704dfc81c1b89c9ecc8cffdc5d1f1fa901738a43dd7364dd
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 9c31fdff706e3c556e4f98eb29072edcb419299d0f076bd39526774e3c29b699
   - id: one-output-layout-collision-runpod-executor-2026-10-17
     executor: runpod
     reason: 'A collection that would place two Pod files at one path, which can happen only when a realization''s publication record already names a top-of-outputs path an older Kura linked and the Pod holds a file at both places, is refused and left for a person instead of keeping one of them in silence. No recorded smoke has such a record or such a pair, so each collects exactly as before.'

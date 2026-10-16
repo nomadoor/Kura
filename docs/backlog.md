@@ -17,8 +17,8 @@ why, so it is not raised again.
 
 - 2026-10-11 | AI-Toolkit patch | The patch header says sampling and logging skip the first step on a save; only sampling does (harmless; changing it changes the image build, so it waits for the next image rebuild) | review of the step-labels pull request | -
 - 2026-10-16 | ComfyUI prepare | The RunPod render copies the merged `comfyui_model_registry.json` to the Pod, and `docker/comfyui/kura_comfy_prepare.py` resolves it again with its own `repo_id`/`direct_url`/`file` fallbacks and its own required-model scan; send the resolved `comfyui_models.json` and have the image read only that at the next image rebuild | review of the model selection pull request | -
-- 2026-10-11 | disk estimate | An on-disk latent or text-encoder cache whose size is not declared is not counted by either disk check (only sd-scripts can declare it, with `disk_cache_estimate_gb`); on RunPod, which has no free-space floor, a large cached dataset can fill `container_disk_gb` mid-run. The plan warns about it | review of the plan-refuses-only-what-disk-cannot-hold pull request | P8
-- 2026-10-16 | disk skill | The local-disk-safety skill says every undeclared run-scoped disk cache is shown as unknown; only an sd-scripts cache is (`_disk_cache_preflight_report`), and other backends' caches are not shown at all | CodeRabbit on the plan-refuses-only-what-disk-cannot-hold pull request | P11
+- 2026-10-17 | frozen keys | `validate_backend_config(frozen=True)` accepts every retired `backend.config` key on every backend, though each was only ever written for one backend | review of the disk-cache-every-backend pull request | -
+- 2026-10-17 | tests | No test runs `kura run plan` end to end on a compiled run whose manifest holds a retired backend key (`allow_a40_*`); the frozen check is tested only through `validate_backend_config` | review of the disk-cache-every-backend pull request | P9
 
 ## Rejected
 
