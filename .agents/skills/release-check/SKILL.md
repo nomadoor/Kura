@@ -54,8 +54,10 @@ batch pull request. Never grow a pull request to fix a pre-existing issue.
 
 **Conformance.** Run the conformance scenario on every backend on local Docker,
 then the RunPod pass on Musubi Tuner or AI-Toolkit (`--runpod --backend <name>`): it prints
-the cost ceiling and launches nothing until the maintainer approves that cost
-and the command is run again with `--yes`. Record both tables as smoke
+the cost ceiling (each Pod has a one-hour lease and lands on the cheapest small GPU with stock) and launches
+nothing until the maintainer approves that cost and the command is run again with `--yes`.
+When asking, give the expected cost from the earlier passes in `docs/smoke-evidence/`
+first; the ceiling is the worst case. Record both tables as smoke
 evidence under `docs/smoke-evidence/`.
 
 Two checks by agents that have none of your context, each given only what is
