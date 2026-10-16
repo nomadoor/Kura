@@ -223,7 +223,7 @@ SMOKES: dict[str, Smoke] = {
     "musubi-zimage": _musubi(
         "zimage", "Comfy-Org/z_image", IMAGE_DATASET, "zimage_train_network.py",
         # The trainer's generic defaults, which the recorded smoke trained with.
-        timestep_sampling="sigma",
+        timestep_sampling="sigma", discrete_flow_shift=1.0,
         fp8_base=True, fp8_scaled=True, fp8_llm=True, blocks_to_swap=24,
         model_downloads={
             "dit": _download("Comfy-Org/z_image", "split_files/diffusion_models/z_image_bf16.safetensors"),

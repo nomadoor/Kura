@@ -37,6 +37,28 @@ class TrainingLeftoverTests(unittest.TestCase):
             with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "take a value, not true or false"):
                 validate_backend_config({"backend": {"name": backend, "config": config}})
 
+    def test_the_shared_musubi_flow_flags_are_fields_on_every_architecture(self) -> None:
+        # Upstream's Krea 2 guide trains with shift 2.5 (docs/krea2.md); the trainer reads the shared flag.
+        validate_backend_config(_musubi({"architecture": "krea2", "timestep_sampling": "shift", "discrete_flow_shift": 2.5, "weighting_scheme": "none"}))
+        with self.assertRaisesRegex(ValueError, "requires discrete_flow_shift for architecture='zimage'"):
+            run = _musubi({"architecture": "zimage"})
+            del run["backend"]["config"]["discrete_flow_shift"]
+            validate_backend_config(run)
+
+    def test_a_compiled_manifest_is_planned_as_it_is(self) -> None:
+        # A run compiled when the shared flags went through extra_args.
+        frozen = {"backend": {"name": "musubi-tuner", "config": {"architecture": "qwen_image", "extra_args": ["--discrete_flow_shift", "2.2"], "learning_rate": True}}}
+        validate_backend_config(frozen, frozen=True)
+
+    def test_only_a_settings_refusal_sends_a_resume_to_fork_from_weight(self) -> None:
+        from kura.cli import _compile_refusal
+        from kura.run_envelope import SettingsRefused
+
+        resume = {"continuation": {"mode": "resume"}}
+        self.assertIn("Fork from Weight", _compile_refusal(resume, SettingsRefused("run.yaml: x is not a training run setting.")))
+        self.assertNotIn("..", _compile_refusal(resume, SettingsRefused("run.yaml: x is not a training run setting.")))
+        self.assertNotIn("Fork from Weight", _compile_refusal(resume, ValueError("dataset 'tiny' digest does not match the current dataset files")))
+
     def test_krea2_fp8_base_without_fp8_scaled_is_refused_at_compile(self) -> None:
         run = _musubi({"architecture": "krea2", "model_bundle": "krea2-raw", "fp8_base": True})
         with self.assertRaisesRegex(ValueError, "Krea 2 supports only scaled fp8: set fp8_scaled: true"):
@@ -84,11 +106,11 @@ class TrainingLeftoverTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(directory)
             try:
-                code = cmd_run_new(argparse.Namespace(experiment="e", slug="s", backend="musubi-tuner", executor="docker", gpu=["NVIDIA A40"], source=None))
+                code = cmd_run_new(argparse.Namespace(experiment="e", slug="s", backend="musubi-tuner", executor="docker", gpu="NVIDIA A40", source=None))
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("--gpu chooses a RunPod GPU; use it with --executor runpod", stderr.getvalue())
+        self.assertIn("--gpu: compute.gpu chooses a RunPod GPU; a local run uses the local GPU", stderr.getvalue())
 
 
 if __name__ == "__main__":

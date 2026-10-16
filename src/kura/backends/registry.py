@@ -17,7 +17,7 @@ from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, mu
 from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
-from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
+from kura.run_envelope import COMMON_RECIPE_FIELDS, SettingsRefused, backend_config
 
 
 Compile = Callable[[dict[str, Any], Path], dict[str, Any]]
@@ -222,17 +222,19 @@ MUSUBI_SURFACE = BackendSurface(
         _required("optimizer_type", "'', read as AdamW (training/parser_common.py:310)"),
         _required("network_dim", "4 (networks/lora.py:420)"),
         _required("network_alpha", "1 (training/parser_common.py:561)"),
-        # Upstream's guides train these with shift, flux_shift, or the model's own sampling and
-        # a model-specific shift (docs/<architecture>.md), not the generic sigma and 1.0. Ideogram
-        # 4 (ideogram4_train_network.py:364) and Z-Image's shift (zimage_train_network.py:49) have
-        # their own upstream defaults, so they are declared but not required.
+        # timestep_sampling, discrete_flow_shift, and weighting_scheme are shared flags every
+        # Musubi trainer reads (training/parser_common.py, trainer_base.py:646), so they are
+        # declared for every architecture. Upstream's guides train these architectures with
+        # shift, flux_shift, or the model's own sampling and a model-specific shift
+        # (docs/<architecture>.md), not the generic sigma and 1.0. Ideogram 4 sets its own
+        # sampling (ideogram4_train_network.py:364) and MiniMax-H3 its own (minimax_h3_train_network.py:1725).
         _required(
             "timestep_sampling", "sigma (training/parser_common.py:444)",
             {"architecture": ("flux2", "wan", "krea2", "hidream_o1", "qwen_image", "zimage", "flux_kontext", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")},
         ),
         _required(
             "discrete_flow_shift", "1.0 (training/parser_common.py:464)",
-            {"architecture": ("wan", "qwen_image", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")},
+            {"architecture": ("wan", "qwen_image", "zimage", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")},
         ),
         _required("h3_guidance_loss_scale", "0.0, no guidance loss (minimax_h3_train_network.py:1750)"),
         _required("h3_guidance_loss_sigma_min", "0.0 (minimax_h3_train_network.py:1764)"),
@@ -255,7 +257,6 @@ MUSUBI_SURFACE = BackendSurface(
     conditions=(
         _when("convrot_int8_bwd", architecture=("krea2",), convrot_int8=(True,)),
         _when("convrot_int8", architecture=("krea2",)),
-        _when("discrete_flow_shift", architecture=("wan", "qwen_image", "zimage", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5", "ideogram4")),
         _when("dit_dtype", architecture=("ideogram4",)),
         _when("f1", architecture=("framepack",)),
         _when("fp8_base", architecture=("flux2", "wan", "krea2", "qwen_image", "zimage", "flux_kontext", "hidream_o1", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")),
@@ -317,15 +318,10 @@ MUSUBI_SURFACE = BackendSurface(
         _when("text_encoder_batch_size", precache=(True,)),
         _when("text_encoder_blocks_to_swap", architecture=("minimax_h3",), precache=(True,)),
         _when("timestep_boundary", architecture=("wan",)),
-        _when("timestep_sampling", architecture=(
-            "flux2", "wan", "krea2", "hidream_o1", "qwen_image", "zimage", "flux_kontext", "hunyuan_video",
-            "hunyuan_video_1_5", "framepack", "kandinsky5", "ideogram4",
-        )),
         _when("vae_chunk_size", architecture=("hunyuan_video", "framepack"), precache=(True,)),
         _when_any("vae_dtype", {"architecture": ("flux2",)}, {"architecture": ("ideogram4",), "precache": (True,)}),
         _when("vae_tiling", architecture=("hunyuan_video",), precache=(True,)),
         _when("video_only", architecture=("minimax_h3",)),
-        _when("weighting_scheme", architecture=("flux2", "krea2", "qwen_image", "hidream_o1")),
     ),
     nested_config_fields=MUSUBI_DATASET_OPTION_CAPABILITIES,
 )
@@ -454,6 +450,16 @@ _GENERAL_UNAVAILABLE = {
 
 
 def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> None:
+    """Refuse authored values that have no declared home on the selected adapter (see _validate_backend_config)."""
+    try:
+        _validate_backend_config(run, frozen=frozen)
+    except SettingsRefused:
+        raise
+    except ValueError as exc:
+        raise SettingsRefused(str(exc)) from exc
+
+
+def _validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> None:
     """Reject authored values that have no declared home on the selected adapter.
 
     `frozen` reads a manifest an earlier compile accepted: its keys and values are checked as
@@ -529,7 +535,7 @@ def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> Non
                 + f"it requires " + " or ".join(resolved_clauses)
                 + f". Run `kura run capabilities {adapter.name}` for field applicability."
             )
-    if adapter.surface.renders_argv:
+    if adapter.surface.renders_argv and not frozen:
         # A true/false value for a field that takes a value would become a bare flag or vanish.
         flagged = sorted(
             key for key, value in native.items()
@@ -541,7 +547,7 @@ def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> Non
                 + ", ".join(f"{key}={native[key]!r}" for key in flagged)
             )
     extra_args = native.get("extra_args")
-    if isinstance(extra_args, list):
+    if isinstance(extra_args, list) and not frozen:
         # A declared field has one place, the field, and only where its condition says it applies;
         # extra_args never sets it, so it cannot reach an architecture the field does not work for.
         shadowed = sorted({

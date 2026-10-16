@@ -45,7 +45,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_step_request, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
+from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_step_request, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys, SettingsRefused, gpu_choice_problem
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -264,9 +264,9 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     elif not args.experiment:
         print("--experiment is required unless --from names a run to start from", file=sys.stderr)
         return 1
-    elif getattr(args, "gpu", None) is not None and getattr(args, "executor", None) != "runpod":
-        # The draft would hold a compute.gpu that compile refuses for a local run.
-        print("--gpu chooses a RunPod GPU; use it with --executor runpod", file=sys.stderr)
+    elif getattr(args, "gpu", None) is not None and (problem := gpu_choice_problem([args.gpu], runpod=getattr(args, "executor", None) == "runpod")):
+        # The draft would hold a compute.gpu that compile refuses.
+        print(f"--gpu: {problem}", file=sys.stderr)
         return 1
     timestamp = _now()
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
@@ -386,6 +386,9 @@ def _create_resume_derived_run(
     if args.gpu is not None:
         compute["gpu"] = [args.gpu]
     derived["compute"] = compute
+    if "gpu" in compute and (problem := gpu_choice_problem(compute["gpu"], runpod=run_executor(derived) == "runpod")):
+        print(f"cannot resume: {problem}", file=sys.stderr)
+        return 1
     source_fingerprint = recipe_fingerprint(source_run)
     continuation: dict[str, Any] = {
         "mode": "resume",
@@ -495,8 +498,8 @@ def cmd_render_new(args: argparse.Namespace) -> int:
 def _compile_refusal(run: dict[str, Any], exc: BaseException) -> str:
     """Why a training run does not compile; a Resume, which copies its source's settings, also says how to go on."""
     message = _safe_error(exc)
-    if run.get("continuation") is not None and "Fork from Weight" not in message:
-        message += (
+    if run.get("continuation") is not None and isinstance(exc, SettingsRefused) and "Fork from Weight" not in message:
+        message = message.rstrip(".") + (
             ". A Resume continues its source with the source's settings, so a source compiled under "
             "rules Kura no longer accepts cannot be resumed; create a Fork from Weight and fix the settings there"
         )

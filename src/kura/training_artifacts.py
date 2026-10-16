@@ -574,7 +574,8 @@ def _retention_value(value: Any) -> int | None:
 
 def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps: int | None) -> int | None:
     """How many checkpoints a run leaves: one per save at `checkpoint_save_cadence` (the
-    cadence the trainer is given) over the `steps` it trains (`trained_steps`), at least one.
+    cadence the trainer is given) over the steps it trains (`steps`, from `trained_steps`; a
+    Resume counts the logical multiples between its source and target steps), at least one.
     `checkpoint` is the backend display's `checkpoint` block. None when the trainer is given
     no cadence or saves at its own default, when there are no steps, or when a retention
     policy prunes step checkpoints, so fewer are left: a positive `prune_before_step` (Musubi
@@ -599,7 +600,7 @@ def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps:
         return None
     # Every trainer saves on logical multiples of the cadence, so a Resume counts them over its
     # logical range, as peak_checkpoints does.
-    span = resume_steps(run)
+    span = resume_steps(run, contract={})
     saves = span["target_step"] // every - span["source_step"] // every if span is not None else steps // every
     return max(saves, 1)
 

@@ -541,6 +541,9 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         self.assertEqual(info["logical_step"], 1150)
         with self.assertRaisesRegex(RuntimeError, "named for step 150 but holds 1150 updates; this image lacks Kura's step patch"):
             self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1150, name="derived-step00000150-state")
+        # A name above the scheduler step is an update the optimizer skipped (an fp16 overflow).
+        _, info = self._save("sd-scripts", {"last_epoch": 1149, "_step_count": 1151}, 1149, name="derived-step00001150-state")
+        self.assertEqual(info["logical_step"], 1149)
 
     @posix_only(POSIX_PATHS)
     def test_the_runner_counts_one_scheduler_step_per_process_per_update(self) -> None:

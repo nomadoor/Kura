@@ -40,6 +40,12 @@ RETIRED_TRAIN_RUN_KEYS = frozenset({
 })
 
 
+class SettingsRefused(ValueError):
+    """A run's own settings are refused (as opposed to a missing file or an unreadable workspace).
+
+    A Resume copies its source's settings, so `kura run compile` says how to go on for these only."""
+
+
 def gpu_choice_problem(gpu: Any, *, runpod: bool) -> str | None:
     """What is wrong with an authored compute.gpu, for a training or a render run; None when it is right."""
     if not isinstance(gpu, list) or not gpu or not all(isinstance(item, str) and item.strip() for item in gpu):
@@ -96,7 +102,7 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
         if problem:
             problems.append(problem)
     if problems:
-        raise ValueError("run.yaml: " + "; ".join(problems))
+        raise SettingsRefused("run.yaml: " + "; ".join(problems))
 
 
 def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
