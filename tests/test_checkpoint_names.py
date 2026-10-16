@@ -100,6 +100,23 @@ class OneCheckpointReadingTests(unittest.TestCase):
             items = _runpod_remote_outputs({"ip": "h", "port": 22, "key": "k"}, workspace="/workspace", run_id="vivi")
         self.assertEqual([item["step"] for item in items], [250, None])
 
+    def test_the_mirror_leaves_out_the_source_weight_a_resume_stages(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kura.run_commands.runpod_ssh import _saves_of_this_run
+
+        items = [{"name": f"r_{step:09d}.safetensors", "step": step} for step in (4, 6)] + [{"name": "r.safetensors", "step": None}]
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "r"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: r\n", encoding="utf-8")
+            # Found on a RunPod AI-Toolkit Resume: the staged source weight (step 4) was mirrored as a save.
+            with patch("kura.run_commands.runpod_ssh.frozen_resume_steps", return_value={"source_step": 4, "native_progress": "logical"}):
+                self.assertEqual([item["name"] for item in _saves_of_this_run(run_dir, items)], ["r_000000006.safetensors", "r.safetensors"])
+            self.assertEqual(_saves_of_this_run(run_dir, items), items)
+
     def test_the_pod_listing_finds_ai_toolkit_checkpoints_below_the_run_folder_and_leaves_out_state(self) -> None:
         import json
         import subprocess

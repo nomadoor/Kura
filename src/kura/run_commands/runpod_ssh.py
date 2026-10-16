@@ -42,7 +42,7 @@ from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
-from kura.training_artifacts import checkpoint_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -852,6 +852,19 @@ def _remote_output_relative(item: dict[str, Any]) -> Path:
     return Path(*relative.parts)
 
 
+def _saves_of_this_run(run_dir: Path, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Leave out a weight at or below a Resume's source step: it is the source's weight, which the
+    AI-Toolkit Resume stages next to the run's own saves for the trainer to load, not a save of this run."""
+    try:
+        run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        span = frozen_resume_steps(run_dir, run)
+    except (OSError, ValueError, YAMLError):
+        return items
+    if span is None:
+        return items
+    return [item for item in items if item.get("step") is None or logical_step(item["step"], span) > span["source_step"]]
+
+
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
@@ -1219,7 +1232,7 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
 
     try:
         with _run_operation_lock(run_dir, "checkpoint-pull", blocking=False):
-            items = _runpod_remote_outputs(details, workspace=workspace, run_id=run_id)
+            items = _saves_of_this_run(run_dir, _runpod_remote_outputs(details, workspace=workspace, run_id=run_id))
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=items)
             # Newly published files were recorded immediately so partial
             # success survives a later transfer failure. Merge skipped items
@@ -1267,7 +1280,7 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             raise ValueError("runpodctl is not installed locally; install it before pulling outputs")
         workspace = _runpod_workspace_for_run(run_dir)
         details = _runpod_ssh_details(run_dir, timeout_sec=args.ssh_timeout, interval_sec=2)
-        items = _runpod_remote_outputs(details, workspace=workspace, run_id=args.run_id)
+        items = _saves_of_this_run(run_dir, _runpod_remote_outputs(details, workspace=workspace, run_id=args.run_id))
         selected = _select_remote_outputs(items, step=args.step, since_step=args.since_step, all_outputs=args.all)
         if not selected:
             raise ValueError("no matching remote .safetensors outputs found")
