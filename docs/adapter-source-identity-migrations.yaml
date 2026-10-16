@@ -8,6 +8,130 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: training-leftovers-sd-scripts-2026-10-16
+    backend: sd-scripts
+    reason: 'A declared field''s flag is never set through extra_args, applicable or not; a field that takes a value refuses true or false; a Resume refused for its settings says to create a Fork from Weight; the state runner refuses a step save named below the step it holds (an image without Kura''s step patch); and a Resume counts its saves on logical multiples. No recorded smoke passed a declared field''s flag through extra_args or wrote true or false for a value field, so each builds the same command. The training-state contract also reads the selector spellings a run compiled before one spelling may hold.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: d38c6e78aeb61116114c1ca6af63041f49c543420004c7317e7f4cb28630e738
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 1aa81746dfb471289e029c663a90cfba1def8aabf8611ff050e01171e8fdf454
+  - id: training-leftovers-musubi-tuner-2026-10-16
+    backend: musubi-tuner
+    reason: 'A declared field''s flag is never set through extra_args, applicable or not; a field that takes a value refuses true or false; a Resume refused for its settings says to create a Fork from Weight; the state runner refuses a step save named below the step it holds (an image without Kura''s step patch); and a Resume counts its saves on logical multiples. No recorded smoke passed a declared field''s flag through extra_args or wrote true or false for a value field, so each builds the same command. timestep_sampling, discrete_flow_shift, and weighting_scheme, shared flags every Musubi trainer reads, are declared for every architecture and required where upstream''s guides train with other than the generic sigma and 1.0; the smoke harness writes the sigma and 1.0 those recorded smokes trained with. Krea 2 fp8_base without fp8_scaled is refused at compile; its smoke sets both. A Klein variant in model.base is matched in more spellings; each smoke''s base names its own variant.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 18e00a97b314089093851a3246f8099a8b1abd301e0e7d06e1c4ced93e6ac864
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: c9e6fb464f1358ae7a01a3c9df7d862943266dccfb546ed9bede8fc3abb3c969
+  - id: training-leftovers-ai-toolkit-2026-10-16
+    backend: ai-toolkit
+    reason: 'A conditional field whose selector is unset names that selector, and the state script says whether a misnamed step save is a missing patch or a skipped update. The native config every recorded smoke compiles is unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 62ccb49eb4d06404f3289e752e86475c5e897c296fc4afff6b41c77cbcd88167
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 06e90bae28926c24f7018dd37fc04b004a4d831b8832baa8bda806a9aab0ba70
+  - id: training-leftovers-runpod-executor-2026-10-16
+    executor: runpod
+    reason: 'The RunPod launch records HF_TOKEN presence through declared_secret, the one reader of that variable; capacity durations a run froze are read with an older Kura''s spellings; and the Resume and argv rules above apply to the commands it launches. Every recorded smoke launches the same Pod and command.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 5621e32936913c226be7b56d2075138cacff09372d20af11ea9a6aae4a098969
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 75c8eb369f906177bcb69967de35587a7d48111f7d0b2eed3d71a73e35a0a8d7
   - id: strict-yaml-reader-sd-scripts-2026-10-16
     backend: sd-scripts
     reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<` in a file it reads strictly (a draft run.yaml, compile, every other authored file). A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is refused before anything launches and is never compiled differently. The run.yaml of an already compiled run is a record and is still read as before by the readers that scan or copy runs (load_run_yaml: the last value of a repeated key wins, `<<` merges). Scalar reading is unchanged; the loader is only split into that record loader and the strict loader that adds the two checks.'
