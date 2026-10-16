@@ -475,7 +475,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
             with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4"}):
                 self.assertIsNone(MODULE.windows_drive_problem(workspace))
             with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": False}):
-                self.assertIn("/mnt/d", str(MODULE.windows_drive_problem(Path("/mnt/d/kura"))))
+                self.assertIn(str(Path("/mnt/d/kura")), str(MODULE.windows_drive_problem(Path("/mnt/d/kura"))))
             # findmnt's filesystem wins over the path: an ext4 disk mounted under /mnt/<letter> is fine.
             with patch("kura.storage.is_wsl", return_value=True), patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4"}):
                 self.assertIsNone(MODULE.windows_drive_problem(Path("/mnt/d/kura")))
