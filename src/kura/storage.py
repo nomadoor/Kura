@@ -48,6 +48,15 @@ def _existing_probe(path: Path) -> Path:
     return probe
 
 
+def _mount_point(path: Path) -> Path:
+    # Without findmnt (macOS, native Windows), the enclosing mount point names the backing store,
+    # so paths on one filesystem are reported together.
+    point = path.resolve()
+    while not os.path.ismount(point) and point != point.parent:
+        point = point.parent
+    return point
+
+
 def _findmnt_for(path: Path) -> dict[str, Any]:
     findmnt = shutil.which("findmnt")
     if not findmnt:
@@ -217,7 +226,7 @@ def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str
     effective_free = linux_free
     confidence = "exact"
     backing_kind = "native"
-    backing_id = str(mount.get("source") or probe)
+    backing_id = str(mount.get("source") or _mount_point(probe))
     warning: str | None = None
 
     if is_wsl():

@@ -28,7 +28,7 @@ from textual.widgets import Static
 
 from kura.dataset_manifest import CAPTION_SUFFIXES
 from kura.executors.common import STARTING_STATES, UNSUCCESSFUL_STATES
-from kura.monitor import DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline
+from kura.monitor import DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline, step_fraction
 
 
 FG = "#c5cdf0"
@@ -548,8 +548,7 @@ class MetricGrid(Static):
         table = Table.grid(padding=(0, 2))
         table.add_column(style=FG_MUTED, width=8)
         table.add_column()
-        step = "unknown" if summary.progress.step is None else str(summary.progress.step)
-        table.add_row("step", Text(f"{step}/{summary.progress.total or '-'}", style="bold"))
+        table.add_row("step", Text(step_fraction(summary.progress.step, summary.progress.total), style="bold"))
         if summary.activity and summary.unfinished and (summary.progress.step is None or summary.progress.step == 0):
             table.add_row("phase", Text(summary.activity, style=FG_MUTED))
         table.add_row("s/it", Text(_seconds_per_iter(summary), style="bold"))
@@ -956,11 +955,9 @@ class WatchPane(VerticalScroll):
         left.add_column(style=FG_MUTED)
         left.add_column()
         left.add_row("state", _badge(summary))
-        step = "unknown" if summary.progress.step is None else str(summary.progress.step)
-        left.add_row("progress", f"{step}/{summary.progress.total or '-'}")
+        left.add_row("progress", step_fraction(summary.progress.step, summary.progress.total))
         if summary.progress.current_run_total is not None:
-            current = "unknown" if summary.progress.current_run_step is None else str(summary.progress.current_run_step)
-            left.add_row("current", f"{current}/{summary.progress.current_run_total}")
+            left.add_row("current", step_fraction(summary.progress.current_run_step, summary.progress.current_run_total))
         left.add_row("executor", _executor_label(summary))
         if summary.capacity_wait and summary.activity:
             left.add_row("wait", summary.activity)
@@ -1923,8 +1920,7 @@ def _progress_text(summary: RunSummary) -> Text:
     text.append("█" * filled, style=RUN if summary.unfinished else ACCENT)
     text.append("░" * (width - filled), style="#343951")
     text.append("\n")
-    step_label = "unknown" if summary.progress.step is None else str(summary.progress.step)
-    text.append(f"step {step_label}/{total or '-'}", style=FG_MUTED)
+    text.append(f"step {step_fraction(summary.progress.step, total)}", style=FG_MUTED)
     if summary.progress.seconds_per_iter is not None:
         text.append(f" · {_seconds_per_iter(summary)}", style=FG_MUTED)
     if summary.activity and summary.unfinished and (summary.progress.step is None or summary.progress.step == 0 or not total):

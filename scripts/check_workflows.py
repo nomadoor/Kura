@@ -2,7 +2,7 @@
 """Validate the workflow samples Kura ships.
 
 Only tracked, shipped samples are checked; a maintainer's own untracked
-workflows/ and promptsets/ are workspace data, checked with `kura workflow check`.
+workflows/ are workspace data, checked with `kura workflow check`.
 """
 
 from __future__ import annotations
@@ -18,11 +18,10 @@ from kura.checks import default_workflow_files, workflow_findings  # noqa: E402
 
 
 WORKFLOWS = ROOT / "src" / "kura" / "shipped" / "workflow-samples"
-PROMPTSETS = WORKFLOWS
 
 
 def main() -> int:
-    errors = workflow_findings(default_workflow_files(WORKFLOWS, PROMPTSETS), ROOT, WORKFLOWS)
+    errors = workflow_findings(default_workflow_files(WORKFLOWS), ROOT, WORKFLOWS)
     if errors:
         print("Workflow validation failed:", file=sys.stderr)
         for error in errors:

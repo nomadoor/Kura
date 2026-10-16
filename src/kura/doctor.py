@@ -173,23 +173,6 @@ def _path_size_bytes(path: Path) -> int | None:
         return None
 
 
-def _disk_usage_for(path: Path) -> dict[str, Any]:
-    probe = path
-    while not probe.exists() and probe != probe.parent:
-        probe = probe.parent
-    try:
-        usage = shutil.disk_usage(probe)
-    except OSError as exc:
-        return {"path": str(path), "probe": str(probe), "error": _safe_error(exc)}
-    return {
-        "path": str(path),
-        "probe": str(probe),
-        "total_bytes": usage.total,
-        "used_bytes": usage.used,
-        "free_bytes": usage.free,
-    }
-
-
 def _root_owned_files(paths: list[Path], *, sample_limit: int = 20, scan_limit: int = 10000) -> dict[str, Any]:
     if os.name == "nt":
         return {"supported": False, "count": 0, "samples": []}
@@ -300,10 +283,8 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     }
     docker_mounts = local_docker_mounts(workspace_root, config)
 
-    sizes = {name: {"path": str(path), "exists": path.exists(), "size_bytes": _path_size_bytes(path)} for name, path in paths.items()}
-    filesystems = {name: _disk_usage_for(path) for name, path in paths.items()}
+    sizes = {name: {"path": str(path), "size_bytes": _path_size_bytes(path)} for name, path in paths.items()}
     storage_statuses = probe_storages(paths, config)
-    storage = {name: status.to_dict() for name, status in storage_statuses.items()}
     docker_storage = _docker_storage_summary()
     root_owned = _root_owned_files([paths["cache"], paths["runs"]])
     symlinks = inspect_workspace_symlinks(workspace_root, mounts=[item for item in docker_mounts if isinstance(item, dict)])
@@ -387,6 +368,25 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     warnings = [issue["message"] for issue in issues if issue.get("severity") == "warning"]
     advisories = [issue["message"] for issue in issues if issue.get("severity") == "advisory"]
 
+    # Kept short: the paths that share a backing store are listed once with its free space,
+    # Docker usage is one size per type, and long lists keep their count and a few samples.
+    storage: dict[str, dict[str, Any]] = {}
+    for name, status in storage_statuses.items():
+        entry = storage.setdefault(status.backing_id, {
+            "kind": status.backing_kind, "paths": [],
+            "effective_free_bytes": status.effective_free_bytes, "linux_free_bytes": status.linux_free_bytes,
+            "linux_total_bytes": status.linux_total_bytes, "host_free_bytes": status.host_free_bytes,
+            "confidence": status.confidence,
+        })
+        entry["paths"].append(name)
+    docker_summary = {key: value for key, value in docker_storage.items() if key != "usage"}
+    docker_summary["usage"] = {
+        str(item.get("Type")): {key: item[key] for key in ("size_bytes", "reclaimable_bytes") if key in item}
+        for item in docker_storage.get("usage", [])
+    }
+    unsafe = symlinks.get("unsafe") if isinstance(symlinks.get("unsafe"), list) else []
+    samples = 5
+
     payload = {
         "workspace_root": str(workspace_root),
         "platform": {
@@ -395,11 +395,11 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             "wsl": _is_wsl(),
         },
         "sizes": sizes,
-        "filesystems": filesystems,
         "storage": storage,
-        "docker_storage": docker_storage,
-        "root_owned": root_owned,
-        "symlinks": symlinks,
+        "docker_storage": docker_summary,
+        # `scan_stopped_at_limit`: the scan stopped after scan_limit paths, so count is a lower bound.
+        "root_owned": {"count": root_owned.get("count", 0), "samples": root_owned.get("samples", [])[:samples], "scan_stopped_at_limit": root_owned.get("truncated", False)},
+        "symlinks": {"scanned": symlinks.get("scanned"), "unsafe_count": len(unsafe), "unsafe": unsafe[:samples], "truncated": symlinks.get("truncated", False)},
         "cache_environment": env,
         "issues": issues,
         "warnings": warnings,

@@ -13,7 +13,6 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-from kura.render import is_safe_component
 from kura.secrets import is_secret_file, secret_values
 
 # A workspace may keep secrets here; no check ever opens it, nor the user secrets file.
@@ -112,23 +111,19 @@ def model_artifact_findings(files: Iterable[Path], root: Path) -> list[str]:
     return [_display(path, root) for path in files if path.suffix.lower() in MODEL_SUFFIXES]
 
 
-def default_workflow_files(workflows: Path, promptsets: Path) -> list[Path]:
-    """Workflow JSON under `workflows/` and promptset JSONL under `promptsets/`.
+def default_workflow_files(workflows: Path) -> list[Path]:
+    """Workflow JSON under `workflows/`.
 
-    Other JSONL files, such as render case queues kept beside workflows, have
-    their own contract and are checked when a run compiles.
+    JSONL files, such as render case queues kept beside workflows, have their
+    own contract and are checked when a render run compiles.
     """
-
-    def pick(root: Path, suffix: str) -> list[Path]:
-        if not root.is_dir():
-            return []
-        return [path for path in expand([root]) if path.suffix == suffix or path.name.endswith(":Zone.Identifier")]
-
-    return pick(workflows, ".json") + pick(promptsets, ".jsonl")
+    if not workflows.is_dir():
+        return []
+    return [path for path in expand([workflows]) if path.suffix == ".json" or path.name.endswith(":Zone.Identifier")]
 
 
 def workflow_findings(files: Iterable[Path], root: Path, workflows_root: Path | None) -> list[str]:
-    """Structural findings for ComfyUI workflow JSON and promptset JSONL files.
+    """Structural findings for ComfyUI workflow JSON files.
 
     With `workflows_root`, a `.json` file must be API format when it sits
     directly in that directory or ends in `_api`; without it, every `.json`
@@ -142,8 +137,6 @@ def workflow_findings(files: Iterable[Path], root: Path, workflows_root: Path | 
             errors.append(f"{shown} is a Windows Zone.Identifier sidecar")
         elif path.suffix == ".json":
             errors.extend(_workflow_json_findings(path, shown, workflows_root))
-        elif path.suffix == ".jsonl":
-            errors.extend(_promptset_findings(path, shown))
     return errors
 
 
@@ -166,30 +159,3 @@ def _workflow_json_findings(path: Path, shown: str, workflows_root: Path | None)
             f"To keep this file for its Note nodes, save the API export beside it as {path.stem}_api.json"
         ]
     return [] if data else [f"{shown} is empty"]
-
-
-def _promptset_findings(path: Path, shown: str) -> list[str]:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        return [f"{shown} cannot be read: {exc}"]
-    errors = [] if lines else [f"{shown} is empty"]
-    seen_ids: dict[str, int] = {}
-    for index, line in enumerate(lines, 1):
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            errors.append(f"{shown}:{index} invalid JSONL: {exc}")
-            continue
-        # Whether prompt is required depends on the consuming render run: a
-        # workflow-fixed prompt is deliberately absent. Compile owns that
-        # agreement; this check only validates standalone promptset structure.
-        if not isinstance(item, dict) or "id" not in item:
-            errors.append(f"{shown}:{index} must contain at least id")
-        elif not is_safe_component(item["id"]):
-            errors.append(f"{shown}:{index} id must be a single safe file name, not a path")
-        elif item["id"] in seen_ids:
-            errors.append(f"{shown}:{index} duplicate id {item['id']!r} (already used on line {seen_ids[item['id']]})")
-        else:
-            seen_ids[item["id"]] = index
-    return errors

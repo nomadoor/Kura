@@ -12,7 +12,7 @@ from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
-from kura.backends.musubi_models import FLUX2_MODEL_VERSIONS, MUSUBI_BUNDLES, QWEN_IMAGE_MODEL_VERSIONS, musubi_model_download_specs
+from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES, musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
 from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
@@ -221,7 +221,7 @@ MUSUBI_SURFACE = BackendSurface(
         ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
         ("h3_loss_method", ("guidance", "teacher_matching", "training_adapter")),
         ("model_bundle", tuple(MUSUBI_BUNDLES)),
-        ("model_version", (*FLUX2_MODEL_VERSIONS, *QWEN_IMAGE_MODEL_VERSIONS)),
+        ("model_version", tuple(version for versions in MODEL_VERSIONS.values() for version in versions)),
         ("output_compatibility", ("comfyui", "none")),
     ),
     selector_defaults=(
@@ -247,9 +247,9 @@ MUSUBI_SURFACE = BackendSurface(
         _when("fp8_vl", architecture=("qwen_image", "hunyuan_video_1_5")),
         _when("gradient_checkpointing_cpu_offload", architecture=("krea2",), gradient_checkpointing=(True,)),
         _when("include_turbo_dit", architecture=("krea2",), model_bundle=("krea2-raw",)),
-        _when("model_bundle", architecture=("flux2", "krea2", "minimax_h3")),
+        _when("model_bundle", architecture=tuple(dict.fromkeys(architecture for architecture, _ in MUSUBI_BUNDLES.values()))),
         _when("model_type", architecture=("hidream_o1",)),
-        _when("model_version", architecture=("flux2", "qwen_image")),
+        _when("model_version", architecture=tuple(MODEL_VERSIONS)),
         _when("noise_clip_std", architecture=("hidream_o1",)),
         _when("noise_scale_end", architecture=("hidream_o1",)),
         _when("noise_scale_start", architecture=("hidream_o1",)),

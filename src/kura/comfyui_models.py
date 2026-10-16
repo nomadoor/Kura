@@ -64,12 +64,14 @@ DEFAULT_MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
 
 # The keys of one model source (comfyui.model_registry and a workflow sidecar's models).
 MODEL_ENTRY_KEYS = ("repo", "url", "filename", "revision", "subfolder", "target_dir", "target_name")
+# Older spellings of three of those keys: refused with the new name, and renamed by `kura workspace migrate`.
+RETIRED_MODEL_ENTRY_KEYS = {"repo_id": "repo", "direct_url": "url", "file": "filename"}
 
 
 def merged_registry(*registries: Any) -> dict[str, Any]:
     merged: dict[str, Any] = deepcopy(DEFAULT_MODEL_REGISTRY)
     for registry in registries:
-        sections = _registry_sections(registry)
+        sections = registry_folders(registry)
         for section_name, section in sections.items():
             if not isinstance(section, dict):
                 continue
@@ -79,7 +81,7 @@ def merged_registry(*registries: Any) -> dict[str, Any]:
     return merged
 
 
-def _registry_sections(registry: Any) -> dict[str, Any]:
+def registry_folders(registry: Any) -> dict[str, Any]:
     """A registry maps a model folder to model names; the older `models:` wrapper is refused, not read as a folder."""
     if not isinstance(registry, dict):
         return {}
@@ -92,7 +94,7 @@ def _registry_sections(registry: Any) -> dict[str, Any]:
 
 
 def _lookup_model(registry: Any, model_type: str, name: str) -> dict[str, Any] | None:
-    sections = _registry_sections(registry)
+    sections = registry_folders(registry)
     section = sections.get(model_type)
     if not isinstance(section, dict):
         return None
@@ -173,12 +175,11 @@ def resolve_model_specs(workflow: dict[str, Any], registry: Any) -> tuple[list[d
             unknown.append(ref)
             continue
         label = f"model {ref['type']}/{ref['name']}"
-        retired = {"repo_id": "repo", "direct_url": "url", "file": "filename"}
         unknown_keys = sorted(set(entry) - set(MODEL_ENTRY_KEYS))
         if unknown_keys:
             raise ValueError(
                 f"{label} has unsupported key(s): "
-                + ", ".join(f"{key} (write {retired[key]})" if key in retired else key for key in unknown_keys)
+                + ", ".join(f"{key} (write {RETIRED_MODEL_ENTRY_KEYS[key]})" if key in RETIRED_MODEL_ENTRY_KEYS else key for key in unknown_keys)
                 + "; use " + ", ".join(MODEL_ENTRY_KEYS)
             )
         if ("repo" in entry) == ("url" in entry) or not all(isinstance(value, str) and value for value in entry.values()):

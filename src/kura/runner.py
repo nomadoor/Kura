@@ -95,6 +95,35 @@ def stopped_on_purpose(workspace: Path) -> bool:
     return _stopped_mark(workspace).exists()
 
 
+def _record_runner_end(workspace: Path, epoch: int, ended: str) -> None:
+    """Add why the runner of `epoch` ended to its runner.json: `idle` or `stopped`."""
+    info = runner_info(workspace)
+    if info is not None and info.get("epoch") == epoch:
+        atomic_write_json(runner_dir(workspace) / "runner.json", record("runner", {**info, "ended": ended, "ended_at": _now()}))
+
+
+def runner_state(workspace: Path) -> tuple[str, str]:
+    """Whether a runner follows the workspace's runs, and if not, why not, with what starts one."""
+    if runner_alive(workspace):
+        return "running", "a runner follows this workspace's runs"
+    if stopped_on_purpose(workspace):
+        return "stopped_on_purpose", "stopped by `kura runner stop`; `kura runner start` or the next launch starts it again"
+    info = runner_info(workspace)
+    if info is None:
+        return "never_started", "no runner has started in this workspace; the first launch starts one"
+    if info.get("ended") == "idle":
+        return "idle", "the runner exited because it had nothing left to control; the next launch starts it"
+    if info.get("ended") == "stopped":
+        return "stopped_by_signal", (
+            "the runner was ended by a signal without `kura runner stop` (for example at logout or shutdown); "
+            "`kura runner start`, the next launch, or following a run starts it again"
+        )
+    return "ended_unexpectedly", (
+        "the runner ended without recording why (a crash, a kill, or an older Kura); see .kura/runner/runner.log. "
+        "`kura runner start` starts it again"
+    )
+
+
 # Starting -------------------------------------------------------------------
 
 def runner_environment(environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -480,6 +509,8 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
     children: dict[str, Any] = {}
     backoff: dict[str, tuple[float, float]] = {}
     stopping = False
+    # The wait reason last logged for each request; logged again only when it changes.
+    said_waits: dict[Path, str] = {}
 
     def request_stop(*_args: Any) -> None:
         nonlocal stopping
@@ -502,6 +533,7 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
                 backoff.pop(run_id, None)
         if stopping:
             _log(f"runner epoch {epoch} stopped on request; runs continue and the next runner follows them")
+            _record_runner_end(workspace, epoch, "stopped")
             return 0
         busy = False
         run_dirs = sorted((workspace / "runs").glob("*")) if (workspace / "runs").is_dir() else []
@@ -516,8 +548,14 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
                 if claim_request(request, epoch):
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
                 continue
-            if _request_executor(request) == "docker" and local_slots_full(workspace):
-                # Local training waits its turn; RunPod requests start at once.
+            wait = local_slot_wait(workspace) if _request_executor(request) == "docker" else None
+            if wait is None:
+                said_waits.pop(request, None)
+            else:
+                # Local training waits its turn; RunPod requests start at once. Said once per reason.
+                if said_waits.get(request) != wait:
+                    _log(f"{request.parent.parent.name}: {request.name} waits: {wait}")
+                    said_waits[request] = wait
                 continue
             if claim_request(request, epoch):
                 _log(f"{request.parent.parent.name}: claimed {request.name}")
@@ -538,22 +576,9 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
             children[run_id] = spawn_child(workspace, run_id, request)
         if not busy and not children:
             _log(f"runner epoch {epoch} has nothing left to control; exiting")
+            _record_runner_end(workspace, epoch, "idle")
             return 0
         sleep(poll_sec)
-
-
-def _local_slots(workspace: Path) -> int | None:
-    """runner.local_slots from the validated workspace.yaml; None when the file is not valid."""
-    from kura.workspace import validate_workspace_config
-    from kura.yamlio import YAMLError, load_yaml_mapping
-
-    try:
-        config = load_yaml_mapping(workspace / "workspace.yaml")
-        validate_workspace_config(config)
-    except (OSError, YAMLError, ValueError) as exc:
-        _log(f"local launches wait: workspace.yaml is not valid ({exc})")
-        return None
-    return (config.get("runner") or {}).get("local_slots", 1)
 
 
 def _request_executor(request: Path | None) -> str | None:
@@ -568,11 +593,22 @@ def _active_local_runs(workspace: Path) -> int:
     )
 
 
-def local_slots_full(workspace: Path) -> bool:
-    """Whether every local training slot is taken, so a new local request waits; an invalid
-    workspace.yaml holds every local request until it is fixed."""
-    slots = _local_slots(workspace)
-    return slots is None or _active_local_runs(workspace) >= slots
+def local_slot_wait(workspace: Path) -> str | None:
+    """Why a new local training request waits, or None when a slot is free: every slot is
+    taken (runner.local_slots), or workspace.yaml is not valid, which holds every local
+    request until it is fixed."""
+    from kura.workspace import validate_workspace_config
+    from kura.yamlio import YAMLError, load_yaml_mapping
+
+    try:
+        config = load_yaml_mapping(workspace / "workspace.yaml")
+        validate_workspace_config(config)
+    except (OSError, YAMLError, ValueError) as exc:
+        return f"workspace.yaml is not valid, so local launches wait until it is fixed ({exc})"
+    slots = (config.get("runner") or {}).get("local_slots", 1)
+    if _active_local_runs(workspace) >= slots:
+        return f"every local training slot is in use (runner.local_slots: {slots})"
+    return None
 
 
 def threading_main() -> bool:
@@ -1078,7 +1114,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     """
     out = out or sys.stderr
     restarts = 0
-    queued_said = False
+    said_wait: str | None = None
     quiet_said = False
     said_state: Any = None
     said_line: str | None = None
@@ -1094,9 +1130,11 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             print(f"the runner did not launch this run: {outcome.get('error') or outcome.get('kind')}", file=out)
             return 1
         runner_offset = _stream_log(runner_log, runner_offset)
-        if not queued_said and request in pending_requests(run_dir) and runner_alive(workspace) and local_slots_full(workspace):
-            queued_said = True
-            print("waiting for a free local slot: another local training run is using it (`runner.local_slots`)", file=out)
+        local_pending = _request_executor(request) == "docker" and request in pending_requests(run_dir)
+        wait = local_slot_wait(workspace) if local_pending and runner_alive(workspace) else None
+        if wait is not None and wait != said_wait:
+            print(f"waiting to launch: {wait}", file=out)
+        said_wait = wait
         status = _status(run_dir)
         # Said once per quiet spell; progress resets it.
         quiet = quiet_run_notice(run_quiet_since(run_dir, status))
@@ -1164,8 +1202,9 @@ def await_claim(workspace: Path, run_dir: Path, request: Path, *, timeout_sec: f
     while clock() < deadline:
         if _sibling(request, ".claim.json").exists():
             return True
-        if runner_alive(workspace) and local_slots_full(workspace):
-            print("the request waits for a free local slot; the runner launches it in turn", file=sys.stderr)
+        wait = local_slot_wait(workspace) if _request_executor(request) == "docker" and runner_alive(workspace) else None
+        if wait is not None:
+            print(f"the request waits to launch: {wait}", file=sys.stderr)
             return True
         if not runner_alive(workspace) and not restarted:
             restarted = True

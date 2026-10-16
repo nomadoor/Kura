@@ -114,7 +114,9 @@ as the next, revised run.
 **Files.** The runner's lock file only carries the advisory lock. A separate
 `runner.json` records its process ID, Kura version, Python environment, epoch,
 and start time; it is replaced atomically, which would break a lock held on the
-same file. These files live in `.kura/runner/`, which Kura owns; refreshing
+same file. When the runner exits on its own it adds `ended` (`idle` when nothing
+was left to control, `stopped` on a stop signal) and `ended_at`, so `kura runner
+status` can say why no runner is running; a runner that died records neither. These files live in `.kura/runner/`, which Kura owns; refreshing
 shipped files never touches it.
 
 **One child per launch.** The runner supervises; it does not run launches

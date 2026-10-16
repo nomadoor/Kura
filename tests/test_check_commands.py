@@ -43,25 +43,31 @@ class WorkflowCheckCommandTests(unittest.TestCase):
             workflows.mkdir()
             (workflows / "ui.json").write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
             (workflows / "good.json").write_text(json.dumps({"1": {"class_type": "X"}}), encoding="utf-8")
-            promptsets = root / "promptsets"
-            promptsets.mkdir()
-            (promptsets / "dup.jsonl").write_text('{"id": "a"}\n{"id": "a"}\n', encoding="utf-8")
 
-            code, output = _run(cmd_workflow_check, paths=["workflows/ui.json", "promptsets/dup.jsonl"])
+            code, output = _run(cmd_workflow_check, paths=["workflows/ui.json"])
             self.assertEqual(code, 1)
             self.assertIn("looks like a UI workflow export", output)
-            self.assertIn("duplicate id 'a'", output)
 
             code, output = _run(cmd_workflow_check, paths=["workflows/good.json"])
             self.assertEqual(code, 0, output)
 
-    def test_without_paths_checks_the_workspace_workflows_and_promptsets(self) -> None:
+    def test_without_paths_checks_the_workspace_workflows_only(self) -> None:
         with _workspace() as root:
             (root / "workflows").mkdir()
             (root / "workflows" / "empty.json").write_text("{}", encoding="utf-8")
+            (root / "promptsets").mkdir()
+            (root / "promptsets" / "dup.jsonl").write_text('{"id": "a"}\n{"id": "a"}\n', encoding="utf-8")
             code, output = _run(cmd_workflow_check, paths=[])
         self.assertEqual(code, 1)
         self.assertIn("workflows/empty.json is empty", output)
+        self.assertNotIn("dup.jsonl", output)
+
+    def test_a_named_jsonl_is_left_to_render_compile(self) -> None:
+        with _workspace() as root:
+            (root / "cases.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
+            code, output = _run(cmd_workflow_check, paths=["cases.jsonl"])
+        self.assertEqual(code, 1)
+        self.assertIn("not workflow JSON: cases.jsonl; `kura render compile` checks a case queue", output)
 
 
 class WorkflowCheckStrictnessTests(unittest.TestCase):
@@ -82,10 +88,10 @@ class WorkflowCheckStrictnessTests(unittest.TestCase):
             (root / "notes.md").write_text("x\n", encoding="utf-8")
             code, output = _run(cmd_workflow_check, paths=["notes.md"])
             self.assertEqual(code, 1)
-            self.assertIn("not workflow JSON or promptset JSONL", output)
+            self.assertIn("not workflow JSON", output)
             code, output = _run(cmd_workflow_check, paths=[])
             self.assertEqual(code, 1)
-            self.assertIn("no workflow JSON or promptset JSONL", output)
+            self.assertIn("no workflow JSON was found", output)
 
     def test_default_mode_needs_a_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

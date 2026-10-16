@@ -15,6 +15,8 @@ PURE_OBSERVATION_MODULES = {
 }
 AGENT_RUNTIME_MODULES = {"anthropic", "claude_agent_sdk", "openai"}
 REMOVED_RUN_KEYS = {"backend_overrides", "params"}
+# PyYAML is imported only by kura.yamlio; no other YAML library is imported at all.
+YAML_LIBRARIES = {"yaml", "ruamel", "ruamel_yaml", "strictyaml", "oyaml", "yamlcore", "pyaml"}
 
 
 def imports(path: Path) -> set[str]:
@@ -90,10 +92,11 @@ def main() -> int:
     # One reader and writer owns how every YAML file is parsed and written. Container
     # scripts run inside trainer images without Kura, so they keep their own loader.
     for path in sorted([*SRC.rglob("*.py"), *(ROOT / "scripts").glob("*.py")]):
-        if path == SRC / "yamlio.py" or SRC / "container_scripts" in path.parents:
+        if SRC / "container_scripts" in path.parents:
             continue
-        if any(name == "yaml" or name.startswith("yaml.") for name in imports(path)):
-            failures.append(f"{path.relative_to(ROOT)} must read and write YAML through kura.yamlio")
+        allowed = {"yaml"} if path == SRC / "yamlio.py" else set()
+        if any(name.split(".", 1)[0] in YAML_LIBRARIES - allowed for name in imports(path)):
+            failures.append(f"{path.relative_to(ROOT)} must read and write YAML through kura.yamlio (PyYAML only)")
 
     selector = "kura.backends.musubi_native_selectors"
     for path in sorted(SRC.rglob("*.py")):

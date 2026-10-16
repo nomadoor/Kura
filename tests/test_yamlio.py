@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from kura.yamlio import dump_yaml, load_yaml_mapping, load_yaml_text
+from kura.yamlio import YAMLError, dump_yaml, load_run_yaml, load_yaml_mapping, load_yaml_text
 
 
 class YamlReaderTests(unittest.TestCase):
@@ -30,12 +30,42 @@ class YamlReaderTests(unittest.TestCase):
     def test_an_explicit_int_tag_keeps_pyyaml_reading(self) -> None:
         self.assertEqual(load_yaml_text("a: !!int 0b101\nb: !!int 1:30\n"), {"a": 5, "b": 90})
 
+    def test_reader_refuses_a_duplicate_mapping_key(self) -> None:
+        with self.assertRaisesRegex(YAMLError, "duplicate key 'learning_rate'"):
+            load_yaml_text("learning_rate: 1e-4\nlearning_rate: 2e-4\n")
+        with self.assertRaisesRegex(YAMLError, "duplicate key 'a'"):
+            load_yaml_text("outer:\n  a: 1\n  a: 1\n")
+
+    def test_reader_refuses_the_yaml_1_1_merge_key(self) -> None:
+        with self.assertRaisesRegex(YAMLError, "merge key"):
+            load_yaml_text("base: &base\n  a: 1\nrun:\n  <<: *base\n  b: 2\n")
+
+    def test_reader_keeps_anchors_and_aliases(self) -> None:
+        self.assertEqual(load_yaml_text("a: &x [1, 2]\nb: *x\n"), {"a": [1, 2], "b": [1, 2]})
+
     def test_load_mapping_refuses_a_non_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "run.yaml"
             path.write_text("- a\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "must contain a YAML mapping"):
                 load_yaml_mapping(path)
+
+
+class RunRecordReaderTests(unittest.TestCase):
+    def test_a_compiled_runs_yaml_is_read_as_older_kura_read_it_and_a_draft_strictly(self) -> None:
+        from kura.monitor import collect_run_summaries
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "old"
+            (run_dir / "resolved").mkdir(parents=True)
+            run_yaml = run_dir / "run.yaml"
+            run_yaml.write_text("id: old\ntype: train\nexperiment: a\nexperiment: b\n", encoding="utf-8")
+            with self.assertRaisesRegex(YAMLError, "duplicate key"):
+                load_run_yaml(run_yaml)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: old\ntype: train\n", encoding="utf-8")
+            self.assertEqual(load_run_yaml(run_yaml)["experiment"], "b")
+            self.assertEqual([summary.experiment for summary in collect_run_summaries(root)], ["b"])
 
 
 class YamlWriterTests(unittest.TestCase):

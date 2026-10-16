@@ -654,13 +654,23 @@ class CheckpointCadenceParityTests(unittest.TestCase):
                 cadence.assert_called()
 
     def test_the_plan_formats_the_owners_state_cadence(self) -> None:
-        cases = ((musubi_run, None, 1000), (sd_scripts_run, None, 1000), (ai_toolkit_run, None, "trainer default"), (musubi_run, 30, 30))
+        cases = ((musubi_run, None, (1000, False)), (sd_scripts_run, None, (1000, False)), (ai_toolkit_run, None, (None, True)), (musubi_run, 30, (30, False)))
         for build, configured, shown in cases:
             run = build()
             if configured is not None:
                 run["backend"]["config"]["save_every_n_steps"] = configured
             with self.subTest(backend=run["backend"]["name"], configured=configured):
                 self.assertEqual(plan._training_state_cadence(run), shown)
+
+    def test_the_text_plan_names_a_trainer_default_cadence_and_not_a_draft_with_no_steps(self) -> None:
+        state = {"enabled": True, "keep_generations": 2, "cadence_steps": None, "capability": "partial_resume", "saved": True}
+        self.assertIn("cadence      trainer default", plan.format_run_plan({"training_state": {**state, "trainer_default_cadence": True}}))
+        text = plan.format_run_plan({"training_state": {**state, "trainer_default_cadence": False}})
+        self.assertIn("cadence      -", text)
+        self.assertNotIn("trainer default", text)
+        draft = sd_scripts_run()
+        draft["recipe"].pop("steps", None)
+        self.assertEqual(plan._training_state_cadence(draft), (None, False))
 
 
 class RunPodContainerDiskDefaultTests(unittest.TestCase):

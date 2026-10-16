@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from kura.training_artifacts import checkpoint_files, displayed_final_step, expected_checkpoints, trained_steps
-from kura.yamlio import YAMLError, load_yaml
+from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
@@ -187,7 +187,11 @@ def _collect_run_ids(workspace: Path) -> list[str]:
 
 
 def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_tail: int, stale_after: float) -> RunSummary:
-    run = _read_mapping(run_dir / "run.yaml")
+    try:
+        run = load_run_yaml(run_dir / "run.yaml")
+    except (OSError, YAMLError, UnicodeDecodeError):
+        run = {}
+    run = run if isinstance(run, dict) else {}
     manifest = _read_mapping(run_dir / "resolved" / "manifest.lock.yaml")
     config = manifest or run
     status_path = run_dir / "status.json"
@@ -815,18 +819,21 @@ def _capacity_wait_activity(wait: CapacityWaitInfo, *, stale: bool) -> str:
     return " · ".join(parts)
 
 
+def step_fraction(step: int | None, total: int | None) -> str:
+    """`step/total` as every progress view shows it; a count not observed yet is `-`, never 0."""
+    return f"{'-' if step is None else step}/{total or '-'}"
+
+
 def _format_progress(progress: RunProgress) -> str:
     if progress.step is None and progress.total is None:
         return "unknown"
     if progress.total is None:
-        return "unknown" if progress.step is None else str(progress.step)
-    step = "unknown" if progress.step is None else str(progress.step)
-    rendered = f"{step}/{progress.total}"
+        return str(progress.step)
+    rendered = step_fraction(progress.step, progress.total)
     if progress.current_case_id:
         rendered += f" · {progress.current_case_id}"
     if progress.current_run_total is not None:
-        current = "unknown" if progress.current_run_step is None else str(progress.current_run_step)
-        rendered += f" · current {current}/{progress.current_run_total}"
+        rendered += f" · current {step_fraction(progress.current_run_step, progress.current_run_total)}"
     return rendered
 
 

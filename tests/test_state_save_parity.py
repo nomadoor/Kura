@@ -104,7 +104,8 @@ class ManagedStateCadenceTests(unittest.TestCase):
         from kura.run_commands.plan import _training_state_cadence
 
         def shown(run: dict[str, Any]) -> Any:
-            return _training_state_cadence(run)
+            steps, trainer_default = _training_state_cadence(run)
+            return "trainer default" if trainer_default else steps
 
         unset = {"sd-scripts": 1000, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
         resumed = {"sd-scripts": 200, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}

@@ -399,7 +399,7 @@ def _confirm_runpod_launch(
     if min_cuda_version:
         print(f"  Host CUDA: {min_cuda_version} or newer", file=sys.stderr)
     ceiling = runpod_cost_ceiling(measurement, settings["gpu_type_ids"], max_lease_sec=max_lease_sec)
-    print(f"  Maximum lease: {ceiling['max_lease']}", file=sys.stderr)
+    print(f"  Maximum lease: {ceiling['max_lease']} after the Pod starts; then the Pod deletes itself, collected or not", file=sys.stderr)
     print(f"  Cost ceiling: {format_cost_ceiling(ceiling)}", file=sys.stderr)
     if unattended_wait:
         print(f"  Unattended wait: {unattended_wait}", file=sys.stderr)

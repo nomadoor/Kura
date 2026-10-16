@@ -303,7 +303,7 @@ class RenderCasesCompileTests(unittest.TestCase):
             root = Path(directory)
             run_dir = self._lora_strength_workspace(root)
             self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"strength": 1.0}))
-            with self.assertRaisesRegex(ValueError, "unsupported keys: strength"):
+            with self.assertRaisesRegex(ValueError, "render.strength is not a render run setting"):
                 compile_render(root, run_dir)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -418,6 +418,48 @@ class RenderCasesCompileTests(unittest.TestCase):
             remove_leftover_stages(root, run_dir)
             self.assertTrue(outside.exists())
 
+    def test_stage_settings_an_older_kura_froze_are_read_as_it_read_them(self) -> None:
+        from kura.render import _lora_stage_plan, _model_patch_stage_plan, remove_leftover_stages
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            checkpoint = root / "runs" / "train-1" / "lora.safetensors"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"weights")
+            record = {"id": "c", "path": "runs/train-1/lora.safetensors"}
+            frozen = {
+                "workflow_patches": {"lora": {"node": "12", "field": "inputs.lora_name"}, "model_patch": {"node": "9", "field": "inputs.name"}},
+                "comfyui": {
+                    "lora_dir": "loras", "lora_stage_subdir": None, "lora_stage_cleanup": "Keep", "lora_stage_mode": "copy",
+                    "model_patches_dir": "patches", "model_patch_stage_subdir": "", "model_patch_stage_cleanup": "Remove_After_Render",
+                    "model_patch_stage_mode": "copy",
+                },
+            }
+            lora = _lora_stage_plan(root, run_dir, frozen, record)
+            self.assertEqual((lora["lora_name"].split("/")[0], lora["cleanup"]), ("Kura_tmp", "keep"))
+            patch_plan = _model_patch_stage_plan(root, run_dir, frozen, record)
+            self.assertEqual((patch_plan["model_patch_name"].split("/")[0], patch_plan["cleanup"]), ("Kura_tmp", "remove_after_render"))
+            kept = root / "loras" / "Kura_tmp" / "render-1-a.safetensors"
+            kept.parent.mkdir(parents=True)
+            kept.write_bytes(b"x")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "comfyui:\n  lora_dir: loras\n  lora_stage_subdir: null\n  lora_stage_cleanup: Keep\n", encoding="utf-8")
+            remove_leftover_stages(root, run_dir)
+            self.assertTrue(kept.exists())
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "comfyui:\n  lora_dir: loras\n  lora_stage_subdir: null\n", encoding="utf-8")
+            remove_leftover_stages(root, run_dir)
+            self.assertFalse(kept.exists())
+
+    def test_a_render_an_older_kura_froze_with_lora_stage_off_is_refused_not_staged(self) -> None:
+        from kura.render import _lora_stage_plan
+
+        frozen = {"workflow_patches": {"lora": {"node": "12", "field": "inputs.lora_name"}}, "render": {"lora_stage": False}, "comfyui": {"lora_dir": "loras"}}
+        with self.assertRaisesRegex(ValueError, "render.lora_stage off.*create a new render run"):
+            _lora_stage_plan(Path("."), Path("runs/render-1"), frozen, {"id": "c", "path": "runs/train-1/lora.safetensors"})
+
     def test_render_lora_stage_is_not_a_setting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -426,7 +468,7 @@ class RenderCasesCompileTests(unittest.TestCase):
             run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
             run.setdefault("render", {})["lora_stage"] = "off"
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "render has unsupported keys: lora_stage"):
+            with self.assertRaisesRegex(ValueError, "render.lora_stage is not a render run setting"):
                 compile_render(root, run_dir)
 
     def test_compile_refuses_an_empty_workspace_setting(self) -> None:
@@ -726,6 +768,19 @@ class RenderCasesLaunchTests(unittest.TestCase):
             record = json.loads((run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8"))
             self.assertEqual(record["patch_inputs"]["control_image"], frozen_name)
             self.assertEqual(record["applied_values"]["control_image"], remote_name)
+
+    def test_runpod_compile_refuses_a_model_patch_binding_before_any_pod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("a", step=200, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row], patches={**PATCHES, "model_patch": {"node": "19", "field": "inputs.image"}})
+            _write_checkpoint(root, row["checkpoint"], b"weights")
+            run_config = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run_config["executor"] = {"name": "runpod"}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run_config, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "model patch staging is not supported for the runpod executor"):
+                compile_render(root, run_dir)
+            self.assertFalse((run_dir / "resolved" / "manifest.lock.yaml").exists())
 
     def test_runpod_rejects_incomplete_image_mapping_before_running(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

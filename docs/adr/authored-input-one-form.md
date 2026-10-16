@@ -64,9 +64,11 @@ recipe a user may reasonably choose.
 ### One YAML reader and writer
 
 `kura.yamlio` reads and writes every YAML file Kura reads or writes, and no
-other Kura code imports PyYAML (`scripts/check_architecture.py`). Reading
-follows the YAML 1.2 core schema, so `1e-4` is a number, only `true` and
-`false` are booleans, and `on`, `yes`, or a bare date stay strings. Writing
+other Kura code imports PyYAML or another YAML library
+(`scripts/check_architecture.py`). Reading follows the YAML 1.2 core schema, so
+`1e-4` is a number, only `true` and `false` are booleans, and `on`, `yes`, or a
+bare date stay strings. A mapping key may appear only once, and the YAML 1.1
+merge key `<<` is refused, so one file has one reading. Writing
 quotes any string that a YAML 1.2 or a YAML 1.1 reader would turn into another
 type, so a file Kura writes reads back the same in Kura and in a trainer's
 PyYAML loader. Container scripts run inside trainer images without Kura and
@@ -105,6 +107,10 @@ recipe fingerprint recorded before this change hashed values such as `1e-6` as
 the strings YAML 1.1 gave, so it is compared against the parent's frozen
 manifest read that way, and the manifest read today must equal the derived
 run's recipe.
+Another is `load_run_yaml`: once a run is compiled its run.yaml is a record,
+which an older Kura may have accepted with a repeated key or a `<<` merge, so
+the readers that scan or copy runs read it that way (the last value of a
+repeated key wins); a draft and every compile read strictly.
 
 ## Consequences
 

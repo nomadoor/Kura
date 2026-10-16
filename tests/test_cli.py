@@ -869,15 +869,12 @@ class DoctorDockerTests(unittest.TestCase):
             (root / "cache" / "huggingface").mkdir(parents=True)
             (root / "runs").mkdir()
 
-            def fake_disk_usage(path: Path) -> dict[str, object]:
-                return {"path": str(path), "probe": str(path), "total_bytes": 200 * 1024**3, "used_bytes": 150 * 1024**3, "free_bytes": 50 * 1024**3}
 
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", return_value=20),
-                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 2, "samples": ["cache/root-owned"], "truncated": False}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
@@ -893,6 +890,15 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
             self.assertEqual(list(payload)[:4], ["diagnosis", "warnings", "advisories", "issues"])
+            # Concise: one storage entry per backing store, docker usage by type, no per-path filesystem copies.
+            self.assertNotIn("filesystems", payload)
+            backing = next(item for item in payload["storage"].values() if "workspace" in item["paths"])
+            self.assertIn("workspace", backing["paths"])
+            self.assertIn("huggingface_cache", backing["paths"])
+            self.assertNotIn("mount", backing)
+            self.assertEqual(payload["docker_storage"]["usage"], {"Build Cache": {"size_bytes": 31 * 1024**3}})
+            self.assertEqual(payload["sizes"]["runs"], {"path": str(root / "runs"), "size_bytes": 20})
+            self.assertEqual(payload["root_owned"], {"count": 2, "samples": ["cache/root-owned"], "scan_stopped_at_limit": False})
 
     def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -908,8 +914,6 @@ class DoctorDockerTests(unittest.TestCase):
             def fake_size(path: Path) -> int:
                 return sizes.get(str(path), 0)
 
-            def fake_disk_usage(path: Path) -> dict[str, object]:
-                return {"path": str(path), "probe": str(path), "total_bytes": 500 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 400 * 1024**3}
 
             def fake_probe(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
                 return {
@@ -933,7 +937,6 @@ class DoctorDockerTests(unittest.TestCase):
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", side_effect=fake_size),
-                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor.probe_storages", side_effect=fake_probe),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
@@ -963,15 +966,12 @@ class DoctorDockerTests(unittest.TestCase):
             link.parent.mkdir(parents=True)
             link.symlink_to("/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
 
-            def fake_disk_usage(path: Path) -> dict[str, object]:
-                return {"path": str(path), "probe": str(path), "total_bytes": 500 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 400 * 1024**3}
 
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", return_value=0),
-                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
@@ -992,15 +992,12 @@ class DoctorDockerTests(unittest.TestCase):
             (root / "cache").mkdir()
             (root / "runs").mkdir()
 
-            def fake_disk_usage(path: Path) -> dict[str, object]:
-                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
 
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", return_value=0),
-                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
                     patch("kura.storage.is_wsl", return_value=True),
@@ -1013,7 +1010,7 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
-            self.assertEqual(payload["storage"]["workspace"]["confidence"], "unknown")
+            self.assertEqual(next(item for item in payload["storage"].values() if "workspace" in item["paths"])["confidence"], "unknown")
             self.assertTrue(any("WSL Linux ext4" in warning for warning in payload["warnings"]))
 
     def test_wsl_storage_probe_treats_unknown_backing_as_unknown(self) -> None:
@@ -1035,15 +1032,12 @@ class DoctorDockerTests(unittest.TestCase):
             (root / "cache").mkdir()
             (root / "runs").mkdir()
 
-            def fake_disk_usage(path: Path) -> dict[str, object]:
-                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
 
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", return_value=0),
-                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
                     patch("kura.storage.is_wsl", return_value=True),
@@ -1058,9 +1052,9 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 0)
-            self.assertEqual(payload["storage"]["workspace"]["backing_id"], "F:")
-            self.assertEqual(payload["storage"]["workspace"]["confidence"], "estimated")
-            self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 290 * 1024**3)
+            self.assertIn("workspace", payload["storage"]["F:"]["paths"])
+            self.assertEqual(payload["storage"]["F:"]["confidence"], "estimated")
+            self.assertEqual(payload["storage"]["F:"]["effective_free_bytes"], 290 * 1024**3)
 
     def test_doctor_disk_warns_on_low_effective_backing_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1069,8 +1063,6 @@ class DoctorDockerTests(unittest.TestCase):
             (root / "cache").mkdir()
             (root / "runs").mkdir()
 
-            def fake_disk_usage(path: Path) -> dict[str, object]:
-                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
 
             def fake_probe(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
                 return {
@@ -1094,7 +1086,6 @@ class DoctorDockerTests(unittest.TestCase):
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", return_value=0),
-                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor.probe_storages", side_effect=fake_probe),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
@@ -1105,7 +1096,7 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
-            self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 90 * 1024**3)
+            self.assertEqual(payload["storage"]["F:"]["effective_free_bytes"], 90 * 1024**3)
             self.assertIn("workspace backing store has less than 100GiB effective free (F:)", payload["warnings"])
 
     def test_doctor_disk_and_local_launch_share_one_free_space_floor(self) -> None:
@@ -1167,7 +1158,7 @@ class DoctorDockerTests(unittest.TestCase):
             doctor = json.loads(doctor_out.getvalue())
             cleanup = json.loads(cleanup_out.getvalue())
             self.assertEqual(doctor["sizes"]["huggingface_cache"]["path"], str(outside))
-            self.assertEqual(doctor["storage"]["huggingface_cache"]["path"], str(outside))
+            self.assertTrue(any("huggingface_cache" in item["paths"] for item in doctor["storage"].values()))
             self.assertEqual(launch["paths"]["hf_cache"]["path"], str(outside))
             self.assertEqual([name for name, item in launch["paths"].items() if item["path"] == str(outside)], ["hf_cache"])
             self.assertEqual(code, 0)
@@ -6694,6 +6685,13 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
             _confirm_runpod_launch({}, settings, yes=True, max_lease_sec=12 * 3600, unattended_wait="longer of 2h and the training time")
         self.assertIn("Unattended wait: longer of 2h and the training time", stderr.getvalue())
 
+    def test_the_unattended_wait_says_it_starts_when_the_job_ends(self) -> None:
+        from kura.run_commands.launch import _unattended_wait
+
+        self.assertEqual(_unattended_wait("auto")[1], "longer of 2h and the job time after the job ends; then the Pod deletes itself unless outputs were collected")
+        self.assertEqual(_unattended_wait("3h")[1], "3h after the job ends; then the Pod deletes itself unless outputs were collected")
+        self.assertEqual(_unattended_wait("0")[1], "off; only the maximum lease deletes the Pod")
+
 
 class RunDiscardTests(unittest.TestCase):
     def _make_run(self, root: Path, run_id: str, *, state: str) -> Path:
@@ -8766,7 +8764,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             notify.assert_called_once()
             self.assertIn("controller failed", notify.call_args.kwargs["subject"])
             self.assertIn("may still be running and billing", notify.call_args.kwargs["body"])
-            self.assertIn("deletes itself (with its outputs) after the unattended wait", notify.call_args.kwargs["body"])
+            self.assertIn("deletes itself (with its outputs) at the maximum lease after it started, collected or not, and earlier by the unattended wait", notify.call_args.kwargs["body"])
             self.assertIn("kura run stop example", notify.call_args.kwargs["body"])
 
     def test_stop_run_without_realization_reports_clean_error(self) -> None:

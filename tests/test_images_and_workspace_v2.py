@@ -311,16 +311,37 @@ class WorkspaceSchemaTests(unittest.TestCase):
         migrated, _ = migrate_workspace_config({"schema_version": 2, "runpod": {"cloud_type": "ANY"}})
         self.assertEqual(migrated, {"schema_version": 2, "runpod": {}})
 
+    def test_comfyui_cloud_type_and_a_drive_with_a_backslash_are_migrated(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"comfyui.runpod.cloud_type \(cloud_types \(a list"):
+            validate_workspace_config({"schema_version": 2, "comfyui": {"runpod": {"cloud_type": "SECURE"}}})
+        migrated, notes = migrate_workspace_config({
+            "schema_version": 2, "storage": {"host_drive": "D:\\"}, "comfyui": {"runpod": {"cloud_type": "COMMUNITY"}},
+        })
+        self.assertEqual(migrated, {"schema_version": 2, "storage": {"host_drive": "D:"}, "comfyui": {"runpod": {"cloud_types": ["COMMUNITY"]}}})
+        self.assertIn("moved comfyui.runpod.cloud_type to comfyui.runpod.cloud_types: ['COMMUNITY']", notes)
+        migrated, _ = migrate_workspace_config({"schema_version": 2, "storage": {"host_drive": "e:/"}})
+        self.assertEqual(migrated["storage"], {"host_drive": "E:"})
+
+    def test_a_mount_needs_a_source_and_a_target_and_an_empty_one_is_migrated_away(self) -> None:
+        for mount, name in (({"target": "/data"}, "source"), ({"source": "data"}, "target")):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, rf"docker.mounts\[0\] needs a {name}"):
+                validate_workspace_config({"schema_version": 2, "docker": {"mounts": [mount]}})
+        migrated, notes = migrate_workspace_config({"schema_version": 2, "docker": {"mounts": [
+            {"source": "", "target": "/data", "mode": "ro"}, {"source": "models", "target": "/models"},
+        ]}})
+        self.assertEqual(migrated, {"schema_version": 2, "docker": {"mounts": [{"source": "models", "target": "/models"}]}})
+        self.assertIn("dropped docker.mounts[0]: its source was empty, so it mounted nothing", notes)
+
     def test_an_invalid_workspace_holds_local_launches_instead_of_counting_one_slot(self) -> None:
-        from kura.runner import local_slots_full
+        from kura.runner import local_slot_wait
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "runs").mkdir()
             (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 0}\n", encoding="utf-8")
-            self.assertTrue(local_slots_full(root))
+            self.assertIn("workspace.yaml is not valid", local_slot_wait(root))
             (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 1}\n", encoding="utf-8")
-            self.assertFalse(local_slots_full(root))
+            self.assertIsNone(local_slot_wait(root))
 
     def test_a_stage_subfolder_is_a_plain_relative_name(self) -> None:
         validate_workspace_config({"schema_version": 2, "comfyui": {"lora_stage_subdir": "Kura_tmp/runs"}})
