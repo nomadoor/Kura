@@ -47,6 +47,10 @@ class RenderSurfaceTests(unittest.TestCase):
             (lambda run: run.update(compute=["NVIDIA A40"]), "compute must be a mapping of gpu"),
             (lambda run: run.update(generator="comfyui"), "generator must be a mapping of endpoint, name"),
             (lambda run: run["inputs"].update(workflow="workflows/wf.json"), "inputs.workflow must be a mapping of digest, path"),
+            (lambda run: run["inputs"].update(workflow=None), "inputs.workflow must be a mapping of digest, path, not None"),
+            (lambda run: run["inputs"].pop("workflow"), "inputs.workflow must be a mapping of digest, path, not None"),
+            (lambda run: run.update(inputs=None), "inputs must be a mapping of .*, not None"),
+            (lambda run: run.pop("inputs"), "inputs must be a mapping of .*, not None"),
         ):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
                 run_dir = self._run(Path(directory))

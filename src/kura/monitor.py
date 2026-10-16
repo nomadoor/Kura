@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from kura.training_artifacts import checkpoint_files, displayed_final_step, expected_checkpoints, trained_steps
-from kura.yamlio import YAMLError, load_yaml
+from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
@@ -187,7 +187,11 @@ def _collect_run_ids(workspace: Path) -> list[str]:
 
 
 def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_tail: int, stale_after: float) -> RunSummary:
-    run = _read_mapping(run_dir / "run.yaml")
+    try:
+        run = load_run_yaml(run_dir / "run.yaml")
+    except (OSError, YAMLError, UnicodeDecodeError):
+        run = {}
+    run = run if isinstance(run, dict) else {}
     manifest = _read_mapping(run_dir / "resolved" / "manifest.lock.yaml")
     config = manifest or run
     status_path = run_dir / "status.json"

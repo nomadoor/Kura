@@ -397,7 +397,8 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "sizes": sizes,
         "storage": storage,
         "docker_storage": docker_summary,
-        "root_owned": {"count": root_owned.get("count", 0), "samples": root_owned.get("samples", [])[:samples], "truncated": root_owned.get("truncated", False)},
+        # `scan_stopped_at_limit`: the scan stopped after scan_limit paths, so count is a lower bound.
+        "root_owned": {"count": root_owned.get("count", 0), "samples": root_owned.get("samples", [])[:samples], "scan_stopped_at_limit": root_owned.get("truncated", False)},
         "symlinks": {"scanned": symlinks.get("scanned"), "unsafe_count": len(unsafe), "unsafe": unsafe[:samples], "truncated": symlinks.get("truncated", False)},
         "cache_environment": env,
         "issues": issues,

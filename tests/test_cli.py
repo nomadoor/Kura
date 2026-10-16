@@ -898,6 +898,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertNotIn("mount", backing)
             self.assertEqual(payload["docker_storage"]["usage"], {"Build Cache": {"size_bytes": 31 * 1024**3}})
             self.assertEqual(payload["sizes"]["runs"], {"path": str(root / "runs"), "size_bytes": 20})
+            self.assertEqual(payload["root_owned"], {"count": 2, "samples": ["cache/root-owned"], "scan_stopped_at_limit": False})
 
     def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

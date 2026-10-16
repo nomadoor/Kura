@@ -1024,17 +1024,17 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
     }
 
 
-def _training_state_cadence(run: dict[str, Any]) -> int | None:
-    """The steps between training-state saves the plan shows: `checkpoint_save_cadence`.
-    A trainer saving at its own default gives None (the text plan says "trainer default"); one
-    given no cadence (sd-scripts) saves state only at the end, shown as the steps the run trains
-    (`trained_steps`)."""
+def _training_state_cadence(run: dict[str, Any]) -> tuple[int | None, bool]:
+    """The steps between training-state saves the plan shows (`checkpoint_save_cadence`), and
+    whether the trainer saves at its own default instead (steps None; the text plan says
+    "trainer default"). A trainer given no cadence (sd-scripts) saves state only at the end,
+    shown as the steps the run trains (`trained_steps`), None for a draft with no steps yet."""
     # The configured cadence is what the backend's display reads from its own config.
     checkpoint = _adapter_display(run).get("checkpoint") or {}
     cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
     if cadence == "trainer_default":
-        return None
-    return trained_steps(run) if cadence is None else cadence
+        return None, True
+    return (trained_steps(run) if cadence is None else cadence), False
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
@@ -1172,12 +1172,13 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
 
     native_config = backend_config(run, backend.get("name")) if isinstance(backend.get("name"), str) else {}
     state_policy = training_state_policy(run)
-    state_cadence = _training_state_cadence(run)
+    state_cadence, trainer_default_cadence = _training_state_cadence(run)
     state_capability = training_state_contract(run)["capability"]
     state_payload = {
         "enabled": state_policy["enabled"],
         "keep_generations": state_policy["keep_generations"],
         "cadence_steps": state_cadence,
+        "trainer_default_cadence": trainer_default_cadence,
         "capability": state_capability,
         # The answer that decides what happens: the trainer saves state, and a finished run must leave it.
         "saved": training_state_managed(run, frozen=source == manifest),
@@ -1343,8 +1344,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("Training state")
         _append_kv(lines, "enabled", "yes" if training_state.get("enabled") else "no")
         _append_kv(lines, "keep", training_state.get("keep_generations"))
-        cadence = training_state.get("cadence_steps")
-        _append_kv(lines, "cadence", "trainer default" if cadence is None else cadence)
+        _append_kv(lines, "cadence", "trainer default" if training_state.get("trainer_default_cadence") else training_state.get("cadence_steps"))
         _append_kv(lines, "capability", training_state.get("capability"))
         _append_kv(lines, "saved", "yes" if training_state.get("saved") else "no")
         if training_state.get("warning"):

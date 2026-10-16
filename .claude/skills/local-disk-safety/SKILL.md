@@ -117,7 +117,8 @@ or WSL/VHDX/Windows-side operations.
   backing store (with the workspace paths on it), Docker storage by type,
   root-owned Kura files and unsafe symlinks (a count and a few samples; the
   previews of `kura fix-permissions` and `kura fix-links` without `--yes` show
-  more), and cache-related
+  more; `root_owned.scan_stopped_at_limit: true` means the scan stopped early,
+  so the count is a lower bound), and cache-related
   environment variables. Warnings are blocking-risk findings; advisories are cleanup
   hygiene that does not by itself make the operation unsafe.
 - Local Docker launch and RunPod stage/download/pull checks use configurable

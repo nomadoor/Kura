@@ -113,6 +113,11 @@ def runner_state(workspace: Path) -> tuple[str, str]:
         return "never_started", "no runner has started in this workspace; the first launch starts one"
     if info.get("ended") == "idle":
         return "idle", "the runner exited because it had nothing left to control; the next launch starts it"
+    if info.get("ended") == "stopped":
+        return "stopped_by_signal", (
+            "the runner was ended by a signal without `kura runner stop` (for example at logout or shutdown); "
+            "`kura runner start`, the next launch, or following a run starts it again"
+        )
     return "ended_unexpectedly", (
         "the runner ended without recording why (a crash, a kill, or an older Kura); see .kura/runner/runner.log. "
         "`kura runner start` starts it again"
@@ -504,7 +509,8 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
     children: dict[str, Any] = {}
     backoff: dict[str, tuple[float, float]] = {}
     stopping = False
-    said_wait: str | None = None
+    # The wait reason last logged for each request; logged again only when it changes.
+    said_waits: dict[Path, str] = {}
 
     def request_stop(*_args: Any) -> None:
         nonlocal stopping
@@ -543,11 +549,13 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
                 continue
             wait = local_slot_wait(workspace) if _request_executor(request) == "docker" else None
-            if wait is not None:
+            if wait is None:
+                said_waits.pop(request, None)
+            else:
                 # Local training waits its turn; RunPod requests start at once. Said once per reason.
-                if wait != said_wait:
+                if said_waits.get(request) != wait:
                     _log(f"{request.parent.parent.name}: {request.name} waits: {wait}")
-                    said_wait = wait
+                    said_waits[request] = wait
                 continue
             if claim_request(request, epoch):
                 _log(f"{request.parent.parent.name}: claimed {request.name}")
@@ -1126,7 +1134,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
         wait = local_slot_wait(workspace) if local_pending and runner_alive(workspace) else None
         if wait is not None and wait != said_wait:
             print(f"waiting to launch: {wait}", file=out)
-            said_wait = wait
+        said_wait = wait
         status = _status(run_dir)
         # Said once per quiet spell; progress resets it.
         quiet = quiet_run_notice(run_quiet_since(run_dir, status))

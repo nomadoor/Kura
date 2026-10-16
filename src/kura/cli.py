@@ -67,6 +67,7 @@ from kura.tui import run_textual_monitor
 from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
+from kura.yamlio import load_run_yaml
 from kura.secrets import MissingSecret, cmd_secrets_set, load_secrets as _load_secrets
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -75,6 +76,14 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import migrate_workspace_config
 from kura.run_commands.common import _backend_image_name
 from kura.run_envelope import run_datasets as _run_datasets
+
+
+def _load_run_mapping(path: Path) -> dict[str, Any]:
+    """A run.yaml read by a command that scans or copies runs (`load_run_yaml`); it must be a mapping."""
+    value = load_run_yaml(path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a YAML mapping")
+    return value
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -245,7 +254,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
             print("--from must name a run under runs/ by its ID", file=sys.stderr)
             return 1
         try:
-            source_run = _load_yaml(_run_path(source_id) / "run.yaml")
+            source_run = _load_run_mapping(_run_path(source_id) / "run.yaml")
         except (OSError, ValueError, YAMLError) as exc:
             print(f"cannot read the run to start from: {_safe_error(exc)}", file=sys.stderr)
             return 1
@@ -905,7 +914,7 @@ def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_art
         if not run_dir.is_dir():
             continue
         try:
-            run = _load_yaml(run_dir / "run.yaml") if (run_dir / "run.yaml").exists() else {}
+            run = _load_run_mapping(run_dir / "run.yaml") if (run_dir / "run.yaml").exists() else {}
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8")) if (run_dir / "status.json").exists() else {}
         except (OSError, ValueError, YAMLError, json.JSONDecodeError):
             run = {}
@@ -1163,7 +1172,7 @@ def cmd_run_discard(args: argparse.Namespace) -> int:
         return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        _load_yaml(run_dir / "run.yaml")
+        _load_run_mapping(run_dir / "run.yaml")
     except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot discard run: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -1207,7 +1216,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
     for run_file in sorted((workspace / "runs").glob("*/run.yaml")):
         run_dir = run_file.parent
         try:
-            run = _load_yaml(run_file)
+            run = _load_run_mapping(run_file)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
             print(f"warning: skipped {run_dir.name}: {_safe_error(exc)}", file=sys.stderr)
@@ -1489,7 +1498,7 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
     entries = []
     for run_file in sorted((root / "runs").glob("*/run.yaml")):
         try:
-            run = _load_yaml(run_file)
+            run = _load_run_mapping(run_file)
             status = read_run_status(run_file.parent)
             entry = {"id": run.get("id"), "type": run.get("type", "train"), "experiment": run.get("experiment"), "created": run.get("created"), "state": status.get("state")}
             if run.get("type") == "render": entry["inputs"] = {"train_run": run.get("inputs", {}).get("train_run")}

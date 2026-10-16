@@ -231,9 +231,9 @@ def _protected_artifact_ids(workspace: Path) -> set[str]:
     protected: set[str] = set()
     for path in (workspace / "runs").glob("*/run.yaml"):
         try:
-            from kura.yamlio import YAMLError, load_yaml
+            from kura.yamlio import YAMLError, load_run_yaml
 
-            run = load_yaml(path)
+            run = load_run_yaml(path)
         except (OSError, UnicodeError, YAMLError) as exc:
             raise _ReferenceInspectionError(f"cannot safely inspect training-state reference: {path}") from exc
         continuation = run.get("continuation") if isinstance(run, dict) else None

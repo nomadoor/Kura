@@ -10,7 +10,7 @@ description: >-
 records:
   - id: strict-yaml-reader-sd-scripts-2026-10-16
     backend: sd-scripts
-    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<`. A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is now refused where it is loaded, before anything launches, and is never compiled differently.'
+    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<` in a file it reads strictly (a draft run.yaml, compile, every other authored file). A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is refused before anything launches and is never compiled differently. The run.yaml of an already compiled run is a record and is still read as before by the readers that scan or copy runs (load_run_yaml: the last value of a repeated key wins, `<<` merges). Scalar reading is unchanged; the loader is only split into that record loader and the strict loader that adds the two checks.'
     behavior_changed: false
     evidence_ids:
     - sd-scripts-conformance-runpod-2026-10-11
@@ -30,10 +30,10 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 45971ad6acb0929cc391e380212dcfae588121552a9dd8755fb258414786fe23
+      value: d38c6e78aeb61116114c1ca6af63041f49c543420004c7317e7f4cb28630e738
   - id: strict-yaml-reader-musubi-tuner-2026-10-16
     backend: musubi-tuner
-    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<`. A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is now refused where it is loaded, before anything launches, and is never compiled differently. The Musubi Tuner surface takes the architectures for model_bundle and model_version and the accepted model_version values from MUSUBI_BUNDLES and MODEL_VERSIONS instead of copies of them; the values are the same (flux2, krea2, and minimax_h3 for model_bundle; flux2 and qwen_image for model_version, with the same versions in the same order).'
+    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<` in a file it reads strictly (a draft run.yaml, compile, every other authored file). A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is refused before anything launches and is never compiled differently. The run.yaml of an already compiled run is a record and is still read as before by the readers that scan or copy runs (load_run_yaml: the last value of a repeated key wins, `<<` merges). Scalar reading is unchanged; the loader is only split into that record loader and the strict loader that adds the two checks. The Musubi Tuner surface takes the architectures for model_bundle and model_version and the accepted model_version values from MUSUBI_BUNDLES and MODEL_VERSIONS instead of copies of them; the values are the same (flux2, krea2, and minimax_h3 for model_bundle; flux2 and qwen_image for model_version, with the same versions in the same order).'
     behavior_changed: false
     evidence_ids:
     - musubi-tuner-conformance-runpod-2026-10-11
@@ -56,10 +56,10 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 1d01457ac8e730fd1a4f8db7b26155d931fa2ac7bd54116b65297f26dadd9026
+      value: 18e00a97b314089093851a3246f8099a8b1abd301e0e7d06e1c4ced93e6ac864
   - id: strict-yaml-reader-ai-toolkit-2026-10-16
     backend: ai-toolkit
-    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<`. A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is now refused where it is loaded, before anything launches, and is never compiled differently.'
+    reason: 'kura.yamlio refuses a mapping key written twice and the YAML 1.1 merge key `<<` in a file it reads strictly (a draft run.yaml, compile, every other authored file). A file that holds neither reads exactly as before, so the same files compile to the same configuration; a file that held one is refused before anything launches and is never compiled differently. The run.yaml of an already compiled run is a record and is still read as before by the readers that scan or copy runs (load_run_yaml: the last value of a repeated key wins, `<<` merges). Scalar reading is unchanged; the loader is only split into that record loader and the strict loader that adds the two checks.'
     behavior_changed: false
     evidence_ids:
     - ai-toolkit-conformance-runpod-2026-10-11
@@ -85,7 +85,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 25934c3dd1b8f5174c232d4bba13014488064e803d9a5beeb32d2ddb0965148a
+      value: 62ccb49eb4d06404f3289e752e86475c5e897c296fc4afff6b41c77cbcd88167
   - id: lease-and-wait-wording-runpod-executor-2026-10-16
     executor: runpod
     reason: 'Wording only: the billing confirmation says the maximum lease counts from the Pod start and deletes the Pod collected or not, the unattended-wait label says it counts from the end of the job, and the controller''s deadline note names both. The lease seconds, the unattended-wait seconds, and every Pod request are computed as before, so every recorded smoke builds the same launch.'

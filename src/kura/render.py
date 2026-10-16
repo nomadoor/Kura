@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.install_source import kura_provenance
-from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
+from kura.yamlio import YAMLError, load_run_yaml, load_yaml, load_yaml_mapping
 from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
 from kura.records import record as as_record
@@ -63,8 +63,8 @@ def _validate_train_run_reference(workspace: Path, value: Any) -> str | None:
     source_path = workspace / "runs" / train_run / "run.yaml"
     if not source_path.is_file():
         raise ValueError(f"render inputs.train_run does not exist: {train_run}")
-    source = load_yaml_mapping(source_path)
-    if source.get("type") != "train":
+    source = load_run_yaml(source_path)
+    if not isinstance(source, dict) or source.get("type") != "train":
         raise ValueError(f"render inputs.train_run must reference a train run: {train_run}")
     if source.get("id") not in (None, train_run):
         raise ValueError(f"render inputs.train_run ID does not match its run.yaml: {train_run}")
@@ -1227,6 +1227,8 @@ RENDER_RUN_SCHEMA: dict[str, frozenset[str]] = {
     "executor": frozenset({"name"}),
     "compute": frozenset({"gpu"}),
 }
+# Levels a render run.yaml must write as a mapping; the others may be left out.
+_REQUIRED_RENDER_LEVELS = frozenset({"inputs", "inputs.workflow"})
 SIDECAR_KEYS = frozenset({"source", "provenance", "models", "lora_insert"})
 DEFAULT_RENDER_TIMEOUT_SEC = 600
 
@@ -1261,7 +1263,8 @@ def _validate_render_run_fields(run: dict[str, Any]) -> None:
         holder: Any = run
         for part in level.split(".") if level else ():
             holder = holder.get(part) if isinstance(holder, dict) else None
-        if level and holder is not None and not isinstance(holder, dict):
+        required = level in _REQUIRED_RENDER_LEVELS and (level == "inputs" or isinstance(run.get("inputs"), dict))
+        if level and (holder is not None or required) and not isinstance(holder, dict):
             problems.append(f"{level} must be a mapping of {', '.join(sorted(keys))}, not {holder!r}")
             continue
         for key in holder if isinstance(holder, dict) else ():

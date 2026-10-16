@@ -18,7 +18,7 @@ import yaml
 from yaml import YAMLError
 from yaml.constructor import ConstructorError
 
-__all__ = ["YAMLError", "dump_yaml", "load_yaml", "load_yaml_1_1", "load_yaml_mapping", "load_yaml_text"]
+__all__ = ["YAMLError", "dump_yaml", "load_run_yaml", "load_yaml", "load_yaml_1_1", "load_yaml_mapping", "load_yaml_text"]
 
 _BOOL = "tag:yaml.org,2002:bool"
 _INT = "tag:yaml.org,2002:int"
@@ -35,7 +35,11 @@ _CORE = (
 )
 
 
-class _Loader(yaml.SafeLoader):
+class _RecordLoader(yaml.SafeLoader):
+    """YAML 1.2 core as Kura read it before 2026-10-16: a repeated key keeps its last value, `<<` merges."""
+
+
+class _Loader(_RecordLoader):
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
         seen: set[Any] = set()
         for key_node, _ in node.value:
@@ -54,15 +58,15 @@ class _Loader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-_Loader.yaml_implicit_resolvers = {
+_RecordLoader.yaml_implicit_resolvers = {
     first: [(tag, regexp) for tag, regexp in resolvers if tag not in {_BOOL, _INT, _FLOAT, "tag:yaml.org,2002:timestamp"}]
     for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
 for _tag, _regexp, _first in _CORE:
-    _Loader.add_implicit_resolver(_tag, _regexp, _first)
+    _RecordLoader.add_implicit_resolver(_tag, _regexp, _first)
 
 
-def _construct_int(loader: _Loader, node: yaml.ScalarNode) -> int:
+def _construct_int(loader: _RecordLoader, node: yaml.ScalarNode) -> int:
     value = loader.construct_scalar(node)
     if not _CORE[1][1].match(value):
         # Only an explicit `!!int` tag reaches here with another form; PyYAML reads it as before.
@@ -74,7 +78,7 @@ def _construct_int(loader: _Loader, node: yaml.ScalarNode) -> int:
     return int(value)
 
 
-_Loader.add_constructor(_INT, _construct_int)
+_RecordLoader.add_constructor(_INT, _construct_int)
 
 
 class _Dumper(yaml.SafeDumper):
@@ -100,6 +104,16 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     return data
+
+
+def load_run_yaml(path: Path) -> Any:
+    """A run.yaml as a reader that scans runs sees it. Once the run is compiled
+    (`resolved/manifest.lock.yaml` exists) the file is a record, which an older Kura
+    may have accepted with a repeated key or a `<<` merge, so it is read as that Kura
+    read it; a draft is read strictly, as compile reads it."""
+    if (path.parent / "resolved" / "manifest.lock.yaml").is_file():
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=_RecordLoader)  # noqa: S506 - a SafeLoader
+    return load_yaml(path)
 
 
 def load_yaml_1_1(path: Path) -> Any:

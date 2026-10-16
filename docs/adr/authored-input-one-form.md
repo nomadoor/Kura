@@ -107,6 +107,10 @@ recipe fingerprint recorded before this change hashed values such as `1e-6` as
 the strings YAML 1.1 gave, so it is compared against the parent's frozen
 manifest read that way, and the manifest read today must equal the derived
 run's recipe.
+Another is `load_run_yaml`: once a run is compiled its run.yaml is a record,
+which an older Kura may have accepted with a repeated key or a `<<` merge, so
+the readers that scan or copy runs read it that way (the last value of a
+repeated key wins); a draft and every compile read strictly.
 
 ## Consequences
 
