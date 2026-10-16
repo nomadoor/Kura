@@ -61,6 +61,15 @@ FPS30_VIDEO_DATASET = "real-smoke-video-30fps"
 VIDEO_BUCKET_DATASET = "real-smoke-video-buckets"
 MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 A40 = "NVIDIA A40"
+# The conformance models are tiny (tiny-sd pipe, SD 1.5, Wan 2.1 1.3B, which pass on a 12 GB local
+# GPU), so the RunPod pass asks for small GPUs, cheapest first, and the Pod lands on whichever has
+# stock; an RTX A4500 ran the AI-Toolkit pass for about $0.06 on 2026-10-17
+# (docs/smoke-evidence/2026-10-17-ai-toolkit-runpod-conformance.yaml). Prices seen that day per hour:
+# A4500 $0.19, A5000 $0.27, RTX 4000 Ada $0.28, RTX 3090 $0.50.
+CONFORMANCE_GPUS = ("NVIDIA RTX A4500", "NVIDIA RTX A5000", "NVIDIA RTX 4000 Ada Generation", "NVIDIA GeForce RTX 3090")
+# Each conformance Pod trains for minutes, so its lease, and with it the most it can bill, is one
+# hour instead of the 12-hour default a real training run gets.
+CONFORMANCE_MAX_LEASE_SEC = 3600
 
 
 @dataclass(frozen=True)
@@ -73,7 +82,7 @@ class Smoke:
     dataset: str
     config: dict[str, Any]
     executor: str = "runpod"
-    gpu: str = A40
+    gpu: str | tuple[str, ...] = A40
     expected_script: str | None = None
     note: str = ""
     dataset_options: dict[str, Any] = field(default_factory=dict)
@@ -467,6 +476,10 @@ def _kura(workspace: Path, *args: str, timeout: float = 600) -> subprocess.Compl
     return subprocess.run(_kura_argv(*args), cwd=workspace, text=True, capture_output=True, check=False, env=env, timeout=timeout)
 
 
+def _gpus(value: str | tuple[str, ...]) -> list[str]:
+    return [value] if isinstance(value, str) else list(value)
+
+
 def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, steps: int = 1, intent: str | None = None) -> dict[str, Any]:
     """The run.yaml fields a smoke owns; everything else comes from `kura run new`."""
     config = json.loads(json.dumps(smoke.config))
@@ -481,7 +494,7 @@ def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, ste
         "compute": {
             "executor": smoke.executor,
             # A Docker run uses the local GPU; only a RunPod run names one.
-            **({"gpu": [gpu or smoke.gpu]} if smoke.executor == "runpod" else {}),
+            **({"gpu": _gpus(gpu or smoke.gpu)} if smoke.executor == "runpod" else {}),
             # Wait for the recorded GPU instead of failing or silently switching it.
             **({"capacity": {"mode": "wait", "timeout": "30m", "poll_interval": "30s"}} if smoke.executor == "runpod" else {}),
         },
@@ -499,7 +512,7 @@ def prepare(workspace: Path, smoke_id: str, *, gpu: str | None = None) -> str:
 
 def _create_run(workspace: Path, experiment: str, slug: str, smoke: Smoke, fields: dict[str, Any]) -> str:
     """Create a run with `kura run new`, set the fields the harness owns, and compile it."""
-    created = _kura(workspace, "run", "new", "--experiment", experiment, "--slug", slug, "--backend", smoke.backend, "--executor", smoke.executor, *(["--gpu", smoke.gpu] if smoke.executor == "runpod" else []))
+    created = _kura(workspace, "run", "new", "--experiment", experiment, "--slug", slug, "--backend", smoke.backend, "--executor", smoke.executor, *(["--gpu", _gpus(smoke.gpu)[0]] if smoke.executor == "runpod" else []))
     match = re.search(r"([0-9]{8}-[0-9]{4}_[a-z0-9-]+_[0-9a-f]{4})", created.stdout + created.stderr)
     if created.returncode or match is None:
         raise SystemExit(f"kura run new failed for {slug}:\n{created.stdout}{created.stderr}")
@@ -949,7 +962,8 @@ def _execute(workspace: Path, run_id: str, *, runpod: bool) -> tuple[int, dict[s
     peak = {"count": 0}
     env = {**os.environ, "KURA_NOTIFY": "none"}
     with tempfile.TemporaryFile("w+", encoding="utf-8") as log:
-        process = subprocess.Popen(_kura_argv("run", "execute", run_id, *(["--yes"] if runpod else [])), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        runpod_args = ["--yes", "--max-lease", f"{CONFORMANCE_MAX_LEASE_SEC // 3600}h"] if runpod else []
+        process = subprocess.Popen(_kura_argv("run", "execute", run_id, *runpod_args), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         while process.poll() is None:
             _sample_peak(run_dir, peak)
             time.sleep(0.5)
@@ -1015,17 +1029,27 @@ def windows_drive_problem(workspace: Path) -> str | None:
 
 
 def runpod_cost_ceiling(workspace: Path, config: dict[str, Any], smoke: Smoke) -> dict[str, Any]:
-    """The cost ceiling of one Pod of the RunPod pass, from the function `kura run plan` shows it
-    with, before any dataset or run exists. It reads RunPod prices; it creates nothing."""
+    """The cost ceiling of one Pod of the RunPod pass under its conformance lease, from the
+    functions `kura run plan` shows it with, before any dataset or run exists. It reads RunPod
+    prices; it creates nothing."""
+    from kura.executors.runpod import runpod_cost_ceiling as pod_ceiling
     from kura.run_commands.plan import _runpod_capacity_payload
     from kura.secrets import load_secrets
 
     with contextlib.chdir(workspace):
         load_secrets()
-        return _runpod_capacity_payload(build_run_fields("conformance", smoke), config)["cost_ceiling"]
+        payload = _runpod_capacity_payload(build_run_fields("conformance", smoke), config)
+    # The runs ask only for GPU types RunPod prices now, so the approved ceiling covers each of them.
+    candidates = {item.get("gpu_type_id"): item for item in payload["measurement"].get("candidates", []) if isinstance(item, dict)}
+    priced = [
+        gpu for gpu in payload["selected_gpu_type_ids"]
+        if any(isinstance(cloud, dict) and cloud.get("price_per_hour") is not None for cloud in candidates.get(gpu, {}).get("clouds") or [])
+    ]
+    ceiling = pod_ceiling(payload["measurement"], priced or payload["selected_gpu_type_ids"], max_lease_sec=CONFORMANCE_MAX_LEASE_SEC)
+    return {**ceiling, "priced_gpu_type_ids": priced}
 
 
-def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str, yes: bool) -> int:
+def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str | tuple[str, ...], yes: bool) -> int:
     if workspace.resolve() == REPO.resolve():
         raise SystemExit("conformance creates runs; give it a separate workspace (`kura init` one), not this checkout")
     if not (workspace / "workspace.yaml").is_file():
@@ -1037,7 +1061,7 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
         raise SystemExit("the RunPod pass runs one backend; name it with --backend")
     config = load_yaml(workspace / "workspace.yaml") or {}
     hf_cache = local_hf_cache(workspace, config)
-    print(f"Conformance plan: workspace {workspace}, executor {'runpod (' + gpu + ')' if runpod else 'local Docker'}, Hugging Face cache {hf_cache}")
+    print(f"Conformance plan: workspace {workspace}, executor {'runpod (' + ', '.join(_gpus(gpu)) + ')' if runpod else 'local Docker'}, Hugging Face cache {hf_cache}")
     for backend in backends:
         smoke = conformance_smoke(backend, "one")
         print(f"  {backend:13} {smoke.architecture:5} {smoke.model_base}: {_cache_state(hf_cache, smoke)}")
@@ -1049,8 +1073,13 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
         from kura.executors.runpod import format_cost_ceiling
 
         ceiling = runpod_cost_ceiling(workspace, config, replace(conformance_smoke(backends[0], "one"), executor="runpod", gpu=gpu))
+        if ceiling.get("priced_gpu_type_ids"):
+            gpu = tuple(ceiling["priced_gpu_type_ids"])
+            print(f"  RunPod GPUs with a current price, the only ones the runs ask for: {', '.join(gpu)}")
         print(f"  RunPod: {len(SCENARIO)} Pods one after another, each deleted by its maximum lease ({ceiling['max_lease']}) at the latest")
         print(f"  cost ceiling per Pod: {format_cost_ceiling(ceiling)}")
+        if ceiling.get("max_cost") is not None:
+            print(f"  cost ceiling for all {len(SCENARIO)} Pods: about ${ceiling['max_cost'] * len(SCENARIO):.2f}; a Pod trains for minutes and is deleted when its run is collected, so a pass costs far less")
     unknown_ceiling = (
         f"the RunPod pass launches only under a known cost ceiling, and this one is unknown: {ceiling.get('reason')}; "
         "fix that (or choose a --gpu RunPod has a current price for) and run again"
@@ -1150,17 +1179,17 @@ def main() -> int:
     conformance_parser.add_argument("--workspace", required=True, type=Path, help="A Kura workspace for the conformance runs, never this checkout")
     conformance_parser.add_argument("--backend", action="append", choices=CONFORMANCE_BACKENDS, help="Only this backend (repeatable); default all")
     conformance_parser.add_argument("--runpod", action="store_true", help="The billed RunPod pass of one backend; shows the cost ceiling first")
-    conformance_parser.add_argument("--gpu", default=A40, help="RunPod GPU type for --runpod")
+    conformance_parser.add_argument("--gpu", action="append", help=f"RunPod GPU type for --runpod, repeatable; the Pod lands on one with stock (default: {', '.join(CONFORMANCE_GPUS)}; the models are tiny)")
     conformance_parser.add_argument("--yes", action="store_true", help="Launch the runs after showing the plan")
     args = parser.parse_args()
     if args.command == "conformance":
-        return conformance(args.workspace.resolve(), args.backend or list(CONFORMANCE_BACKENDS), runpod=args.runpod, gpu=args.gpu, yes=args.yes)
+        return conformance(args.workspace.resolve(), args.backend or list(CONFORMANCE_BACKENDS), runpod=args.runpod, gpu=tuple(args.gpu) if args.gpu else CONFORMANCE_GPUS, yes=args.yes)
     workspace = Path.cwd()
     if not (workspace / "workspace.yaml").is_file():
         raise SystemExit("run from a Kura workspace root")
     if args.command == "list":
         for smoke_id, smoke in sorted(SMOKES.items()):
-            print(f"{smoke_id:30} {smoke.backend:13} {smoke.architecture:18} {smoke.executor:7} {smoke.gpu:12} {smoke.model_base}")
+            print(f"{smoke_id:30} {smoke.backend:13} {smoke.architecture:18} {smoke.executor:7} {','.join(_gpus(smoke.gpu)):12} {smoke.model_base}")
         return 0
     if args.command == "prepare":
         for smoke_id in args.smoke:
