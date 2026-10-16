@@ -8,6 +8,101 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: plan-reports-checkpoint-count-sd-scripts-2026-10-16
+    backend: sd-scripts
+    reason: 'The plan no longer refuses a run for its checkpoint count or for an undeclared sd-scripts disk cache; it reports the count and warns about the cache, and the launch disk check still budgets every checkpoint. The two retired safety keys are refused like any key that is not a training run setting and dropped from derived runs. Every recorded smoke passed those checks or set them aside, and its trainer command, transfer, training, and outputs are unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 1aa81746dfb471289e029c663a90cfba1def8aabf8611ff050e01171e8fdf454
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: ce95b32cc6608d529721a4aeabe75f97122d1a4406eb29f65be0201be08bfd55
+  - id: plan-reports-checkpoint-count-musubi-tuner-2026-10-16
+    backend: musubi-tuner
+    reason: 'The plan no longer refuses a run for its checkpoint count or for an undeclared sd-scripts disk cache; it reports the count and warns about the cache, and the launch disk check still budgets every checkpoint. The two retired safety keys are refused like any key that is not a training run setting and dropped from derived runs. Every recorded smoke passed those checks or set them aside, and its trainer command, transfer, training, and outputs are unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: c9e6fb464f1358ae7a01a3c9df7d862943266dccfb546ed9bede8fc3abb3c969
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: b371431aa582c0b9e3d308e250e4f9862158ed490553f2ba2e71970e085eb659
+  - id: plan-reports-checkpoint-count-runpod-executor-2026-10-16
+    executor: runpod
+    reason: 'The plan no longer refuses a run for its checkpoint count or for an undeclared sd-scripts disk cache; it reports the count and warns about the cache, and the launch disk check still budgets every checkpoint. The two retired safety keys are refused like any key that is not a training run setting and dropped from derived runs. Every recorded smoke passed those checks or set them aside, and its trainer command, transfer, training, and outputs are unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 75c8eb369f906177bcb69967de35587a7d48111f7d0b2eed3d71a73e35a0a8d7
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 722947392ee5469e6be7879dc15d8655039302eea7336a48062b7493aee721c5
   - id: training-leftovers-sd-scripts-2026-10-16
     backend: sd-scripts
     reason: 'A declared field''s flag is never set through extra_args, applicable or not; a field that takes a value refuses true or false; a Resume refused for its settings says to create a Fork from Weight; the state runner refuses a step save named below the step it holds (an image without Kura''s step patch); and a Resume counts its saves on logical multiples. No recorded smoke passed a declared field''s flag through extra_args or wrote true or false for a value field, so each builds the same command. The training-state contract also reads the selector spellings a run compiled before one spelling may hold.'

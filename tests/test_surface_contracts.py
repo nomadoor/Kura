@@ -238,6 +238,13 @@ class SurfaceContractTests(unittest.TestCase):
             with self.subTest(run=run), self.assertRaisesRegex(ValueError, message):
                 validate_train_run_fields(run)
 
+    def test_the_retired_checkpoint_and_cache_waivers_are_refused_and_dropped_on_copy(self) -> None:
+        from kura.run_envelope import without_retired_train_run_keys
+
+        with self.assertRaisesRegex(ValueError, "allow_many_checkpoints is not a training run setting.*allow_unknown_disk_cache is not a training run setting"):
+            validate_train_run_fields({"safety": {"allow_many_checkpoints": True, "allow_unknown_disk_cache": True}})
+        self.assertEqual(without_retired_train_run_keys({"safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2}}), {"safety": {"checkpoint_estimate_gb": 2}})
+
     def test_compile_names_a_misspelled_key_before_reporting_its_intended_key_missing(self) -> None:
         from kura.cli import _validate_train_compile_intent
 

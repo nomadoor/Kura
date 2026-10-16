@@ -35,7 +35,7 @@ class ShippedContentTests(unittest.TestCase):
             "lora-evaluation": ["dataset-prep -> training-parameter-planning -> training -> lora-evaluation"],
             "training-parameter-planning": ["Training configuration and compute selection are one plan"],
             "dataset-prep": ["the dataset manifest inventories inputs"],
-            "local-disk-safety": ["allow_many_checkpoints", "fix-permissions"],
+            "local-disk-safety": ["checkpoint_estimate_gb", "fix-permissions"],
         }
         for name, phrases in moved.items():
             for phrase in phrases:

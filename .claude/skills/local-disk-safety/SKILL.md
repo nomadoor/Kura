@@ -58,8 +58,9 @@ Run a disk check when any of these are true:
    kura run plan <run-id>
    ```
 
-7. Do not ignore disk/checkpoint warnings. Add a prune/keep policy, reduce save
-   frequency, or get explicit approval via `safety.allow_many_checkpoints: true`.
+7. Show disk and checkpoint warnings to the user. Many checkpoints are the
+   user's decision; offer a retention setting or a lower save frequency when
+   the count looks unintended.
 8. Recompile after any setting change.
 9. Launch only after approval.
 
@@ -129,8 +130,7 @@ or WSL/VHDX/Windows-side operations.
   floor, and the RunPod check compares them with `runpod.container_disk_gb`.
   Musubi Hugging Face downloads use HEAD metadata when available, and every
   training run adds a conservative checkpoint budget of
-  `safety.checkpoint_estimate_gb` (default 1) GiB per checkpoint;
-  `safety.allow_many_checkpoints` does not remove it. The budget counts the
+  `safety.checkpoint_estimate_gb` (default 1) GiB per checkpoint. The budget counts the
   most checkpoint files on disk at once while training, the trainer's final
   file included: retention that prunes during training (AI-Toolkit and
   sd-scripts `save_last_n_steps`) bounds it near the kept count, while Musubi
@@ -157,13 +157,15 @@ or WSL/VHDX/Windows-side operations.
   estimate after controller-only DNS, timeout, or transient HTTP failure, but
   shared authentication failure and a missing immutable artifact remain
   errors.
-- Frequent unpruned checkpoints are blocked before launch unless:
-  - the backend's checkpoint retention is set above zero (`kura run
-    capabilities <backend>` lists it: `save_last_n_steps` for sd-scripts and
-    AI-Toolkit, `prune_checkpoints_before_step` for Musubi Tuner), or
-  - the trainer prunes by its own default: AI-Toolkit keeps its last few
-    saves when `save_last_n_steps` is unset, and every save at 0, or
-  - `safety.allow_many_checkpoints: true` is explicitly accepted
+- The plan shows how many checkpoints a run leaves and warns at ten or more;
+  it never refuses a run for the count, because the launch disk check above
+  already budgets every checkpoint. To keep fewer, set the backend's
+  checkpoint retention (`kura run capabilities <backend>` lists it:
+  `save_last_n_steps` for sd-scripts and AI-Toolkit,
+  `prune_checkpoints_before_step` for Musubi Tuner).
+- A run-scoped disk cache whose size is not declared is shown as unknown and
+  is not counted in the disk estimate; sd-scripts takes
+  `backend.config.disk_cache_estimate_gb` to count it.
 
 ## Safety map
 

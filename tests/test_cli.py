@@ -48,7 +48,7 @@ from kura.images import NEWEST_KNOWN_CUDA, PINNED_IMAGES
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _checkpoint_count_safety, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
+from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
 from kura.training_artifacts import trained_steps
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.doctor import readiness_gaps
@@ -2070,7 +2070,7 @@ class RunPlanTests(unittest.TestCase):
             "type": "train",
                         "recipe": {"steps": 20},
             "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 10}},
-            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+            "safety": {"checkpoint_estimate_gb": 2},
         }
         download_estimate = {"bytes": 8 * 1024**3}
         with self.assertRaisesRegex(ValueError, "container_disk_gb=10"):
@@ -2079,51 +2079,36 @@ class RunPlanTests(unittest.TestCase):
         result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
         self.assertEqual(result["estimated_write_bytes"], 14 * 1024**3)
 
-    def test_checkpoint_count_safety_rejects_many_unpruned_checkpoints(self) -> None:
-        run = {
-            "type": "train",
-                        "recipe": {"steps": 3000},
-            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
-        }
-        with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
-            _checkpoint_count_safety(run, trained_steps(run))
-        run["backend"]["config"]["prune_checkpoints_before_step"] = 1000
-        _checkpoint_count_safety(run, trained_steps(run))
+    def test_launch_refuses_neither_many_checkpoints_nor_an_undeclared_disk_cache(self) -> None:
+        # The records launch enforces (`enforce_preflight_errors`) hold no error for either.
+        from kura.run_commands.plan import collect_run_preflight, enforce_preflight_errors
 
-    def test_checkpoint_count_safety_counts_common_recipe_steps(self) -> None:
         run = {
-            "type": "train",
-                        "recipe": {"steps": 3000},
-            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
+            "id": "many", "type": "train", "recipe": {"steps": 3000}, "datasets": [],
+            "backend": {"name": "sd-scripts", "config": {
+                "architecture": "sd15", "mode": "lora", "save_every_n_steps": 100, "cache_latents_to_disk": True,
+            }},
         }
-        with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
-            _checkpoint_count_safety(run, trained_steps(run))
+        with tempfile.TemporaryDirectory() as directory, patch("kura.run_commands.plan._dataset_layout_preflight_report", return_value=[]):
+            records = collect_run_preflight(run, Path(directory), config={}, executor="docker", download_estimate={"bytes": 0, "items": [], "unknown": [], "probe_failures": []})
+        checks = {record["check"]: record["severity"] for record in records if record["check"] in {"checkpoint-safety", "sd-scripts-disk-cache"}}
+        self.assertEqual(checks, {"checkpoint-safety": "info", "sd-scripts-disk-cache": "warning"})
+        enforce_preflight_errors([record for record in records if record["check"] in checks or record["check"] == "disk"])
 
-    def test_checkpoint_count_safety_accepts_musubi_prune_policy_but_not_epoch_retention(self) -> None:
-        # Musubi Tuner prunes step checkpoints only by Kura's prune step; epoch retention prunes none.
-        run = {
-            "type": "train",
-                        "recipe": {"steps": 3000},
-            "backend": {"name": "musubi-tuner", "config": {
-                    "save_every_n_steps": 100,
-                    "prune_checkpoints_before_step": 2700,
-                }
-            },
+    def test_many_checkpoints_are_reported_and_never_refused_on_any_backend(self) -> None:
+        # Running out of disk is what many checkpoints could cause, and the launch disk gate
+        # already budgets every checkpoint; the count itself is the user's decision.
+        configs = {
+            "musubi-tuner": {"save_every_n_steps": 100},
+            "sd-scripts": {"architecture": "sd15", "mode": "lora", "save_every_n_steps": 100},
+            "ai-toolkit": {"model_arch": "sd1", "save_every_n_steps": 100, "save_last_n_steps": 0},
         }
-        _checkpoint_count_safety(run, trained_steps(run))
-        run["backend"]["config"].pop("prune_checkpoints_before_step")
-        run["backend"]["config"]["extra_args"] = ["--save_last_n_epochs=2"]
-        with self.assertRaisesRegex(ValueError, "about 30 checkpoints without pruning"):
-            _checkpoint_count_safety(run, trained_steps(run))
-
-    def test_checkpoint_count_safety_can_be_explicitly_overridden(self) -> None:
-        run = {
-            "type": "train",
-                        "recipe": {"steps": 3000},
-            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
-            "safety": {"allow_many_checkpoints": True},
-        }
-        _checkpoint_count_safety(run, trained_steps(run))
+        for backend, config in configs.items():
+            with self.subTest(backend=backend):
+                run = {"type": "train", "recipe": {"steps": 3000}, "backend": {"name": backend, "config": config}, "model": {"base": "example/model"}}
+                records = _checkpoint_preflight_report(run)
+                self.assertEqual([record["severity"] for record in records], ["info"])
+                self.assertIn("about 30 checkpoint(s)", records[0]["fact"])
 
 
 class NotificationTests(unittest.TestCase):
@@ -5955,12 +5940,12 @@ class DockerLifecycleTests(unittest.TestCase):
                 payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 30 * 1024**3)
 
-    def test_local_launch_disk_preflight_counts_allowed_checkpoint_budget(self) -> None:
+    def test_local_launch_disk_preflight_counts_the_checkpoint_budget(self) -> None:
         run = {
             "type": "train",
                         "recipe": {"steps": 3000},
             "backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "save_every_n_steps": 100}},
-            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+            "safety": {"checkpoint_estimate_gb": 2},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -5970,7 +5955,6 @@ class DockerLifecycleTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 112 GiB"):
                     _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
-        self.assertEqual(_checkpoint_count_safety(run, trained_steps(run)), None)
 
     def test_local_launch_disk_preflight_sums_estimates_on_shared_backing(self) -> None:
         run = {
@@ -5984,7 +5968,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     },
                 }
             },
-            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2, "allow_large_model_downloads": True},
+            "safety": {"checkpoint_estimate_gb": 2, "allow_large_model_downloads": True},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -584,11 +584,10 @@ def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps:
     keeps its own `max_step_saves_to_keep`). Zero or less is no policy: AI-Toolkit keeps every
     save at `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no prune below
     step 1, and sd-scripts refuses a non-positive `save_last_n_steps`. Epoch retention prunes
-    no step checkpoint. The plan's checkpoint warnings, guard, and preflight line and the
-    monitor's expected checkpoints read it; the disk estimate reads `peak_checkpoints`. The
-    guard trusts AI-Toolkit's default pruning because it asks whether many checkpoints are
-    left, while the disk estimate is a conservative bound and so does not assume a default it
-    does not own."""
+    no step checkpoint. The plan's checkpoint warning and preflight line and the monitor's
+    expected checkpoints read it; the disk estimate reads `peak_checkpoints`. The counts trust
+    AI-Toolkit's default pruning because they say how many checkpoints are left, while the disk
+    estimate is a conservative bound and so does not assume a default it does not own."""
     if not steps:
         return None
     every = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
@@ -614,7 +613,7 @@ def checkpoint_save_cadence(run: dict[str, Any], configured: Any, *, contract: d
     recipe_steps` (Musubi Tuner is given the recipe's steps), `trainer_default` (AI-Toolkit
     saves at its own default, which Kura does not know; returned as `"trainer_default"`), or
     nothing (sd-scripts is given no cadence; None). Command builders, the state save flags,
-    the plan, the guard, the monitor, and the disk estimate all read it; a backend building
+    the plan, the monitor, and the disk estimate all read it; a backend building
     its own command passes its contract."""
     contract = training_state_contract(run) if contract is None else contract
     cadence = _retention_value(configured)
