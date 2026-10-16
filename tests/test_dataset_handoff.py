@@ -3690,7 +3690,7 @@ class DatasetHandoffTests(unittest.TestCase):
         for name in ("ai-toolkit", "sd-scripts"):
             self.assertIsNone(_general_resolution({"backend": {"name": name, "config": {}}}))
         self.assertEqual(
-            _disk_cache_estimate({"backend": {"name": "musubi-tuner", "config": {}}})["status"],
+            _disk_cache_estimate({"backend": {"name": "musubi-tuner", "config": {"command": ["true"]}}})["status"],
             "not-applicable",
         )
         import kura.run_commands.plan as plan_module

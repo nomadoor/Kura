@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from pathlib import Path
 from typing import Any
@@ -128,7 +127,7 @@ CONFIG_KEYS = {
     "network_dim", "network_alpha", "learning_rate", "optimizer_type", "lr_scheduler", "mixed_precision",
     "gradient_checkpointing", "gradient_accumulation_steps", "network_train_unet_only", "fp8_base", "blocks_to_swap",
     "cache_latents", "cache_latents_to_disk", "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk",
-    "disk_cache_estimate_gb", "cpu_offload_checkpointing", "unsloth_offload_checkpointing",
+    "cpu_offload_checkpointing", "unsloth_offload_checkpointing",
     "save_every_n_steps", "save_last_n_steps", "timestep_sampling", "discrete_flow_shift", "sigmoid_scale", "guidance_scale",
     "model_prediction_type", "attn_mode", "qwen_image_vae_2d", "vae_chunk_size", "unet_lr", "text_encoder_lr",
     "cond_emb_dim", "lllite_mlp_dim", "lllite_target_layers", "lllite_cond_dim", "lllite_cond_resblocks", "lllite_dropout",
@@ -355,22 +354,14 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def sd_scripts_disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
-    """Estimate the run-scoped latent/text-encoder disk cache the author declared."""
+def sd_scripts_disk_cache(run: dict[str, Any]) -> str | None:
+    """What run-scoped disk cache the trainer writes, or None: latents or text-encoder outputs
+    cached to disk when the run sets `cache_latents_to_disk` or `cache_text_encoder_outputs_to_disk`."""
     native = backend_config(run, "sd-scripts")
-    enabled = any(native.get(key) is True for key in ("cache_latents_to_disk", "cache_text_encoder_outputs_to_disk"))
-    if not enabled:
-        return {"enabled": False, "bytes": 0, "status": "disabled"}
-    value = native.get("disk_cache_estimate_gb")
-    if isinstance(value, bool):
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
-    try:
-        gib = float(value)
-    except (TypeError, ValueError):
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "set backend.config.disk_cache_estimate_gb to count it"}
-    if not math.isfinite(gib) or gib <= 0:
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
-    return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate"}
+    if native.get("command") is not None:
+        return None
+    written = [key for key in ("cache_latents_to_disk", "cache_text_encoder_outputs_to_disk") if native.get(key) is True]
+    return f"sd-scripts writes an on-disk cache ({', '.join(written)})" if written else None
 
 
 def compile_sd_scripts(run: dict[str, Any], destination: Path) -> dict[str, Any]:

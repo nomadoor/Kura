@@ -29,7 +29,7 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
     "sampling": frozenset({"cadence_steps"}),
     "safety": frozenset({
         "allow_large_model_downloads", "large_model_download_gb",
-        "checkpoint_estimate_gb", "allow_runpod_disk_risk", "max_run_disk_gb", "allow_storage_risk",
+        "checkpoint_estimate_gb", "disk_cache_estimate_gb", "allow_runpod_disk_risk", "max_run_disk_gb", "allow_storage_risk",
     }),
 }
 # Keys older Kura versions wrote that nothing reads now; `kura run resume` and `--from` drop them
@@ -37,7 +37,7 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
 RETIRED_TRAIN_RUN_KEYS = frozenset({
     "created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider", "model.revision",
     "backend.config.allow_a40_uncheckpointed_9b", "backend.config.allow_a40_large_micro_batch",
-    "safety.allow_many_checkpoints", "safety.allow_unknown_disk_cache",
+    "safety.allow_many_checkpoints", "safety.allow_unknown_disk_cache", "backend.config.disk_cache_estimate_gb",
 })
 
 
