@@ -349,18 +349,19 @@ class BackendSurfaceContractTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             os.chdir(root)
             try:
-                results = {}
+                results, codes = {}, {}
                 for compiled in (False, True):
                     if compiled:
                         (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
                     error = io.StringIO()
                     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(error):
-                        cmd_run_plan(argparse.Namespace(run_id="old-run", json=True))
+                        codes[compiled] = cmd_run_plan(argparse.Namespace(run_id="old-run", json=True))
                     results[compiled] = error.getvalue()
             finally:
                 os.chdir(previous)
+        self.assertEqual(codes, {False: 1, True: 0})
         self.assertIn("allow_a40_uncheckpointed_9b", results[False])
-        self.assertNotIn("allow_a40_uncheckpointed_9b", results[True])
+        self.assertEqual(results[True], "")
 
     def test_contract_is_required_by_the_registry_type(self) -> None:
         adapter = BACKENDS["ai-toolkit"]
