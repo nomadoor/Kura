@@ -41,6 +41,7 @@ class DiskCacheTests(unittest.TestCase):
             {"backend": {"name": "sd-scripts", "config": {"architecture": "sd15"}}},
             {"backend": {"name": "ai-toolkit", "config": {"model_arch": "sd1"}}},
             {"backend": {"name": "musubi-tuner", "config": {"command": ["true"]}}},
+            {"backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "precache": False}}},
             # An explicit command is the author's own; Kura cannot tell what it caches.
             {"backend": {"name": "sd-scripts", "config": {"command": ["true"], "cache_latents_to_disk": True}}},
         ):
@@ -82,7 +83,12 @@ class DiskCacheTests(unittest.TestCase):
         retired = {"backend": {"name": "sd-scripts", "config": {"architecture": "sd15", "disk_cache_estimate_gb": 1}}}
         with self.assertRaisesRegex(ValueError, "the disk cache size is safety.disk_cache_estimate_gb"):
             validate_backend_config(retired)
-        self.assertNotIn("disk_cache_estimate_gb", without_retired_train_run_keys(retired)["backend"]["config"])
+        copied = without_retired_train_run_keys(retired)
+        self.assertNotIn("disk_cache_estimate_gb", copied["backend"]["config"])
+        # A copy keeps counting the estimate under its new key, unless the run already sets it.
+        self.assertEqual(copied["safety"], {"disk_cache_estimate_gb": 1})
+        both = {**retired, "safety": {"disk_cache_estimate_gb": 4}}
+        self.assertEqual(without_retired_train_run_keys(both)["safety"], {"disk_cache_estimate_gb": 4})
         # A run an older Kura compiled keeps its estimate where it wrote it.
         retired["backend"]["config"]["cache_latents_to_disk"] = True
         self.assertEqual(plan._disk_cache_estimate(retired)["bytes"], 1024**3)

@@ -265,9 +265,10 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
 
 def musubi_disk_cache(run: dict[str, Any]) -> str | None:
     """What run-scoped disk cache the trainer writes, or None: Musubi Tuner caches latents and
-    text-encoder outputs to disk before every training it runs (the cache commands above the
-    training command), unless the run gives its own command."""
-    if _musubi_backend_override(run).get("command") is not None:
+    text-encoder outputs to disk before training (the cache commands above the training command),
+    unless the run gives its own command or sets `precache: false`, which leaves out those commands."""
+    override = _musubi_backend_override(run)
+    if override.get("command") is not None or override.get("precache", True) is False:
         return None
     return "Musubi Tuner caches latents and text-encoder outputs to disk before training"
 

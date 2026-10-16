@@ -115,6 +115,13 @@ def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
     legacy = copied.get("compute") if isinstance(copied.get("compute"), dict) else {}
     if legacy.get("provider") == "runpod" and not legacy.get("executor"):
         legacy["executor"] = "runpod"
+    # An older Kura kept the sd-scripts disk cache estimate in backend.config; the copy keeps
+    # counting it under safety.disk_cache_estimate_gb unless the run already sets that.
+    backend = copied.get("backend") if isinstance(copied.get("backend"), dict) else {}
+    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+    if config.get("disk_cache_estimate_gb") is not None:
+        safety = copied.setdefault("safety", {}) if isinstance(copied.get("safety", {}), dict) else {}
+        safety.setdefault("disk_cache_estimate_gb", config["disk_cache_estimate_gb"])
     for path in RETIRED_TRAIN_RUN_KEYS:
         *parents, key = path.split(".")
         holder: Any = copied
