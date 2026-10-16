@@ -97,6 +97,24 @@ def existing_publication(run_dir: Path, realization_id: str) -> tuple[str, list[
     return manifest_ref, [item["path"] for item in files or [] if isinstance(item, dict) and isinstance(item.get("path"), str)]
 
 
+def recorded_output_paths(run_dir: Path, realization_id: str) -> set[str]:
+    """The output paths this realization's publication records already name, verified or not.
+
+    Both records are immutable, so a run collected again keeps the paths they name."""
+    paths: set[str] = set()
+    for name, key in ((f"{realization_id}.publication.json", "files"), (f"{realization_id}.publication-unverified.json", "outputs")):
+        try:
+            payload = json.loads((run_dir / "realizations" / name).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        entries = payload.get(key) if isinstance(payload, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            value = entry.get("path") if isinstance(entry, dict) else entry
+            if isinstance(value, str):
+                paths.add(value)
+    return paths
+
+
 def record_unverified_publication(run_dir: Path, realization_id: str, outputs: list[str]) -> str:
     """Record that a run with no output contract completed with these outputs, unverified.
 

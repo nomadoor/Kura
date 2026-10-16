@@ -30,7 +30,7 @@ from kura.executors.runpod import project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
-from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
+from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication, recorded_output_paths
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell, format_cost_ceiling, pod_cost_ceiling
 from kura.fsio import append_line_durably, atomic_write_json
@@ -311,7 +311,7 @@ def _local_reusable_snapshot_source(
     remote_root: str,
 ) -> Path | None:
     relative = PurePosixPath(item["path"])
-    if len(relative.parts) != 2 or relative.parts[0] != "outputs" or not relative.name.endswith(".safetensors"):
+    if len(relative.parts) < 2 or relative.parts[0] != "outputs" or ".." in relative.parts or not relative.name.endswith(".safetensors"):
         return None
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -461,12 +461,23 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             if not output_dir.exists():
                 return outputs
             primary.mkdir(parents=True, exist_ok=True)
-            # Each file keeps the place the trainer gave it on the Pod, as on Docker.
+            try:
+                realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
+            except (OSError, json.JSONDecodeError, AttributeError):
+                realization_ref = None
+            recorded = recorded_output_paths(run_dir, Path(realization_ref).stem) if isinstance(realization_ref, str) else set()
+            # Each file keeps the place the trainer gave it on the Pod, as on Docker. A realization an
+            # older Kura already recorded with AI-Toolkit weights linked to the top of outputs/ keeps
+            # those paths, because its publication record cannot change.
             publications: dict[Path, Path] = {}
             for source in sorted(path for path in output_dir.rglob("*") if path.is_file()):
                 relative = source.relative_to(output_dir)
                 if is_training_state_output(relative, run_id):
                     continue
+                if relative.parts[:1] == (run_id,) and len(relative.parts) > 1:
+                    flat = Path(*relative.parts[1:])
+                    if f"outputs/{flat.as_posix()}" in recorded and f"outputs/{relative.as_posix()}" not in recorded:
+                        relative = flat
                 publications[relative] = source
             for relative, source in publications.items():
                 target = primary / relative
@@ -480,7 +491,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     os.replace(temporary, target)
                 finally:
                     temporary.unlink(missing_ok=True)
-                outputs.append(str((primary / relative).relative_to(run_dir)))
+                outputs.append(f"outputs/{relative.as_posix()}")
             return outputs
 
         def record_recovery_download(recovery_artifacts: list[str]) -> None:
@@ -824,10 +835,19 @@ def _same_remote_training_state_version(before: dict[str, Any], after: dict[str,
     )
 
 
+def _mirrored_output_key(item: dict[str, Any]) -> str | None:
+    """The local path a mirrored weight was recorded at; a record without one (older Kura
+    mirrored only the top of outputs/) is read as outputs/<name>."""
+    if isinstance(item.get("path"), str):
+        return item["path"]
+    return f"outputs/{item['name']}" if isinstance(item.get("name"), str) else None
+
+
 def _remote_output_relative(item: dict[str, Any]) -> Path:
     """Where a pulled weight goes below the local outputs directory: the place it has on the Pod."""
     relative = PurePosixPath(item.get("relative") or item["name"])
-    if relative.is_absolute() or ".." in relative.parts:
+    # A Linux name may hold `\` or `:`, which a Windows host reads as a separator or a drive.
+    if relative.is_absolute() or any(part == ".." or "\\" in part or ":" in part for part in relative.parts):
         raise ValueError(f"remote output path leaves the outputs directory: {relative}")
     return Path(*relative.parts)
 
@@ -1037,7 +1057,8 @@ def _pull_remote_output_items(
     except (OSError, json.JSONDecodeError):
         status = {}
     previous_outputs = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
-    previous_by_name = {item.get("name"): item for item in previous_outputs if isinstance(item, dict) and isinstance(item.get("name"), str)}
+    # Keyed by local path: two weights with one file name in different folders stay apart.
+    previous_by_path = {_mirrored_output_key(item): item for item in previous_outputs if isinstance(item, dict) and _mirrored_output_key(item)}
     pulled: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     for item in items:
@@ -1045,7 +1066,7 @@ def _pull_remote_output_items(
         size = item.get("size")
         if isinstance(name, str):
             local_path = destination / _remote_output_relative(item)
-            previous = previous_by_name.get(name)
+            previous = previous_by_path.get(local_path.relative_to(run_dir).as_posix())
             metadata_matches = isinstance(previous, dict) and previous.get("remote_path") == item.get("path") and previous.get("remote_mtime_ns") == item.get("mtime_ns")
             if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and metadata_matches and not force:
                 try:
@@ -1053,7 +1074,7 @@ def _pull_remote_output_items(
                 except (OSError, ValueError):
                     pass
                 else:
-                    pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "remote_path": item.get("path"), "remote_mtime_ns": item.get("mtime_ns"), "skipped": True})
+                    pulled.append({"name": name, "path": local_path.relative_to(run_dir).as_posix(), "step": item.get("step"), "size": size, "remote_path": item.get("path"), "remote_mtime_ns": item.get("mtime_ns"), "skipped": True})
                     continue
         pending.append(item)
     pending_size = sum(item.get("size") for item in pending if isinstance(item.get("size"), int))
@@ -1088,7 +1109,7 @@ def _pull_remote_output_items(
             os.replace(partial_path, local_path)
         finally:
             partial_path.unlink(missing_ok=True)
-        published = {"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "remote_path": remote_path, "remote_mtime_ns": item.get("mtime_ns"), "skipped": False}
+        published = {"name": name, "path": local_path.relative_to(run_dir).as_posix(), "step": item.get("step"), "size": local_path.stat().st_size, "remote_path": remote_path, "remote_mtime_ns": item.get("mtime_ns"), "skipped": False}
         pulled.append(published)
         # Persist each verified publication immediately. A later item in the
         # same batch may fail, but that must not orphan an already-local file
@@ -1143,10 +1164,10 @@ def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]], *, emit_
                 line = record("output_mirrored", {"realization_id": realization_id, "at": datetime.now().astimezone().isoformat(), **item})
                 append_line_durably(log, json.dumps(line, ensure_ascii=False) + "\n")
         previous = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
-        merged = {item.get("name"): item for item in previous if isinstance(item, dict) and isinstance(item.get("name"), str)}
+        merged = {_mirrored_output_key(item): item for item in previous if isinstance(item, dict) and _mirrored_output_key(item)}
         for item in pulled:
-            if isinstance(item.get("name"), str):
-                merged[item["name"]] = item
+            if _mirrored_output_key(item):
+                merged[_mirrored_output_key(item)] = item
         status["mirrored_outputs"] = list(merged.values())
         status.pop("mirrored_outputs_synced_at", None)
 

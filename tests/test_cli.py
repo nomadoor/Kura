@@ -3969,6 +3969,46 @@ class RunPodPullSelectionTests(unittest.TestCase):
             transfer.assert_not_called()
             self.assertTrue(pulled[0]["skipped"])
 
+    def test_pull_places_a_nested_checkpoint_where_the_pod_has_it_and_skips_it_next_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            payload = self._fake_safetensors()
+            item = {"name": "example_000000002.safetensors", "relative": "example/example_000000002.safetensors",
+                    "path": "/workspace/runs/example/outputs/example/example_000000002.safetensors", "step": 2, "size": len(payload), "mtime_ns": 10}
+
+            def fake_transfer(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                Path(command[-1]).write_bytes(payload)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer) as transfer, \
+                 patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(item)]):
+                pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[dict(item)])
+                _record_pulled_outputs(run_dir, pulled, emit_event=False)
+                again = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[dict(item)])
+            self.assertEqual(pulled[0]["path"], "outputs/example/example_000000002.safetensors")
+            self.assertEqual((run_dir / pulled[0]["path"]).read_bytes(), payload)
+            self.assertEqual(transfer.call_count, 1)
+            self.assertTrue(again[0]["skipped"])
+
+            # The final collection reuses the mirrored copy instead of transferring it again.
+            snapshot_item = {"path": "outputs/example/example_000000002.safetensors", "size": len(payload), "mtime_ns": 10,
+                             "sha256": hashlib.sha256(payload).hexdigest()}
+            self.assertEqual(
+                _local_reusable_snapshot_source(run_dir, snapshot_item, remote_root="/workspace/runs/example"),
+                run_dir / "outputs" / "example" / "example_000000002.safetensors",
+            )
+
+    def test_a_remote_name_a_windows_host_reads_as_a_separator_or_drive_is_refused(self) -> None:
+        from kura.run_commands.runpod_ssh import _remote_output_relative
+
+        for relative in ("..\\x.safetensors", "C:x.safetensors", "a/../x.safetensors", "/abs.safetensors"):
+            with self.subTest(relative=relative), self.assertRaisesRegex(ValueError, "leaves the outputs directory"):
+                _remote_output_relative({"name": "x.safetensors", "relative": relative})
+
     def test_pull_replaces_same_size_copy_when_remote_mtime_changed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
@@ -9196,6 +9236,32 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual((run_dir / "outputs" / "example" / "keep.txt").read_text(encoding="utf-8"), "user file")
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["outputs"], sorted(f"outputs/{relative}" for relative in pod_files))
+
+    def test_collecting_again_keeps_the_flat_paths_an_older_kura_recorded(self) -> None:
+        from kura.artifact_publication import publish_outputs
+
+        contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
+        pod_files = {"example/example.safetensors": "weight", "example/config.yaml": "config"}
+        with tempfile.TemporaryDirectory() as directory, patch("kura.artifact_publication.validate_safetensors_file"):
+            root = Path(directory)
+            run_dir = self._ai_toolkit_download_fixture(root, "example", pod_files)
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"output_contract": contract}), encoding="utf-8")
+            # An older Kura linked the weights to the top and recorded those paths, then the
+            # collection was blocked; the record is immutable.
+            for relative, content in pod_files.items():
+                (run_dir / "outputs" / Path(relative).name).parent.mkdir(parents=True, exist_ok=True)
+                (run_dir / "outputs" / Path(relative).name).write_text(content, encoding="utf-8")
+            publish_outputs(run_dir, "r1", contract)
+            (run_dir / "status.json").write_text(json.dumps({
+                "state": "recovery_required", "pod_id": "pod-1", "last_realization": "realizations/r1.json", "publication_state": "blocked",
+            }), encoding="utf-8")
+
+            self.assertEqual(self._download(root, "example"), 0)
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["publication_state"], "completed")
+            self.assertEqual(status["outputs"], ["outputs/config.yaml", "outputs/example.safetensors"])
+            self.assertFalse((run_dir / "outputs" / "example").exists())
 
     def test_a_run_id_ending_in_state_publishes_the_same_outputs_on_docker_and_runpod(self) -> None:
         from kura.artifact_publication import publish_outputs
