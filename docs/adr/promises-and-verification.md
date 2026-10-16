@@ -41,10 +41,6 @@ simplest mechanism) stays in `AGENTS.md`; it is not a promise to users.
 | P10 | No secret value reaches a workspace file, a log, an image, or a record. | py tests + release gate |
 | P11 | Every refusal and error says what to do next, clearly enough for an agent with no other context. | acceptance test |
 
-Known deviation, accepted: AI-Toolkit writes outputs under `outputs/<run-id>/`
-on Docker and under `outputs/` on RunPod; both are recorded correctly in
-`status.outputs` (P5 holds for records, not for the folder layout).
-
 ### 2. One conformance run instead of hand-built smokes
 
 `scripts/real_smoke.py` (the existing real-smoke harness, extended; no second

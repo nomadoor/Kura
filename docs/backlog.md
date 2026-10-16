@@ -15,12 +15,10 @@ why, so it is not raised again.
 
 ## Open
 
-- 2026-10-11 | AI-Toolkit outputs | AI-Toolkit writes outputs under `outputs/<run-id>/` on Docker and under `outputs/` on RunPod; both are recorded correctly in `status.outputs`. Accepted deviation for the folder layout, kept here until the layouts are made the same or the deviation is documented for users. Making them the same needs one owner for when a file moves and what happens when the target exists (a reconcile of an already-published run must not move files; a relaunch in the same directory must not collide); see the review of the backlog harness pull request | `docs/adr/promises-and-verification.md` | P5
-
 - 2026-10-11 | AI-Toolkit patch | The patch header says sampling and logging skip the first step on a save; only sampling does (harmless; changing it changes the image build, so it waits for the next image rebuild) | review of the step-labels pull request | -
 - 2026-10-16 | ComfyUI prepare | The RunPod render copies the merged `comfyui_model_registry.json` to the Pod, and `docker/comfyui/kura_comfy_prepare.py` resolves it again with its own `repo_id`/`direct_url`/`file` fallbacks and its own required-model scan; send the resolved `comfyui_models.json` and have the image read only that at the next image rebuild | review of the model selection pull request | -
-- 2026-10-16 | run ids | A run ID ending in `-state` is read as a training-state directory by `is_training_state_output`, so its weights are never published on either executor | review of the backlog harness pull request (pre-existing) | P5
 - 2026-10-11 | disk estimate | An on-disk latent or text-encoder cache whose size is not declared is not counted by either disk check (only sd-scripts can declare it, with `disk_cache_estimate_gb`); on RunPod, which has no free-space floor, a large cached dataset can fill `container_disk_gb` mid-run. The plan warns about it | review of the plan-refuses-only-what-disk-cannot-hold pull request | P8
+- 2026-10-16 | disk skill | The local-disk-safety skill says every undeclared run-scoped disk cache is shown as unknown; only an sd-scripts cache is (`_disk_cache_preflight_report`), and other backends' caches are not shown at all | CodeRabbit on the plan-refuses-only-what-disk-cannot-hold pull request | P11
 
 ## Rejected
 

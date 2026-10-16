@@ -55,7 +55,7 @@ def existing_output_snapshot(run_dir: Path) -> dict[str, dict[str, int]]:
         for path in sorted(output_dir.rglob("*")):
             if path.is_symlink():
                 raise ValueError(f"output contains a symlink: {path.relative_to(run_dir)}")
-            if path.is_file() and not is_training_state_output(path.relative_to(output_dir)):
+            if path.is_file() and not is_training_state_output(path.relative_to(output_dir), run_dir.name):
                 stat = path.stat()
                 snapshot[path.relative_to(run_dir).as_posix()] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     return snapshot
@@ -137,7 +137,7 @@ def publish_outputs(
         for path in sorted(output_dir.rglob("*")):
             if path.is_symlink():
                 raise ValueError(f"output contains a symlink: {path.relative_to(run_dir)}")
-            if not path.is_file() or is_training_state_output(path.relative_to(output_dir)):
+            if not path.is_file() or is_training_state_output(path.relative_to(output_dir), run_dir.name):
                 continue
             relative = path.relative_to(run_dir).as_posix()
             before = path.stat()

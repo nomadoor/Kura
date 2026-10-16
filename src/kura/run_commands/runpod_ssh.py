@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import filecmp
 import hashlib
 import json
 import os
@@ -455,14 +454,6 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
         downloaded_run = destination / run_id
-        try:
-            manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        except (OSError, ValueError, YAMLError):
-            manifest = {}
-        if not isinstance(manifest, dict):
-            manifest = {}
-        backend = manifest.get("backend") if isinstance(manifest.get("backend"), dict) else {}
-        backend_name = backend.get("name") if isinstance(backend.get("name"), str) else None
 
         def materialize_primary_outputs(output_dir: Path) -> list[str]:
             primary = run_dir / "outputs"
@@ -470,17 +461,12 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             if not output_dir.exists():
                 return outputs
             primary.mkdir(parents=True, exist_ok=True)
+            # Each file keeps the place the trainer gave it on the Pod, as on Docker.
             publications: dict[Path, Path] = {}
-            legacy_publications: dict[Path, Path] = {}
             for source in sorted(path for path in output_dir.rglob("*") if path.is_file()):
                 relative = source.relative_to(output_dir)
-                if is_training_state_output(relative):
+                if is_training_state_output(relative, run_id):
                     continue
-                if backend_name == "ai-toolkit" and len(relative.parts) > 1 and relative.parts[0] == run_id:
-                    relative = Path(*relative.parts[1:])
-                    legacy_publications[relative] = source
-                if relative in publications:
-                    raise ValueError(f"download outputs collide at canonical path {relative}")
                 publications[relative] = source
             for relative, source in publications.items():
                 target = primary / relative
@@ -495,18 +481,6 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 finally:
                     temporary.unlink(missing_ok=True)
                 outputs.append(str((primary / relative).relative_to(run_dir)))
-            legacy_root = primary / run_id
-            if legacy_publications and legacy_root.is_dir():
-                legacy_files = {
-                    path.relative_to(legacy_root): path
-                    for path in legacy_root.rglob("*")
-                    if path.is_file()
-                }
-                if legacy_files.keys() == legacy_publications.keys() and all(
-                    filecmp.cmp(legacy_files[relative], source, shallow=False)
-                    for relative, source in legacy_publications.items()
-                ):
-                    shutil.rmtree(legacy_root)
             return outputs
 
         def record_recovery_download(recovery_artifacts: list[str]) -> None:
@@ -850,6 +824,14 @@ def _same_remote_training_state_version(before: dict[str, Any], after: dict[str,
     )
 
 
+def _remote_output_relative(item: dict[str, Any]) -> Path:
+    """Where a pulled weight goes below the local outputs directory: the place it has on the Pod."""
+    relative = PurePosixPath(item.get("relative") or item["name"])
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"remote output path leaves the outputs directory: {relative}")
+    return Path(*relative.parts)
+
+
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
@@ -861,11 +843,13 @@ import os
 
 directory = {remote_outputs!r}
 items = []
-for path in sorted(glob.glob(os.path.join(directory, "*.safetensors"))):
-    name = os.path.basename(path)
+# Every weight below the outputs directory (AI-Toolkit saves below <run id>/); the controller
+# leaves out training state and reads the step from the name, with the rules every reader uses.
+for path in sorted(glob.glob(os.path.join(directory, "**", "*.safetensors"), recursive=True)):
+    if os.path.islink(path) or not os.path.isfile(path):
+        continue
     stat = os.stat(path)
-    # The controller reads the step from the name, with the parser every other reader uses.
-    items.append({{"path": path, "name": name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
+    items.append({{"path": path, "relative": os.path.relpath(path, directory), "name": os.path.basename(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
 print(json.dumps(items))
 PY
 """.strip()
@@ -875,7 +859,11 @@ PY
     data = json.loads(result.stdout or "[]")
     if not isinstance(data, list):
         raise ValueError("remote output listing did not return a list")
-    items = [item for item in data if isinstance(item, dict) and isinstance(item.get("name"), str)]
+    items = [
+        item for item in data
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+        and not is_training_state_output(PurePosixPath(item.get("relative") or item["name"]), run_id)
+    ]
     for item in items:
         item["step"] = checkpoint_step(item["name"])
     return items
@@ -1056,7 +1044,7 @@ def _pull_remote_output_items(
         name = item.get("name")
         size = item.get("size")
         if isinstance(name, str):
-            local_path = destination / name
+            local_path = destination / _remote_output_relative(item)
             previous = previous_by_name.get(name)
             metadata_matches = isinstance(previous, dict) and previous.get("remote_path") == item.get("path") and previous.get("remote_mtime_ns") == item.get("mtime_ns")
             if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and metadata_matches and not force:
@@ -1077,7 +1065,8 @@ def _pull_remote_output_items(
         size = item.get("size")
         if not isinstance(name, str) or not isinstance(remote_path, str):
             continue
-        local_path = destination / name
+        local_path = destination / _remote_output_relative(item)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
         partial_path = local_path.with_name(f".{local_path.name}.partial")
         partial_path.unlink(missing_ok=True)
         try:

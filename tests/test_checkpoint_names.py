@@ -100,6 +100,34 @@ class OneCheckpointReadingTests(unittest.TestCase):
             items = _runpod_remote_outputs({"ip": "h", "port": 22, "key": "k"}, workspace="/workspace", run_id="vivi")
         self.assertEqual([item["step"] for item in items], [250, None])
 
+    def test_the_pod_listing_finds_ai_toolkit_checkpoints_below_the_run_folder_and_leaves_out_state(self) -> None:
+        import json
+        import subprocess
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kura.run_commands.runpod_ssh import _remote_output_relative, _runpod_remote_outputs
+
+        captured: list[str] = []
+
+        def run(argv, **_kwargs):
+            captured.append(argv[-1])
+            listed = [
+                {"path": "/w/vivi-state/vivi-state_000000002.safetensors", "relative": "vivi-state/vivi-state_000000002.safetensors", "name": "vivi-state_000000002.safetensors", "size": 1, "mtime_ns": 1},
+                {"path": "/w/vivi-state-step00000002-state/model.safetensors", "relative": "vivi-state-step00000002-state/model.safetensors", "name": "model.safetensors", "size": 1, "mtime_ns": 1},
+            ]
+            return subprocess.CompletedProcess([], 0, json.dumps(listed), "")
+
+        with patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=run), \
+                patch("kura.run_commands.runpod_ssh._ssh_base", return_value=["ssh"]):
+            items = _runpod_remote_outputs({"ip": "h", "port": 22, "key": "k"}, workspace="/workspace", run_id="vivi-state")
+        self.assertIn("recursive=True", captured[0])
+        self.assertEqual([(item["name"], item["step"]) for item in items], [("vivi-state_000000002.safetensors", 2)])
+        # The mirror keeps the place the trainer gave the file, as the final download does.
+        self.assertEqual(_remote_output_relative(items[0]), Path("vivi-state/vivi-state_000000002.safetensors"))
+        with self.assertRaisesRegex(ValueError, "leaves the outputs directory"):
+            _remote_output_relative({"name": "x.safetensors", "relative": "../x.safetensors"})
+
 
 
 STEPPED = [f"outputs/vivi-step{step:08d}.safetensors" for step in (250, 500, 750, 1000)]
@@ -148,7 +176,7 @@ class OneCheckpointCountTests(unittest.TestCase):
                     run_dir = Path(directory) / "vivi"
                     recorded = list(outputs)
                     if legacy:
-                        # An older AI-Toolkit layout left a copy below outputs/<run id>/; it is not counted again.
+                        # A RunPod download by an older Kura linked AI-Toolkit weights to the top; the ones below outputs/<run id>/ are not counted again.
                         recorded += [str(Path("outputs/vivi") / Path(value).relative_to("outputs")) for value in outputs]
                     for value in recorded:
                         (run_dir / value).parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +195,7 @@ class OneCheckpointCountTests(unittest.TestCase):
         from kura.monitor import _checkpoint_count
         from kura.run_commands.experiment import _output_lines
 
-        # Only the older nested layout: every checkpoint sits below outputs/<run id>/.
+        # AI-Toolkit's layout: every checkpoint sits below outputs/<run id>/.
         recorded = [f"outputs/vivi-state/vivi-state-step{step:08d}.safetensors" for step in (250, 500)]
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "vivi-state"

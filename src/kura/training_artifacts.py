@@ -894,19 +894,14 @@ def checkpoint_files(paths: Iterable[Path], run_id: str) -> CheckpointFiles:
 
     A checkpoint is a .safetensors file outside a native training-state
     directory; its name says whether it is a step's checkpoint or the final weights.
-    An older AI-Toolkit layout wrote below `<run id>/`; when weights also sit at the
-    top, those are copies and are not counted again. The state check reads a path
-    below `<run id>/` from there, so a run ID ending in `-state` is not a state directory.
+    AI-Toolkit writes its weights below `<run id>/`. A RunPod download by an older Kura
+    also linked them to the top of the outputs directory; when weights sit at the top,
+    the ones below `<run id>/` are those copies and are not counted again.
     """
-    legacy_root = Path(run_id)
     weights = [path for path in paths if path.suffix.lower() == ".safetensors"]
     if any(len(path.parts) == 1 for path in weights):
-        weights = [path for path in weights if not path.is_relative_to(legacy_root)]
-    weights = [
-        path
-        for path in weights
-        if not is_training_state_output(path.relative_to(legacy_root) if path.is_relative_to(legacy_root) else path)
-    ]
+        weights = [path for path in weights if not path.is_relative_to(Path(run_id))]
+    weights = [path for path in weights if not is_training_state_output(path, run_id)]
     return CheckpointFiles(
         stepped=[path for path in weights if checkpoint_step(path.name) is not None],
         final=[path for path in weights if checkpoint_step(path.name) is None],
@@ -1198,7 +1193,13 @@ def publish_completed_training_states(
     return list(unique.values())
 
 
-def is_training_state_output(path: Path) -> bool:
-    """Return whether an output file is nested below a native state directory."""
+def is_training_state_output(path: Path, run_id: str) -> bool:
+    """Return whether an output file (relative to the run's outputs directory) is nested below a
+    native state directory, for every executor and reader.
 
-    return any(part.endswith("-state") for part in path.parts[:-1])
+    AI-Toolkit writes its weights below `<run id>/`, so that folder is never a state directory,
+    even for a run ID that ends in `-state`."""
+    parts = path.parts[:-1]
+    if parts[:1] == (run_id,):
+        parts = parts[1:]
+    return any(part.endswith("-state") for part in parts)
