@@ -34,7 +34,10 @@ TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
 }
 # Keys older Kura versions wrote that nothing reads now; `kura run resume` and `--from` drop them
 # from the frozen run they copy, which is a record of an older Kura.
-RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider", "model.revision"})
+RETIRED_TRAIN_RUN_KEYS = frozenset({
+    "created_by", "backend.version", "sampling.prompts", "backend.adapter_version", "compute.provider", "model.revision",
+    "backend.config.allow_a40_uncheckpointed_9b", "backend.config.allow_a40_large_micro_batch",
+})
 
 
 def gpu_choice_problem(gpu: Any, *, runpod: bool) -> str | None:
@@ -106,8 +109,10 @@ def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
     if legacy.get("provider") == "runpod" and not legacy.get("executor"):
         legacy["executor"] = "runpod"
     for path in RETIRED_TRAIN_RUN_KEYS:
-        parent, _, key = path.rpartition(".")
-        holder = copied.get(parent) if parent else copied
+        *parents, key = path.split(".")
+        holder: Any = copied
+        for parent in parents:
+            holder = holder.get(parent) if isinstance(holder, dict) else None
         if isinstance(holder, dict):
             holder.pop(key, None)
     for item in copied.get("datasets") if isinstance(copied.get("datasets"), list) else []:

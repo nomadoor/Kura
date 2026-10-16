@@ -211,6 +211,8 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-qwen-image": _musubi(
         "qwen_image", "Comfy-Org/Qwen-Image_ComfyUI", IMAGE_DATASET, "qwen_image_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma", discrete_flow_shift=1.0,
         model_version="original", fp8_base=True, fp8_scaled=True, fp8_vl=True, blocks_to_swap=45,
         model_downloads={
             "dit": _download("Comfy-Org/Qwen-Image_ComfyUI", "split_files/diffusion_models/qwen_image_bf16.safetensors"),
@@ -220,6 +222,8 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-zimage": _musubi(
         "zimage", "Comfy-Org/z_image", IMAGE_DATASET, "zimage_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma",
         fp8_base=True, fp8_scaled=True, fp8_llm=True, blocks_to_swap=24,
         model_downloads={
             "dit": _download("Comfy-Org/z_image", "split_files/diffusion_models/z_image_bf16.safetensors"),
@@ -229,6 +233,8 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-flux-kontext": _musubi(
         "flux_kontext", "black-forest-labs/FLUX.1-Kontext-dev", CONTROL_DATASET, "flux_kontext_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma",
         fp8_base=True, fp8_scaled=True, blocks_to_swap=24,
         model_downloads={
             "dit": _download("black-forest-labs/FLUX.1-Kontext-dev", "flux1-kontext-dev.safetensors"),
@@ -254,6 +260,8 @@ SMOKES: dict[str, Smoke] = {
     # Musubi Tuner video families.
     "musubi-hunyuan-video": _musubi(
         "hunyuan_video", "hunyuanvideo-community/HunyuanVideo", VIDEO_DATASET, "hv_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma", discrete_flow_shift=1.0,
         fp8_base=True, blocks_to_swap=36,
         dataset_options={VIDEO_DATASET: dict(_VIDEO_ONE_FRAME)},
         model_downloads={
@@ -265,6 +273,8 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-hunyuan-video-1-5": _musubi(
         "hunyuan_video_1_5", "Comfy-Org/HunyuanVideo_1.5_repackaged", VIDEO_DATASET, "hv_1_5_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma", discrete_flow_shift=1.0,
         task="t2v", fp8_base=True, fp8_scaled=True, fp8_vl=True, blocks_to_swap=51,
         dataset_options={VIDEO_DATASET: dict(_VIDEO_ONE_FRAME)},
         model_downloads={
@@ -276,6 +286,8 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-framepack": _musubi(
         "framepack", "Kijai/HunyuanVideo_comfy", FPS30_VIDEO_DATASET, "fpack_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma", discrete_flow_shift=1.0,
         fp8_base=True, fp8_scaled=True, fp8_llm=True, blocks_to_swap=36,
         dataset_options={FPS30_VIDEO_DATASET: {"target_frames": [37], "frame_extraction": "head", "source_fps": 30.0}},
         model_downloads={
@@ -288,6 +300,8 @@ SMOKES: dict[str, Smoke] = {
     ),
     "musubi-kandinsky5-lite": _musubi(
         "kandinsky5", "kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s", VIDEO_DATASET, "kandinsky5_train_network.py",
+        # The trainer's generic defaults, which the recorded smoke trained with.
+        timestep_sampling="sigma", discrete_flow_shift=1.0,
         task="k5-lite-t2v-5s-sd", fp8_base=True, fp8_scaled=True, blocks_to_swap=16,
         dataset_options={VIDEO_DATASET: dict(_VIDEO_ONE_FRAME)},
         model_paths={"text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct", "text_encoder_clip": "openai/clip-vit-large-patch14"},

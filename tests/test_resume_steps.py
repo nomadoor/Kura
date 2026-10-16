@@ -491,7 +491,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
                 self.assertIn(f" {entrypoint} ", script)
                 self.assertFalse((unmanaged_resolved / directory_name / "state-runner.py").exists())
 
-    def _save(self, backend: str, scheduler: dict[str, Any], optimizer_step: int, *, processes: int = 1) -> tuple[Path, dict[str, Any]]:
+    def _save(self, backend: str, scheduler: dict[str, Any], optimizer_step: int, *, processes: int = 1, name: str = "derived-state") -> tuple[Path, dict[str, Any]]:
         from kura.container_scripts import script_source
 
         namespace: dict[str, object] = {"__name__": "container_test"}
@@ -517,7 +517,7 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         accelerate.Accelerator = Accelerator
         root = Path(tempfile.mkdtemp())
         self.addCleanup(__import__("shutil").rmtree, root)
-        output = root / "derived-state"
+        output = root / name
         with patch.dict(sys.modules, {"torch": torch, "accelerate": accelerate}):
             namespace["install_hooks"](backend)
             self.assertEqual(Accelerator().save_state(output), "saved")
@@ -533,6 +533,14 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         _, info = self._save("sd-scripts", {"last_epoch": 7, "_step_count": 8}, 7)
         self.assertEqual((info["backend"], info["logical_step"]), ("sd-scripts", 7))
         self.assertIn("train_state_sha256", info)
+
+    @posix_only(POSIX_PATHS)
+    def test_the_runner_refuses_a_step_save_named_for_another_step(self) -> None:
+        # An image without the step patch names a Resume's save by its process-local counter.
+        _, info = self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1150, name="derived-step00001150-state")
+        self.assertEqual(info["logical_step"], 1150)
+        with self.assertRaisesRegex(RuntimeError, "named for step 150 but holds 1150 updates; this image lacks Kura's step patch"):
+            self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1150, name="derived-step00000150-state")
 
     @posix_only(POSIX_PATHS)
     def test_the_runner_counts_one_scheduler_step_per_process_per_update(self) -> None:

@@ -264,6 +264,10 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     elif not args.experiment:
         print("--experiment is required unless --from names a run to start from", file=sys.stderr)
         return 1
+    elif getattr(args, "gpu", None) is not None and getattr(args, "executor", None) != "runpod":
+        # The draft would hold a compute.gpu that compile refuses for a local run.
+        print("--gpu chooses a RunPod GPU; use it with --executor runpod", file=sys.stderr)
+        return 1
     timestamp = _now()
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
     run_dir = _run_path(run_id)
@@ -488,6 +492,17 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     print(run_id); return 0
 
 
+def _compile_refusal(run: dict[str, Any], exc: BaseException) -> str:
+    """Why a training run does not compile; a Resume, which copies its source's settings, also says how to go on."""
+    message = _safe_error(exc)
+    if run.get("continuation") is not None and "Fork from Weight" not in message:
+        message += (
+            ". A Resume continues its source with the source's settings, so a source compiled under "
+            "rules Kura no longer accepts cannot be resumed; create a Fork from Weight and fix the settings there"
+        )
+    return message
+
+
 def cmd_run_compile(args: argparse.Namespace) -> int:
     run_dir = _run_path(args.run_id)
     try:
@@ -521,7 +536,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     try:
         _check_train_run_keys(run)
     except ValueError as exc:
-        print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
+        print(f"cannot compile run: {_compile_refusal(run, exc)}", file=sys.stderr)
         return 1
     backend = run.get("backend", {})
     try:
@@ -547,7 +562,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             locked_datasets.append(locked_item)
         image = effective_image(_workspace_config(), _backend_image_name(backend.get("name")))
     except (OSError, ValueError, YAMLError) as exc:
-        print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
+        print(f"cannot compile run: {_compile_refusal(run, exc)}", file=sys.stderr)
         return 1
     locked = deepcopy(run)
     locked["datasets"] = locked_datasets
@@ -657,7 +672,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         atomic_write_json(status_path, record("run_status", status))
     except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
         shutil.rmtree(resolved, ignore_errors=True)
-        print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
+        print(f"cannot compile run: {_compile_refusal(run, exc)}", file=sys.stderr)
         return 1
     print(f"compiled run: {args.run_id}")
     return 0

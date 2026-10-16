@@ -468,9 +468,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_a_conditional_field_is_refused_when_its_selector_is_omitted(self) -> None:
         cases = (
-            {"architecture": "wan", "convrot_int8_bwd": True},
+            {"architecture": "wan", "convrot_int8_bwd": "bf16"},
             {"architecture": "wan", "gradient_checkpointing_cpu_offload": True},
-            {"architecture": "krea2", "convrot_int8_bwd": True},
+            {"architecture": "krea2", "convrot_int8_bwd": "bf16"},
             {"architecture": "krea2", "gradient_checkpointing_cpu_offload": True},
         )
         for config in cases:
@@ -478,7 +478,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "not applicable"):
                     validate_backend_config({"backend": {"name": "musubi-tuner", "config": config}})
         validate_backend_config({"backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
-            "architecture": "krea2", "convrot_int8": True, "convrot_int8_bwd": True,
+            "architecture": "krea2", "convrot_int8": True, "convrot_int8_bwd": "bf16",
         })}})
 
     def test_ai_toolkit_legacy_dataset_selectors_name_manifest_migrations(self) -> None:
@@ -562,7 +562,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         invalid = (
             ({"batch_size": 2}, r"minimax_h3.*batch_size=1"),
-            ({"batch_size": True}, r"minimax_h3.*batch_size=1"),
+            ({"batch_size": True}, r"take a value, not true or false: batch_size=True"),
             ({"resolution": [960, 550]}, r"minimax_h3.*resolution.*multiples of 32"),
             ({"resolution": [960]}, r"minimax_h3.*resolution.*multiples of 32"),
             (

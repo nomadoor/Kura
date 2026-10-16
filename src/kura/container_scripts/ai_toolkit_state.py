@@ -335,9 +335,15 @@ def publish_generation(process, step, spec):
     except Exception as exc:
         fail(f"cannot inspect paired optimizer/RNG state: {exc}")
     # The image's patch names a step save by the optimizer updates it holds (upstream named it
-    # one below, by the 0-based iteration index); a mismatch means that patch is missing.
+    # one below, by the 0-based iteration index). A save named one above is that patch missing;
+    # fewer updates than the name otherwise means the trainer skipped iterations, as it does up
+    # to three times after an out-of-memory error.
     if step is not None and int(step) != logical_step:
-        fail(f"step save {weight.name} is named for step {int(step)} but holds {logical_step} completed optimizer updates")
+        cause = (
+            "this image lacks Kura's step-naming patch" if int(step) == logical_step - 1
+            else "the trainer skipped an update, as it does after an out-of-memory error; lower memory use and train again"
+        )
+        fail(f"step save {weight.name} is named for step {int(step)} but holds {logical_step} completed optimizer updates: {cause}")
     state_root = pathlib.Path(spec["state_root"])
     state_root.mkdir(parents=True, exist_ok=True)
     destination = state_root / f"{spec['run_id']}-step{logical_step:08d}-state"

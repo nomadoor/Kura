@@ -127,11 +127,15 @@ class ForwardedValueTests(unittest.TestCase):
         validate_backend_config({**lllite, "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", lllite["backend"]["config"])}})
         self.assertNotIn("network_dim", with_required("sd-scripts", lllite["backend"]["config"]))
 
-    def test_a_resume_missing_a_required_value_is_sent_to_fork_from_weight(self) -> None:
+    def test_a_resume_that_does_not_compile_is_sent_to_fork_from_weight(self) -> None:
+        from kura.cli import _compile_refusal
+
         run = ARGV_RUNS["musubi-tuner"]({"learning_rate": 1e-4, "network_dim": 4, "network_alpha": 4})
-        run["continuation"] = {"mode": "resume", "source": {"artifact_id": "state-1"}, "additional_steps": 1}
-        with self.assertRaisesRegex(ValueError, "requires optimizer_type .*cannot be resumed; write them and create a Fork from Weight instead"):
+        with self.assertRaisesRegex(ValueError, "requires optimizer_type") as caught:
             validate_backend_config(run)
+        self.assertNotIn("Fork from Weight", _compile_refusal(run, caught.exception))
+        run["continuation"] = {"mode": "resume"}
+        self.assertIn("create a Fork from Weight and fix the settings there", _compile_refusal(run, caught.exception))
         # Planning the frozen manifest of such a run reads it as it is.
         validate_backend_config(run, frozen=True)
 
@@ -140,7 +144,10 @@ class ForwardedValueTests(unittest.TestCase):
         self.assertEqual(sd_scripts["network_dim"]["when_any"], [{"mode": ["lora"]}])
         self.assertIn("library/args.py:87", sd_scripts["learning_rate"]["otherwise"])
         musubi = backend_capabilities("musubi-tuner")["required_fields"]
-        self.assertEqual(musubi["timestep_sampling"]["when_any"], [{"architecture": ["flux2", "wan", "krea2", "hidream_o1"]}])
+        self.assertIn("qwen_image", musubi["timestep_sampling"]["when_any"][0]["architecture"])
+        self.assertNotIn("ideogram4", musubi["timestep_sampling"]["when_any"][0]["architecture"])
+        # A required field with no clause of its own is required wherever its condition applies.
+        self.assertEqual(musubi["h3_guidance_loss_scale"]["when_any"], [{"architecture": ["minimax_h3"], "h3_loss_method": ["guidance"]}])
         self.assertEqual(backend_capabilities("ai-toolkit")["required_fields"], {})
 
     def test_the_capabilities_text_lists_the_required_values_the_refusal_points_to(self) -> None:

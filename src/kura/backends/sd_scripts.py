@@ -22,15 +22,26 @@ from kura.training_artifacts import EPOCH_SAVE_FLAGS, managed_state_save_args, r
 from kura.run_envelope import backend_config, resume_intent, validated_recipe
 
 
+# Spellings a run compiled before selectors had one spelling may hold; compile refuses them now,
+# but the training-state contract of such a run still in flight reads them as these.
+_RECORDED_ARCHITECTURES = {"sd_1_5": "sd15", "stable_diffusion_1_5": "sd15", "stable_diffusion15": "sd15", "sdxl_1_0": "sdxl", "flux": "flux1", "flux_1": "flux1"}
+_RECORDED_MODES = {"lllite": "controlnet_lllite"}
+
+
+def _recorded_selector(value: str, aliases: dict[str, str]) -> str:
+    normalized = value.lower().replace("-", "_").replace(".", "_")
+    return aliases.get(normalized, normalized)
+
+
 def training_state_contract_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     native = backend_config(run, "sd-scripts")
     authored_architecture = native.get("architecture")
     architecture = (
         ""
         if authored_architecture is None or (isinstance(authored_architecture, str) and not authored_architecture.strip())
-        else sd_scripts_architecture(run)
+        else _recorded_selector(sd_scripts_architecture(run), _RECORDED_ARCHITECTURES)
     )
-    mode = sd_scripts_mode(run)
+    mode = _recorded_selector(sd_scripts_mode(run), _RECORDED_MODES)
     common = ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl")
     if (architecture, mode) in {("sd15", "lora"), ("sdxl", "lora"), ("flux1", "lora")}:
         return {
@@ -84,7 +95,7 @@ ENTRYPOINTS = {
 NETWORK_MODULES = {"sd15": "networks.lora", "sdxl": "networks.lora", "flux1": "networks.lora_flux", "anima": "networks.lora_anima"}
 # --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps
 # (library/optimizer.py:509 and train_network.py:1206 at 37a1cbb), so they are owned too.
-OWNED_FLAGS = EPOCH_SAVE_FLAGS | {"--lr_scheduler_type", "--max_train_epochs"} | {
+_COMMAND_FLAGS = EPOCH_SAVE_FLAGS | {"--lr_scheduler_type", "--max_train_epochs"} | {
     "--dataset_config", "--pretrained_model_name_or_path", "--clip_l", "--t5xxl", "--ae", "--qwen3", "--vae",
     "--llm_adapter_path", "--t5_tokenizer_path", "--network_module", "--network_dim", "--network_alpha",
     "--learning_rate", "--optimizer_type", "--lr_scheduler", "--mixed_precision", "--max_train_steps", "--seed",
@@ -123,6 +134,9 @@ CONFIG_KEYS = {
     "cond_emb_dim", "lllite_mlp_dim", "lllite_target_layers", "lllite_cond_dim", "lllite_cond_resblocks", "lllite_dropout",
     "lllite_multiplier", "lllite_cond_in_channels", "lllite_use_aspp",
 }
+# Flags Kura owns that no declared field names; the flag of a declared field is refused in
+# extra_args by validate_backend_config wherever the field applies.
+OWNED_FLAGS = _COMMAND_FLAGS - {f"--{key}" for key in CONFIG_KEYS}
 BOOLEAN_CONFIG_KEYS = {
     "gradient_checkpointing", "network_train_unet_only", "fp8_base", "cache_latents", "cache_latents_to_disk",
     "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk", "qwen_image_vae_2d", "cpu_offload_checkpointing",

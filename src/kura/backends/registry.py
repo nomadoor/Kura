@@ -10,7 +10,7 @@ from typing import Any, Callable
 from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
-from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
+from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES, musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
@@ -52,7 +52,8 @@ class RequiredField:
 
 
 def _required(field: str, otherwise: str, *clauses: dict[str, tuple[Any, ...]]) -> RequiredField:
-    return RequiredField(field, tuple(tuple(clause.items()) for clause in clauses) or ((),), otherwise)
+    """With no clause, the field is required wherever it applies: always, or where its condition matches."""
+    return RequiredField(field, tuple(tuple(clause.items()) for clause in clauses), otherwise)
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,9 @@ class BackendSurface:
     decided: frozenset[str] = frozenset()
     # Fields with no upstream baseline that an author must write; Kura adds no training default.
     required: tuple[RequiredField, ...] = ()
+    # Whether the backend hands fields to its trainer as argv, where true and false can only mean a
+    # bare flag or none (AI-Toolkit writes them into its YAML config instead).
+    renders_argv: bool = False
 
     @property
     def decided_fields(self) -> frozenset[str]:
@@ -97,6 +101,11 @@ class BackendSurface:
         required = [item.field for item in self.required]
         if len(required) != len(set(required)) or set(required) - self.fields:
             raise ValueError("required backend fields must name distinct declared fields")
+        applies = {item.field: item.when_any for item in self.conditions}
+        object.__setattr__(self, "required", tuple(
+            item if item.when_any else RequiredField(item.field, applies.get(item.field, ((),)), item.otherwise)
+            for item in self.required
+        ))
         choice_fields = [field for field, _ in self.config_value_choices]
         if len(choice_fields) != len(set(choice_fields)) or set(choice_fields) - self.fields:
             raise ValueError("backend config value choices must name distinct declared fields")
@@ -130,7 +139,7 @@ def _compile_ai(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
 
 def _compile_musubi(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
     validate_backend_config(run)
-    return compile_musubi_tuner(run, resolved / "musubi")
+    return compile_musubi_tuner(run, resolved / MUSUBI_RESOLVED_DIR)
 
 
 def _compile_sd_scripts(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
@@ -197,6 +206,7 @@ MUSUBI_SURFACE = BackendSurface(
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only", "weighting_scheme",
     }),
     escape_hatches=frozenset({"command", "extra_args"}),
+    renders_argv=True,
     boolean_fields=frozenset({
         "block_swap_h2d_only", "convrot_int8", "f1",
         "flatten_groups", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te", "fp8_text_encoder", "fp8_vl",
@@ -212,10 +222,20 @@ MUSUBI_SURFACE = BackendSurface(
         _required("optimizer_type", "'', read as AdamW (training/parser_common.py:310)"),
         _required("network_dim", "4 (networks/lora.py:420)"),
         _required("network_alpha", "1 (training/parser_common.py:561)"),
-        _required("timestep_sampling", "sigma (training/parser_common.py:444)", {"architecture": ("flux2", "wan", "krea2", "hidream_o1")}),
-        _required("discrete_flow_shift", "1.0 (training/parser_common.py:464)", {"architecture": ("wan",)}),
-        _required("h3_guidance_loss_scale", "0.0, no guidance loss (minimax_h3_train_network.py:1750)", {"architecture": ("minimax_h3",), "h3_loss_method": ("guidance",)}),
-        _required("h3_guidance_loss_sigma_min", "0.0 (minimax_h3_train_network.py:1764)", {"architecture": ("minimax_h3",), "h3_loss_method": ("guidance",)}),
+        # Upstream's guides train these with shift, flux_shift, or the model's own sampling and
+        # a model-specific shift (docs/<architecture>.md), not the generic sigma and 1.0. Ideogram
+        # 4 (ideogram4_train_network.py:364) and Z-Image's shift (zimage_train_network.py:49) have
+        # their own upstream defaults, so they are declared but not required.
+        _required(
+            "timestep_sampling", "sigma (training/parser_common.py:444)",
+            {"architecture": ("flux2", "wan", "krea2", "hidream_o1", "qwen_image", "zimage", "flux_kontext", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")},
+        ),
+        _required(
+            "discrete_flow_shift", "1.0 (training/parser_common.py:464)",
+            {"architecture": ("wan", "qwen_image", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")},
+        ),
+        _required("h3_guidance_loss_scale", "0.0, no guidance loss (minimax_h3_train_network.py:1750)"),
+        _required("h3_guidance_loss_sigma_min", "0.0 (minimax_h3_train_network.py:1764)"),
     ),
     config_value_choices=(
         ("architecture", tuple(sorted(MUSUBI_ARCHITECTURES))),
@@ -235,7 +255,7 @@ MUSUBI_SURFACE = BackendSurface(
     conditions=(
         _when("convrot_int8_bwd", architecture=("krea2",), convrot_int8=(True,)),
         _when("convrot_int8", architecture=("krea2",)),
-        _when("discrete_flow_shift", architecture=("wan",)),
+        _when("discrete_flow_shift", architecture=("wan", "qwen_image", "zimage", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5", "ideogram4")),
         _when("dit_dtype", architecture=("ideogram4",)),
         _when("f1", architecture=("framepack",)),
         _when("fp8_base", architecture=("flux2", "wan", "krea2", "qwen_image", "zimage", "flux_kontext", "hidream_o1", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")),
@@ -297,7 +317,10 @@ MUSUBI_SURFACE = BackendSurface(
         _when("text_encoder_batch_size", precache=(True,)),
         _when("text_encoder_blocks_to_swap", architecture=("minimax_h3",), precache=(True,)),
         _when("timestep_boundary", architecture=("wan",)),
-        _when("timestep_sampling", architecture=("flux2", "wan", "krea2", "hidream_o1")),
+        _when("timestep_sampling", architecture=(
+            "flux2", "wan", "krea2", "hidream_o1", "qwen_image", "zimage", "flux_kontext", "hunyuan_video",
+            "hunyuan_video_1_5", "framepack", "kandinsky5", "ideogram4",
+        )),
         _when("vae_chunk_size", architecture=("hunyuan_video", "framepack"), precache=(True,)),
         _when_any("vae_dtype", {"architecture": ("flux2",)}, {"architecture": ("ideogram4",), "precache": (True,)}),
         _when("vae_tiling", architecture=("hunyuan_video",), precache=(True,)),
@@ -310,6 +333,7 @@ MUSUBI_SURFACE = BackendSurface(
 SD_SCRIPTS_SURFACE = BackendSurface(
     fields=frozenset(CONFIG_KEYS - {"command", "extra_args"}),
     escape_hatches=frozenset({"command", "extra_args"}),
+    renders_argv=True,
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 1), ("gradient_accumulation_steps", 1)),
     decided=frozenset({"lr_scheduler"}),
@@ -498,27 +522,38 @@ def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> Non
                 " and ".join(f"{selector}=" + "|".join(repr(item) for item in allowed) for selector, allowed in clause)
                 for clause in condition.when_any
             ]
+            unset = sorted({name for clause in condition.when_any for name, _ in clause if native.get(name, defaults.get(name)) is None})
             raise ValueError(
                 f"{adapter.name} backend.config.{condition.field} is not applicable for {selected(condition.when_any)}; "
-                f"it requires " + " or ".join(resolved_clauses)
+                + (f"set backend.config.{', '.join(unset)}, which it depends on; " if unset else "")
+                + f"it requires " + " or ".join(resolved_clauses)
                 + f". Run `kura run capabilities {adapter.name}` for field applicability."
             )
-    applicable = adapter.surface.fields - {item.field for item in adapter.surface.conditions} | {
-        item.field for item in adapter.surface.conditions if matches(item.when_any)
-    }
+    if adapter.surface.renders_argv:
+        # A true/false value for a field that takes a value would become a bare flag or vanish.
+        flagged = sorted(
+            key for key, value in native.items()
+            if isinstance(value, bool) and key in adapter.surface.fields and key not in adapter.surface.boolean_fields
+        )
+        if flagged:
+            raise ValueError(
+                f"{adapter.name} backend.config field(s) take a value, not true or false: "
+                + ", ".join(f"{key}={native[key]!r}" for key in flagged)
+            )
     extra_args = native.get("extra_args")
     if isinstance(extra_args, list):
-        # A field the selected architecture declares has one place: the field, never extra_args.
+        # A declared field has one place, the field, and only where its condition says it applies;
+        # extra_args never sets it, so it cannot reach an architecture the field does not work for.
         shadowed = sorted({
             (argument.split("=", 1)[0], field)
             for argument in extra_args if isinstance(argument, str) and argument.startswith("--")
-            for field in applicable if f"--{field}".startswith(argument.split("=", 1)[0])
+            for field in adapter.surface.fields if f"--{field}".startswith(argument.split("=", 1)[0])
         })
         if shadowed:
             raise ValueError(
                 f"{adapter.name} backend.config.extra_args sets "
                 + ", ".join(f"{flag} (backend.config.{field})" for flag, field in shadowed)
-                + "; write the declared field instead"
+                + "; write the declared field instead, where the field applies"
             )
     if adapter.validate_authored is not None and not frozen:
         adapter.validate_authored(run)
@@ -536,11 +571,6 @@ def validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> Non
                     for item in missing
                 )
                 + ". Kura adds no training default; write the value you chose."
-                + (
-                    " A Resume continues its source exactly, so a source compiled while Kura still filled"
-                    " these values cannot be resumed; write them and create a Fork from Weight instead."
-                    if run.get("continuation") is not None else ""
-                )
                 + f" Run `kura run capabilities {adapter.name}` for required fields."
             )
 

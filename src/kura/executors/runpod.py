@@ -1435,7 +1435,7 @@ sleep infinity
             "logs_path": log_path,
             "workspace_contract": workspace_contract,
             "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
-            "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
+            "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"},
             **kura_provenance(),
         }
         _write_json(realization_path, as_record("realization", realization))
@@ -1470,7 +1470,7 @@ sleep infinity
         "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
         "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer_codes,
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
-        "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, **kura_provenance(),
+        "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"}, **kura_provenance(),
     }
     _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)

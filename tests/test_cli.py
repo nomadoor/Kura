@@ -1962,10 +1962,12 @@ class RunPlanTests(unittest.TestCase):
         self.assertIsNone(_as_positive_int(True))
         self.assertIsNone(_as_positive_int(False))
         self.assertEqual(_as_positive_int("2"), 2)
-        for value in (True, "25", 0):
+        for value in (True, "big", 0):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "a GiB setting must be a positive number"):
                 _configured_gib(value, default=50)
         self.assertEqual(_configured_gib(2.5, default=50), 2.5)
+        # A run an older Kura froze may hold the number as text; compile refuses that form.
+        self.assertEqual(_configured_gib("25", default=50), 25.0)
         with self.assertRaisesRegex(ValueError, "a GiB setting must be a positive number"):
             _configured_gib(False, default=50)
 
@@ -4302,8 +4304,8 @@ class MusubiBackendTests(unittest.TestCase):
             "--blocks_to_swap", "2", "--blocks_to_swap=3",
         ]
 
-        with self.assertRaisesRegex(ValueError, "adapter-owned flag.*--blocks_to_swap"):
-            command_musubi_tuner(run)
+        with self.assertRaisesRegex(ValueError, r"extra_args sets --blocks_to_swap \(backend.config.blocks_to_swap\)"):
+            validate_backend_config(run)
 
     def test_musubi_extra_args_cannot_override_adapter_owned_flags_or_abbreviate_them(self) -> None:
         for extra_args in (
@@ -4315,23 +4317,24 @@ class MusubiBackendTests(unittest.TestCase):
             with self.subTest(extra_args=extra_args):
                 run = self._run()
                 run["backend"]["config"]["extra_args"] = extra_args
-                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag|write the declared field instead"):
+                    validate_backend_config(run)
                     command_musubi_tuner(run)
 
-    def test_musubi_extra_args_are_refused_only_where_the_architecture_declares_the_field(self) -> None:
-        # flux2 declares timestep_sampling and weighting_scheme, written or not.
-        for extra_args in (["--timestep_sampling", "sigmoid"], ["--timestep_samp=sigmoid"], ["--weighting_scheme=none"]):
+    def test_musubi_extra_args_never_set_a_declared_field(self) -> None:
+        # A declared field, applicable here or not, is never set through extra_args.
+        for extra_args in (["--timestep_sampling", "sigmoid"], ["--timestep_samp=sigmoid"], ["--weighting_scheme=none"], ["--discrete_flow_shift", "2.5"]):
             with self.subTest(extra_args=extra_args):
                 run = self._run()
                 run["backend"]["config"]["extra_args"] = extra_args
                 with self.assertRaisesRegex(ValueError, "write the declared field instead"):
                     validate_backend_config(run)
-        # It does not declare discrete_flow_shift, so the native flag passes through.
+        # A flag no field declares passes through.
         run = self._run()
-        run["backend"]["config"]["extra_args"] = ["--discrete_flow_shift", "2.5"]
+        run["backend"]["config"]["extra_args"] = ["--sigmoid_scale", "2.5"]
         validate_backend_config(run)
         command = command_musubi_tuner(run)
-        self.assertIn("--discrete_flow_shift 2.5", " ".join(command["argv"]))
+        self.assertIn("--sigmoid_scale 2.5", " ".join(command["argv"]))
 
     def test_musubi_resume_rejects_invalid_state_save_cadence_cleanly(self) -> None:
         for cadence in ("10", True, 0, -1):
