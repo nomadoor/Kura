@@ -3969,6 +3969,46 @@ class RunPodPullSelectionTests(unittest.TestCase):
             transfer.assert_not_called()
             self.assertTrue(pulled[0]["skipped"])
 
+    def test_pull_places_a_nested_checkpoint_where_the_pod_has_it_and_skips_it_next_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            payload = self._fake_safetensors()
+            item = {"name": "example_000000002.safetensors", "relative": "example/example_000000002.safetensors",
+                    "path": "/workspace/runs/example/outputs/example/example_000000002.safetensors", "step": 2, "size": len(payload), "mtime_ns": 10}
+
+            def fake_transfer(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                Path(command[-1]).write_bytes(payload)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer) as transfer, \
+                 patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(item)]):
+                pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[dict(item)])
+                _record_pulled_outputs(run_dir, pulled, emit_event=False)
+                again = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[dict(item)])
+            self.assertEqual(pulled[0]["path"], "outputs/example/example_000000002.safetensors")
+            self.assertEqual((run_dir / pulled[0]["path"]).read_bytes(), payload)
+            self.assertEqual(transfer.call_count, 1)
+            self.assertTrue(again[0]["skipped"])
+
+            # The final collection reuses the mirrored copy instead of transferring it again.
+            snapshot_item = {"path": "outputs/example/example_000000002.safetensors", "size": len(payload), "mtime_ns": 10,
+                             "sha256": hashlib.sha256(payload).hexdigest()}
+            self.assertEqual(
+                _local_reusable_snapshot_source(run_dir, snapshot_item, remote_root="/workspace/runs/example"),
+                run_dir / "outputs" / "example" / "example_000000002.safetensors",
+            )
+
+    def test_a_remote_name_a_windows_host_reads_as_a_separator_or_drive_is_refused(self) -> None:
+        from kura.run_commands.runpod_ssh import _remote_output_relative
+
+        for relative in ("..\\x.safetensors", "C:x.safetensors", "a/../x.safetensors", "/abs.safetensors"):
+            with self.subTest(relative=relative), self.assertRaisesRegex(ValueError, "leaves the outputs directory"):
+                _remote_output_relative({"name": "x.safetensors", "relative": relative})
+
     def test_pull_replaces_same_size_copy_when_remote_mtime_changed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
@@ -9142,145 +9182,132 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(sum(item.get("event") == "run_recovery_artifacts_downloaded" for item in events), 1)
 
     @posix_only(POSIX_PATHS)
-    def test_run_download_normalizes_ai_toolkit_output_directory(self) -> None:
+    def _ai_toolkit_download_fixture(self, root: Path, run_id: str, pod_files: dict[str, str]) -> Path:
+        (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+        run_dir = root / "runs" / run_id
+        pod_outputs = run_dir / "downloads" / run_id / "outputs"
+        realization_dir = run_dir / "downloads" / run_id / "realizations"
+        resolved_dir = run_dir / "resolved"
+        realization_dir.mkdir(parents=True)
+        resolved_dir.mkdir(parents=True)
+        (resolved_dir / "manifest.lock.yaml").write_text(
+            f"id: {run_id}\ntype: train\nbackend: {{name: ai-toolkit}}\nrecipe: {{steps: 1, seed: 1}}\n",
+            encoding="utf-8",
+        )
+        (resolved_dir / "backend-command.lock.json").write_text("{}", encoding="utf-8")
+        for relative, content in pod_files.items():
+            (pod_outputs / relative).parent.mkdir(parents=True, exist_ok=True)
+            (pod_outputs / relative).write_text(content, encoding="utf-8")
+        (realization_dir / "remote-exit-20260101.json").write_text(
+            json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}),
+            encoding="utf-8",
+        )
+        (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+        return run_dir
+
+    def _download(self, root: Path, run_id: str) -> int:
+        previous = Path.cwd()
+        os.chdir(root)
+        try:
+            return cmd_run_download(argparse.Namespace(run_id=run_id, force=False))
+        finally:
+            os.chdir(previous)
+
+    def test_run_download_keeps_the_ai_toolkit_layout_the_trainer_wrote(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            run_dir = root / "runs" / "example"
-            output_dir = run_dir / "downloads" / "example" / "outputs" / "example"
-            realization_dir = run_dir / "downloads" / "example" / "realizations"
-            resolved_dir = run_dir / "resolved"
-            output_dir.mkdir(parents=True)
-            realization_dir.mkdir(parents=True)
-            resolved_dir.mkdir()
-            (resolved_dir / "manifest.lock.yaml").write_text(
-                "id: example\ntype: train\nbackend: {name: ai-toolkit}\nrecipe: {steps: 1, seed: 1}\n",
-                encoding="utf-8",
-            )
-            (resolved_dir / "backend-command.lock.json").write_text("{}", encoding="utf-8")
-            artifacts = {
-                "example.safetensors": "weight",
-                "config.yaml": "config",
-                "optimizer.pt": "optimizer",
+            pod_files = {
+                "example/example.safetensors": "weight",
+                "example/config.yaml": "config",
+                "example/optimizer.pt": "optimizer",
+                "artifact.safetensors": "outer",
+                "example/artifact.safetensors": "inner",
             }
-            for name, content in artifacts.items():
-                (output_dir / name).write_text(content, encoding="utf-8")
-            legacy_dir = run_dir / "outputs" / "example"
-            legacy_dir.mkdir(parents=True)
-            for name, content in artifacts.items():
-                (legacy_dir / name).write_text(content, encoding="utf-8")
-            (realization_dir / "remote-exit-20260101.json").write_text(
-                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}),
-                encoding="utf-8",
-            )
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "running", "pod_id": "pod-1"}),
-                encoding="utf-8",
-            )
+            run_dir = self._ai_toolkit_download_fixture(root, "example", pod_files)
+            (run_dir / "outputs" / "example").mkdir(parents=True)
+            (run_dir / "outputs" / "example" / "keep.txt").write_text("user file", encoding="utf-8")
 
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
-            finally:
-                os.chdir(previous)
+            self.assertEqual(self._download(root, "example"), 0)
 
-            self.assertEqual(code, 0)
-            for name, content in artifacts.items():
-                self.assertEqual((run_dir / "outputs" / name).read_text(encoding="utf-8"), content)
-                self.assertEqual((output_dir / name).read_text(encoding="utf-8"), content)
-            self.assertFalse(legacy_dir.exists())
+            # Every file keeps its place, as on Docker: nothing is moved, so nothing can collide.
+            for relative, content in pod_files.items():
+                self.assertEqual((run_dir / "outputs" / relative).read_text(encoding="utf-8"), content)
+            self.assertFalse((run_dir / "outputs" / "example.safetensors").exists())
+            self.assertEqual((run_dir / "outputs" / "example" / "keep.txt").read_text(encoding="utf-8"), "user file")
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual(
-                status["outputs"],
-                ["outputs/config.yaml", "outputs/example.safetensors", "outputs/optimizer.pt"],
-            )
+            self.assertEqual(status["outputs"], sorted(f"outputs/{relative}" for relative in pod_files))
 
-    def test_run_download_rejects_ai_toolkit_output_collision(self) -> None:
+    def test_collecting_again_keeps_the_flat_paths_an_older_kura_recorded(self) -> None:
+        from kura.artifact_publication import publish_outputs
+
+        contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
+        pod_files = {"example/example.safetensors": "weight", "example/config.yaml": "config"}
+        with tempfile.TemporaryDirectory() as directory, patch("kura.artifact_publication.validate_safetensors_file"):
+            root = Path(directory)
+            run_dir = self._ai_toolkit_download_fixture(root, "example", pod_files)
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"output_contract": contract}), encoding="utf-8")
+            # An older Kura linked the weights to the top and recorded those paths, then the
+            # collection was blocked; the record is immutable.
+            for relative, content in pod_files.items():
+                (run_dir / "outputs" / Path(relative).name).parent.mkdir(parents=True, exist_ok=True)
+                (run_dir / "outputs" / Path(relative).name).write_text(content, encoding="utf-8")
+            publish_outputs(run_dir, "r1", contract)
+            (run_dir / "status.json").write_text(json.dumps({
+                "state": "recovery_required", "pod_id": "pod-1", "last_realization": "realizations/r1.json", "publication_state": "blocked",
+            }), encoding="utf-8")
+
+            self.assertEqual(self._download(root, "example"), 0)
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["publication_state"], "completed")
+            self.assertEqual(status["outputs"], ["outputs/config.yaml", "outputs/example.safetensors"])
+            self.assertFalse((run_dir / "outputs" / "example").exists())
+
+    def test_collecting_again_refuses_two_files_for_one_recorded_flat_path(self) -> None:
+        from kura.artifact_publication import publish_outputs
+
+        contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
+        pod_files = {"example.safetensors": "outer", "example/example.safetensors": "inner"}
+        with tempfile.TemporaryDirectory() as directory, patch("kura.artifact_publication.validate_safetensors_file"):
+            root = Path(directory)
+            run_dir = self._ai_toolkit_download_fixture(root, "example", pod_files)
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"output_contract": contract}), encoding="utf-8")
+            (run_dir / "outputs").mkdir(parents=True)
+            (run_dir / "outputs" / "example.safetensors").write_text("outer", encoding="utf-8")
+            publish_outputs(run_dir, "r1", contract)
+            (run_dir / "status.json").write_text(json.dumps({
+                "state": "recovery_required", "pod_id": "pod-1", "last_realization": "realizations/r1.json", "publication_state": "blocked",
+            }), encoding="utf-8")
+
+            # Neither file is dropped in silence: the collection is refused and a person decides.
+            self.assertEqual(self._download(root, "example"), 3)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertIn("collide", status["publication_error"])
+            self.assertEqual((run_dir / "outputs" / "example.safetensors").read_text(encoding="utf-8"), "outer")
+
+    def test_a_run_id_ending_in_state_publishes_the_same_outputs_on_docker_and_runpod(self) -> None:
+        from kura.artifact_publication import publish_outputs
+
+        run_id = "vivi-state"
+        pod_files = {
+            f"{run_id}/{run_id}.safetensors": "weight",
+            f"{run_id}/{run_id}_000000002.safetensors": "checkpoint",
+            f"{run_id}-step00000002-state/optimizer.pt": "state",
+        }
+        expected = [f"outputs/{run_id}/{run_id}.safetensors", f"outputs/{run_id}/{run_id}_000000002.safetensors"]
+        contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            run_dir = root / "runs" / "example"
-            output_root = run_dir / "downloads" / "example" / "outputs"
-            realization_dir = run_dir / "downloads" / "example" / "realizations"
-            resolved_dir = run_dir / "resolved"
-            (output_root / "example").mkdir(parents=True)
-            realization_dir.mkdir(parents=True)
-            resolved_dir.mkdir()
-            (resolved_dir / "manifest.lock.yaml").write_text(
-                "id: example\ntype: train\nbackend: {name: ai-toolkit}\nrecipe: {steps: 1, seed: 1}\n",
-                encoding="utf-8",
-            )
-            (output_root / "artifact.safetensors").write_text("outer", encoding="utf-8")
-            (output_root / "example" / "artifact.safetensors").write_text("inner", encoding="utf-8")
-            (realization_dir / "remote-exit-20260101.json").write_text(
-                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}),
-                encoding="utf-8",
-            )
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "running", "pod_id": "pod-1"}),
-                encoding="utf-8",
-            )
-
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
-            finally:
-                os.chdir(previous)
-
-            # The collision is in the snapshot itself: collected, nothing published, and a person decides.
-            self.assertEqual(code, 3)
-            self.assertFalse((run_dir / "outputs" / "artifact.safetensors").exists())
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual(status["state"], "recovery_required")
-            self.assertIn("collide", status["publication_error"])
-
-    def test_run_download_preserves_modified_ai_toolkit_legacy_directory(self) -> None:
-        for scenario in ("extra", "modified"):
-            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-                run_dir = root / "runs" / "example"
-                output_dir = run_dir / "downloads" / "example" / "outputs" / "example"
-                realization_dir = run_dir / "downloads" / "example" / "realizations"
-                resolved_dir = run_dir / "resolved"
-                legacy_dir = run_dir / "outputs" / "example"
-                output_dir.mkdir(parents=True)
-                realization_dir.mkdir(parents=True)
-                resolved_dir.mkdir()
-                legacy_dir.mkdir(parents=True)
-                (resolved_dir / "manifest.lock.yaml").write_text(
-                    "id: example\ntype: train\nbackend: {name: ai-toolkit}\nrecipe: {steps: 1, seed: 1}\n",
-                    encoding="utf-8",
-                )
-                (resolved_dir / "backend-command.lock.json").write_text("{}", encoding="utf-8")
-                (output_dir / "example.safetensors").write_text("native", encoding="utf-8")
-                legacy_content = "changed" if scenario == "modified" else "native"
-                (legacy_dir / "example.safetensors").write_text(legacy_content, encoding="utf-8")
-                if scenario == "extra":
-                    (legacy_dir / "keep.txt").write_text("user file", encoding="utf-8")
-                (realization_dir / "remote-exit-20260101.json").write_text(
-                    json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}),
-                    encoding="utf-8",
-                )
-                (run_dir / "status.json").write_text(
-                    json.dumps({"state": "running", "pod_id": "pod-1"}),
-                    encoding="utf-8",
-                )
-
-                previous = Path.cwd()
-                os.chdir(root)
-                try:
-                    code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
-                finally:
-                    os.chdir(previous)
-
-                self.assertEqual(code, 0)
-                self.assertEqual((run_dir / "outputs" / "example.safetensors").read_text(encoding="utf-8"), "native")
-                self.assertEqual((legacy_dir / "example.safetensors").read_text(encoding="utf-8"), legacy_content)
-                if scenario == "extra":
-                    self.assertEqual((legacy_dir / "keep.txt").read_text(encoding="utf-8"), "user file")
+            run_dir = self._ai_toolkit_download_fixture(root, run_id, pod_files)
+            self.assertEqual(self._download(root, run_id), 0)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["outputs"], expected)
+        with tempfile.TemporaryDirectory() as directory, patch("kura.artifact_publication.validate_safetensors_file"):
+            run_dir = Path(directory) / run_id
+            for relative, content in pod_files.items():
+                (run_dir / "outputs" / relative).parent.mkdir(parents=True, exist_ok=True)
+                (run_dir / "outputs" / relative).write_text(content, encoding="utf-8")
+            _, published = publish_outputs(run_dir, "r1", contract)
+            self.assertEqual(published, expected)
 
     def test_run_download_cleans_partial_output_when_publication_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

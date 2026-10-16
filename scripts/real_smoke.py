@@ -529,8 +529,8 @@ def verify(workspace: Path, run_id: str) -> dict[str, Any]:
     stdout_path = run_dir / "logs" / "stdout.log"
     log = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.is_file() else ""
     losses = [float(value) for value in _LOSS.findall(log)]
-    # Published outputs as Kura recorded them; local AI-Toolkit nests them
-    # under outputs/<run-id>/.
+    # Published outputs as Kura recorded them; AI-Toolkit nests them under
+    # outputs/<run-id>/ on every executor.
     outputs = sorted(
         run_dir / str(item) for item in status.get("outputs") or []
         if str(item).endswith(".safetensors") and (run_dir / str(item)).is_file()

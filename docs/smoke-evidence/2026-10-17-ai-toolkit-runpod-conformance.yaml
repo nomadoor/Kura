@@ -1,0 +1,33 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-17'
+executor: runpod
+kura_commit: 8d58b75
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit
+  over RunPod, after collected files began keeping the place the trainer wrote them (AI-Toolkit
+  weights below outputs/<run id>/, as on Docker) and the mid-run mirror began listing weights
+  below that folder.
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --runpod --gpu "NVIDIA RTX A4500" --yes
+hardware:
+  gpu: NVIDIA RTX A4500 (COMMUNITY, $0.19/hr)
+executor_source: a806ae7e2b171506a232a186e128494a8fe305f2b50d8511c59b8e80996223ce
+pod_minutes: about 19 across 7 Pods (about $0.06 GPU), every Pod stopped and none left listed
+results:
+  P1: pass
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass (every Pod recorded pod_stopped_at)
+  P7: pass
+  P8: not measured on RunPod
+observations:
+  - every completed run recorded its weights as outputs/<run id>/..., the layout the Docker pass records
+  - the mid-run mirror pulled each run's step saves from outputs/<run id>/ (before this change it pulled none for AI-Toolkit)
+  - a Resume mirrored only its own saves above the source step, not the source weight the Resume stages for the trainer
+earlier_attempt: >-
+  A pass on an NVIDIA A40 one commit earlier had two Pods whose SSH never became ready (their jobs
+  never started; Kura deleted both Pods), so it failed P1 and could not check P3. Its completed
+  Resume showed the mid-run mirror copying the staged source weight as a save; commit 8d58b75
+  fixed that before this pass.
+runs: [20261017-0007_conf-ai-one-control_a94d, 20261017-0015_conf-ai-one-control-2_bfac, 20261017-0036_conf-ai-one-split_e445, 20261017-0052_conf-ai-one-resume_340f, 20261017-0053_conf-ai-multi-fresh_9008, 20261017-0055_conf-ai-multi-split_619c, 20261017-0058_conf-ai-multi-resume_1d8e]

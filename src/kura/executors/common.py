@@ -772,7 +772,7 @@ def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state
                 for path in sorted(outputs_dir.rglob("*"))
                 if path.is_file()
                 and not path.is_symlink()
-                and not is_training_state_output(path.relative_to(outputs_dir))
+                and not is_training_state_output(path.relative_to(outputs_dir), run_dir.name)
             ]
             if outputs:
                 status["outputs"] = outputs

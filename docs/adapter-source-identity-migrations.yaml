@@ -8,6 +8,99 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: one-output-layout-collision-runpod-executor-2026-10-17
+    executor: runpod
+    reason: 'A collection that would place two Pod files at one path, which can happen only when a realization''s publication record already names a top-of-outputs path an older Kura linked and the Pod holds a file at both places, is refused and left for a person instead of keeping one of them in silence. No recorded smoke has such a record or such a pair, so each collects exactly as before.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: a806ae7e2b171506a232a186e128494a8fe305f2b50d8511c59b8e80996223ce
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: ee225a20430047ad704dfc81c1b89c9ecc8cffdc5d1f1fa901738a43dd7364dd
+  - id: one-output-layout-runpod-executor-2026-10-16
+    executor: runpod
+    reason: 'A collected run''s files keep the place the trainer gave them on the Pod, as on Docker: an AI-Toolkit run''s weights stay below outputs/<run id>/ instead of being linked to the top of the outputs directory, unless the realization''s publication record already names the top paths an older Kura linked. The mid-run mirror lists weights below that folder too, places each where the Pod has it, and records it by that path, so an AI-Toolkit checkpoint is mirrored and then reused by the final collection like every other backend''s. A folder named for the run is never read as a training-state directory, so a run ID ending in -state publishes its weights. sd-scripts and Musubi Tuner runs, whose weights sit at the top of outputs/, collect and mirror exactly as before. A recorded AI-Toolkit smoke trains, transfers, verifies, and publishes the same files with the same content, now at outputs/<run id>/ (which status.outputs records) and with its step saves also mirrored during training; a Resume''s staged source weight is not mirrored as a save.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 722947392ee5469e6be7879dc15d8655039302eea7336a48062b7493aee721c5
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: a806ae7e2b171506a232a186e128494a8fe305f2b50d8511c59b8e80996223ce
   - id: plan-reports-checkpoint-count-sd-scripts-2026-10-16
     backend: sd-scripts
     reason: 'The plan no longer refuses a run for its checkpoint count or for an undeclared sd-scripts disk cache; it reports the count and warns about the cache, and the launch disk check still budgets every checkpoint. The two retired safety keys are refused like any key that is not a training run setting and dropped from derived runs. Every recorded smoke passed those checks or set them aside, and its trainer command, transfer, training, and outputs are unchanged.'
