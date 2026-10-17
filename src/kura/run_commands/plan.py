@@ -223,9 +223,11 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
             "artifacts": _model_artifact_filenames(requirements),
             "requirements": requirements,
         },
-        "training": {key: _plan_value(value) for key, value in display.items() if key not in {"checkpoint", "memory"}},
+        "training": {key: _plan_value(value) for key, value in display.items() if key not in {"checkpoint", "memory", "effective_settings"}},
         "memory": display.get("memory") or {},
         "checkpoint": display.get("checkpoint") or {},
+        # The trainer settings and where each came from, when the adapter reports them.
+        "settings": display.get("effective_settings"),
     }
 
 
@@ -1608,6 +1610,20 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             if isinstance(values, dict) and values:
                 lines.append(f"  {section}")
                 _append_mapping(lines, values, indent=4)
+        settings = resources.get("settings")
+        if isinstance(settings, dict):
+            lines.append("  trainer settings (authored, or the pinned upstream UI baseline that fills what the run leaves unset)")
+            if settings.get("error"):
+                _append_kv(lines, "error", settings["error"], indent=4)
+            else:
+                _append_kv(lines, "baseline", f"entry {_format_plan_value(settings.get('entry'))}, commit {_format_plan_value(settings.get('commit'))}", indent=4)
+                for section in ("train", "model"):
+                    rows = settings.get(section) if isinstance(settings.get(section), dict) else {}
+                    for key, row in rows.items():
+                        if isinstance(row, dict):
+                            value = row.get("value")
+                            shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                            lines.append(f"    {section}.{key}  {shown}  {row.get('source')}")
     downloads = payload.get("model_downloads") if isinstance(payload.get("model_downloads"), dict) else {}
     download_items = downloads.get("items") if isinstance(downloads.get("items"), list) else []
     unknown_downloads = downloads.get("unknown") if isinstance(downloads.get("unknown"), list) else []

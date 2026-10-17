@@ -82,3 +82,35 @@ def select_baseline_entry(model_arch: str, model_base: object) -> tuple[str, dic
                 "set model_arch to the entry you train, or point model.base at its model"
             )
     return name, entry
+
+
+def baseline_facts(model_arch_values: tuple[str, ...]) -> dict[str, Any]:
+    """The pinned UI baseline entry each ``model_arch`` value selects, for `kura run capabilities`.
+
+    The baseline is what the pinned upstream UI builds for an architecture, not a choice Kura or the
+    run made (docs/adr/upstream-training-baseline.md). A value with no entry maps to None; a value
+    several entries train maps to the refusal compile gives.
+    """
+    payload = load_baseline()
+    by_arch: dict[str, dict[str, Any] | None] = {}
+    for value in model_arch_values:
+        try:
+            selected = select_baseline_entry(value, None)
+        except ValueError as exc:
+            by_arch[value] = {"error": str(exc)}
+            continue
+        if selected is None:
+            by_arch[value] = None
+            continue
+        name, entry = selected
+        by_arch[value] = {
+            "entry": name,
+            "name_or_path": entry.get("name_or_path"),
+            **{section: dict(entry.get(section) or {}) for section in BASELINE_KEYS},
+        }
+    return {
+        "label": "pinned upstream UI baseline",
+        "commit": payload["upstream"]["commit"],
+        "image": payload["upstream"]["image"],
+        "model_arch": by_arch,
+    }

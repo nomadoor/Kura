@@ -9,16 +9,17 @@ from typing import Any
 
 from kura.backends.sd_scripts_datasets import (
     display_sd_scripts_dataset_config,
+    validate_sd_scripts_dataset_config,
     write_sd_scripts_dataset_config,
 )
-from kura.backends.sd_scripts_models import sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
+from kura.backends.sd_scripts_models import OPTIONAL_ROLES, sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
 from kura.backends.shared import _extra_args as _shared_extra_args, append_config_args, argv_value, _reject_owned_extra_args, _script_command, _truthy, state_runner_argv, write_state_runner
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_yaml
 from kura.secrets import is_secret_name
 from kura.training_artifacts import EPOCH_SAVE_FLAGS, managed_state_save_args, require_constant_scheduler_for_resume, resume_steps, run_output_name, training_state_managed, training_state_payload
-from kura.run_envelope import backend_config, resume_intent, validated_recipe
+from kura.run_envelope import SettingsRefused, backend_config, resume_intent, validated_recipe
 
 
 # Spellings a run compiled before selectors had one spelling may hold; compile refuses them now,
@@ -91,6 +92,7 @@ ENTRYPOINTS = {
     ("anima", "lora"): "anima_train_network.py",
     ("anima", "controlnet_lllite"): "anima_train_control_net_lllite.py",
 }
+_OPTIONAL_ROLE_FLAGS = {"vae": "--vae", "llm_adapter": "--llm_adapter_path", "t5_tokenizer": "--t5_tokenizer_path"}
 NETWORK_MODULES = {"sd15": "networks.lora", "sdxl": "networks.lora", "flux1": "networks.lora_flux", "anima": "networks.lora_anima"}
 # --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps
 # (library/optimizer.py:509 and train_network.py:1206 at 37a1cbb), so they are owned too.
@@ -204,6 +206,33 @@ def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> 
         raise ValueError(f"sd-scripts {architecture} text-encoder caching requires network_train_unet_only=true")
 
 
+def validate_sd_scripts_authored(run: dict[str, Any]) -> None:
+    """Refuse every independent problem of a built-in run's settings at once: its dataset_config,
+    its selector combination, and its model roles. An architecture or mode that does not name a
+    built-in entrypoint stops first, since the other checks read it. command_sd_scripts calls the
+    same checks again at compile."""
+    native = sd_scripts_native(run)
+    if native.get("command") is not None:
+        return
+    architecture, mode = sd_scripts_architecture(run), sd_scripts_mode(run)
+    if (architecture, mode) not in ENTRYPOINTS:
+        _validate_selector(native, architecture, mode)
+    problems: list[str] = []
+    for check in (
+        lambda: validate_sd_scripts_dataset_config(run),
+        lambda: _validate_selector(native, architecture, mode),
+        lambda: sd_scripts_model_paths(run),
+    ):
+        try:
+            check()
+        except ValueError as exc:
+            problems.append(str(exc))
+    if len(problems) == 1:
+        raise SettingsRefused(problems[0])
+    if problems:
+        raise SettingsRefused(f"{len(problems)} problems: " + " ".join(f"({index}) {problem.rstrip('.')}." for index, problem in enumerate(problems, 1)))
+
+
 def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict[str, str], output_dir: str, output_name: str) -> list[str]:
     architecture, mode = sd_scripts_architecture(run), sd_scripts_mode(run)
     recipe = validated_recipe(run, required=True)
@@ -229,17 +258,15 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
     append_config_args(args, native, "learning_rate", "optimizer_type", "lr_scheduler", "mixed_precision")
     if architecture in ("sd15", "sdxl"):
         args.extend(["--pretrained_model_name_or_path", paths["base"], "--network_module", NETWORK_MODULES[architecture]])
-        if paths.get("vae"):
-            args.extend(["--vae", paths["vae"]])
     elif architecture == "flux1":
         args.extend(["--pretrained_model_name_or_path", paths["dit"], "--clip_l", paths["clip_l"], "--t5xxl", paths["t5xxl"], "--ae", paths["ae"], "--network_module", NETWORK_MODULES[architecture]])
     elif architecture == "anima":
         args.extend(["--pretrained_model_name_or_path", paths["dit"], "--qwen3", paths["qwen3"], "--vae", paths["vae"]])
-        for role, flag in (("llm_adapter", "--llm_adapter_path"), ("t5_tokenizer", "--t5_tokenizer_path")):
-            if paths.get(role):
-                args.extend([flag, paths[role]])
-        if mode == "lora":
-            args.extend(["--network_module", NETWORK_MODULES[architecture]])
+    for role in OPTIONAL_ROLES[(architecture, mode)]:
+        if paths.get(role):
+            args.extend([_OPTIONAL_ROLE_FLAGS[role], paths[role]])
+    if architecture == "anima" and mode == "lora":
+        args.extend(["--network_module", NETWORK_MODULES[architecture]])
     append_config_args(
         args, native,
         "network_dim", "network_alpha", "unet_lr", "text_encoder_lr",

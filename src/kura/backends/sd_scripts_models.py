@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from kura.backends.shared import download_specs_for, model_downloads, recorded_model_source
+from kura.backends.shared import download_specs_for, model_downloads, model_source_facts, recorded_model_source
 from kura.backends.shared import explicit_model_paths as shared_explicit_model_paths
 from kura.container_scripts import script_source
 from kura.provenance import artifact_pinning
@@ -19,7 +19,26 @@ ROLE_CONTRACTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("anima", "lora"): ("dit", "qwen3", "vae"),
     ("anima", "controlnet_lllite"): ("dit", "qwen3", "vae"),
 }
-OPTIONAL_ROLES = {"vae", "llm_adapter", "t5_tokenizer"}
+# Roles the command builder forwards when given (_base_training_args); without one, the trainer
+# runs without that flag.
+OPTIONAL_ROLES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("sd15", "lora"): ("vae",),
+    ("sdxl", "lora"): ("vae",),
+    ("flux1", "lora"): (),
+    ("anima", "lora"): ("llm_adapter", "t5_tokenizer"),
+    ("anima", "controlnet_lllite"): ("llm_adapter", "t5_tokenizer"),
+}
+
+
+def sd_scripts_model_facts() -> dict[str, Any]:
+    """The model roles each built-in entrypoint reads and the entry shapes that name them."""
+    return {
+        "model_roles": {
+            f"architecture={architecture}, mode={mode}": {"required": list(required), "optional": list(OPTIONAL_ROLES[(architecture, mode)])}
+            for (architecture, mode), required in ROLE_CONTRACTS.items()
+        },
+        "model_sources": model_source_facts(),
+    }
 
 
 def sd_scripts_native(run: dict[str, Any]) -> dict[str, Any]:

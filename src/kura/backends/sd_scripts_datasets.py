@@ -238,7 +238,9 @@ def _visible(
 
 
 _SUBSET_NATIVE_FIELDS: dict[str, dict[str, Any]] = {
-    "num_repeats": _visible(_POSITIVE_INTEGER, plan_group="subset"),
+    # Kura's own rule: every subset has a repeat count someone chose, read the way sd-scripts
+    # inherits it (subset, else its dataset block, else general); Kura adds no default.
+    "num_repeats": {**_visible(_POSITIVE_INTEGER, plan_group="subset"), "required": "on the subset, its dataset block, or general"},
     "caption_extension": _CAPTION_EXTENSION,
     "shuffle_caption": _visible(_BOOLEAN, plan_group="caption"),
     "keep_tokens": _visible(_NON_NEGATIVE_INTEGER, plan_group="caption"),
@@ -422,7 +424,6 @@ def display_sd_scripts_dataset_config(native: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(raw_subset, dict):
                 continue
             effective = {**effective_dataset, **raw_subset}
-            effective.setdefault("num_repeats", 1)
             subsets.append({
                 "dataset_id": raw_subset.get("dataset_id"),
                 **plan_values(effective, SUBSET_FIELD_SPECS, "subset"),
@@ -469,6 +470,11 @@ def _validated_dataset_config(
             cleaned = _clean_keys(subset, SUBSET_FIELD_SPECS, field=field)
             if "dataset_id" not in cleaned:
                 raise ValueError(f"sd-scripts {field} must name its manifest dataset with dataset_id")
+            if "num_repeats" not in {**general, **native_dataset, **cleaned}:
+                raise ValueError(
+                    f"sd-scripts {field} has no num_repeats; write it on the subset, its dataset block, "
+                    "or dataset_config.general (Kura adds no default)"
+                )
             cleaned_subsets.append(cleaned)
         cleaned_datasets.append((native_dataset, cleaned_subsets))
     _validate_text_cache_caption_controls(native, general, cleaned_datasets)
@@ -524,10 +530,18 @@ def _sd_scripts_authored_subsets(
             f"sd-scripts dataset {dataset_id!r} must map to exactly one explicit authored dataset block"
         )
     native_dataset, authored_subsets = candidates[0]
-    for authored_subset in authored_subsets:
-        if "num_repeats" not in authored_subset:
-            raise ValueError("sd-scripts manifest subset requires an explicit positive num_repeats")
     return deepcopy(native_dataset), deepcopy(authored_subsets)
+
+
+def _sd_scripts_repeat(
+    general: dict[str, Any], dataset: dict[str, Any], subset: dict[str, Any], subset_pointer: str,
+) -> dict[str, Any]:
+    """The subset's effective num_repeats and the native value it is read from, as sd-scripts
+    inherits it: the subset's own, else its dataset block's, else general's."""
+    for values, pointer in ((subset, subset_pointer), (dataset, "/datasets/0"), (general, "/general")):
+        if "num_repeats" in values:
+            return {"repeat": values["num_repeats"], "repeat_pointer": f"{pointer}/num_repeats"}
+    raise ValueError("sd-scripts subset has no num_repeats")
 
 
 def _resolve_sd_scripts_projection_subsets(
@@ -659,8 +673,7 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     "native_pointer": f"{subset_pointer}/image_dir",
                 }],
                 "consumers": consumers,
-                "repeat": authored["num_repeats"],
-                "repeat_pointer": f"{subset_pointer}/num_repeats",
+                **_sd_scripts_repeat(general, native_dataset, authored, subset_pointer),
                 "bindings": report["bindings"],
             })
             all_consumed.extend(report["consumed"])

@@ -105,8 +105,21 @@ def append_config_args(args: list[str], config: dict[str, Any], *keys: str) -> N
 
 
 MODEL_DOWNLOAD_KEYS = ("repo", "filename", "revision", "repo_type")
+MODEL_DOWNLOAD_REQUIRED_KEYS = ("repo", "filename")
 # Spellings an older Kura also read, and the one key each meant.
 _RETIRED_DOWNLOAD_KEYS = {"repo_id": "repo", "file": "filename", "filenames": "filename (a list)"}
+
+
+def model_source_facts() -> dict[str, Any]:
+    """The entry shapes `model_downloads` and `model_paths` read, for `kura run capabilities`."""
+    return {
+        "model_downloads.<role>": {
+            "keys": list(MODEL_DOWNLOAD_KEYS),
+            "required": list(MODEL_DOWNLOAD_REQUIRED_KEYS),
+            "filename": "a file in the repository, or a list whose first file is the one the trainer is pointed at",
+        },
+        "model_paths.<role>": "a file path as the trainer container sees it; it wins over a model_downloads entry for the same role",
+    }
 
 
 def explicit_model_paths(native: dict[str, Any], *, label: str) -> dict[str, str]:
@@ -164,7 +177,7 @@ def model_downloads(
                 if key == "filename" else isinstance(value[key], str) and value[key]
             )
         ]
-        if malformed or "repo" not in value or "filename" not in value:
+        if malformed or any(key not in value for key in MODEL_DOWNLOAD_REQUIRED_KEYS):
             raise ValueError(
                 f"{label} model_downloads.{role} requires repo and filename; repo, revision, and repo_type "
                 "take a non-empty string, filename a non-empty file name or a list of them"

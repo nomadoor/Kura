@@ -20,7 +20,13 @@ that command reads.
   only `dataset.yaml` and `items.jsonl` may be committed.
 - Preserve `datasets` as an array in run intent and locks.
 - Keep role/digest visible for paired/control datasets.
-- Do not add repeats/weights unless explicitly intended.
+- Repeats differ by backend. sd-scripts requires `num_repeats` for every
+  subset, written on the subset, its dataset block, or
+  `dataset_config.general` (the subset's own wins, then the block's); write 1
+  unless the user wants more. For AI-Toolkit and Musubi Tuner, `num_repeats`
+  in `backend.config.dataset_options.<dataset-id>.blocks` is optional and
+  means 1 when unset. Do not raise repeats or add weights unless explicitly
+  intended.
 
 ## Starting from a folder of images
 
