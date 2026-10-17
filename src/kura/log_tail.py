@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import codecs
-import os
 import sys
 import time
 from pathlib import Path
@@ -102,15 +101,6 @@ def _emit(text: str) -> str:
 
 
 def show(path: Path, *, follow: bool = False, interval: float = 1.0) -> int:
-    try:
-        return _show(path, follow=follow, interval=interval)
-    except BrokenPipeError:
-        # The reader went away (`kura run logs ... | head`); that is not an error.
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        return 0
-
-
-def _show(path: Path, *, follow: bool, interval: float) -> int:
     lines, first, total, offset = tail(path)
     for line in lines:
         print(line)

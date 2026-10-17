@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_PINNED_MODEL_ARCHS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_OPTIMIZER_DECIDED, AI_TOOLKIT_PINNED_MODEL_ARCHS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, musubi_disk_cache, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
@@ -19,6 +19,7 @@ from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, p
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs, sd_scripts_model_facts
 from kura.images import BUILD_SOURCES, PINNED_IMAGES
 from kura.run_envelope import COMMON_RECIPE_FIELDS, RETIRED_TRAIN_RUN_KEYS, SettingsRefused, backend_config
+from kura.training_artifacts import LR_SCHEDULER_DECIDED
 
 
 Compile = Callable[[dict[str, Any], Path], dict[str, Any]]
@@ -69,12 +70,14 @@ class BackendSurface:
     selector_defaults: tuple[tuple[str, Any], ...] = ()
     unavailable: tuple[tuple[str, str], ...] = ()
     nested_config_fields: dict[str, dict[str, dict[str, Any]]] | None = None
-    # Selector fields Kura decides from, with their one accepted spelling each; checked first.
+    # Selector fields Kura decides from, with their one accepted spelling each; checked first. The
+    # first is the architecture selector `kura run capabilities --arch` filters by.
     config_value_choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
     # Integer fields Kura decides from and the least value each accepts; anything else is refused.
     integer_minimums: tuple[tuple[str, int], ...] = ()
-    # Other fields Kura decides from, besides the selectors above; escape hatches may not set them.
-    decided: frozenset[str] = frozenset()
+    # Other fields Kura decides from, besides the selectors above, each with what Kura does with it
+    # (a constant its owner shares); escape hatches may not set them.
+    decided: tuple[tuple[str, str], ...] = ()
     # Fields with no upstream baseline that an author must write; Kura adds no training default.
     required: tuple[RequiredField, ...] = ()
     # Whether the backend hands fields to its trainer as argv, where true and false can only mean a
@@ -83,7 +86,7 @@ class BackendSurface:
 
     @property
     def decided_fields(self) -> frozenset[str]:
-        return self.decided | {field for field, _ in self.config_value_choices} | {field for field, _ in self.integer_minimums}
+        return {field for field, _ in self.decided} | {field for field, _ in self.config_value_choices} | {field for field, _ in self.integer_minimums}
 
     def __post_init__(self) -> None:
         if self.boolean_fields - self.fields:
@@ -135,8 +138,9 @@ class BackendAdapter:
     # backend and does not count it (the disk watch covers it).
     disk_cache: Callable[[dict[str, Any]], str | None] | None = None
     general_resolution: Callable[[dict[str, Any]], Any] | None = None
-    # Model facts the adapter already owns (baselines, model roles, entry shapes), for capabilities.
-    model_facts: Callable[[], dict[str, Any]] | None = None
+    # Model facts the adapter already owns (baselines, model roles, entry shapes), for capabilities:
+    # given an architecture selector value, only that architecture's.
+    model_facts: Callable[[str | None], dict[str, Any]] | None = None
     default_ports: tuple[str, ...] = ("22/tcp",)
 
 
@@ -190,7 +194,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
     # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer. Its -1 accumulation
     # (a whole epoch) is refused: Kura counts and resumes by optimizer steps.
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 0), ("gradient_accumulation_steps", 1)),
-    decided=frozenset({"lr_scheduler", "optimizer_type"}),
+    decided=(("lr_scheduler", LR_SCHEDULER_DECIDED), ("optimizer_type", AI_TOOLKIT_OPTIMIZER_DECIDED)),
 )
 
 MUSUBI_SURFACE = BackendSurface(
@@ -223,7 +227,7 @@ MUSUBI_SURFACE = BackendSurface(
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only",
     }),
     integer_minimums=(("save_every_n_steps", 1), ("gradient_accumulation_steps", 1), ("prune_checkpoints_before_step", 1)),
-    decided=frozenset({"lr_scheduler"}),
+    decided=(("lr_scheduler", LR_SCHEDULER_DECIDED),),
     # Generic defaults of the pinned trainer (v0.3.5), shared by every architecture.
     required=(
         _required("learning_rate", "2e-6 (training/parser_common.py:323)"),
@@ -340,7 +344,7 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     renders_argv=True,
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 1), ("gradient_accumulation_steps", 1)),
-    decided=frozenset({"lr_scheduler"}),
+    decided=(("lr_scheduler", LR_SCHEDULER_DECIDED),),
     # Defaults of the pinned trainer (37a1cbb) that no one chose for the model: shared ones, and
     # FLUX.1 and Anima LLLite flow values whose argparse defaults differ from what upstream's own
     # guides train with (docs/flux_train_network.md:144-146, docs/anima_train_control_net_lllite.md:112-113).
@@ -599,39 +603,42 @@ def _validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> No
             )
 
 
-def backend_capabilities(name: Any) -> dict[str, Any]:
+def backend_capabilities(name: Any, arch: str | None = None) -> dict[str, Any]:
+    """A backend's authored surface; with `arch`, a value of its architecture selector, only the
+    conditional and required fields that can apply to it and that architecture's model facts."""
     adapter = get_backend(name)
-    conditional = {item.field for item in adapter.surface.conditions}
+    surface = adapter.surface
+    selector, values = surface.config_value_choices[0]
+    if arch is not None and arch not in values:
+        raise ValueError(f"{adapter.name} has no {selector} {arch!r}; use one of: {', '.join(values)}")
+
+    def applying(when_any: tuple[tuple[tuple[str, tuple[Any, ...]], ...], ...]) -> list[dict[str, list[Any]]]:
+        clauses = [{key: list(allowed) for key, allowed in clause} for clause in when_any]
+        return [clause for clause in clauses if arch is None or arch in clause.get(selector, [arch])]
+
+    conditional = {item.field for item in surface.conditions}
+    conditions = {item.field: applying(item.when_any) for item in surface.conditions}
+    required = {item.field: (applying(item.when_any), item.otherwise) for item in surface.required}
     return {
         "backend": adapter.name,
         "common_recipe_fields": sorted(COMMON_RECIPE_FIELDS),
-        "config_fields": sorted(adapter.surface.fields - conditional),
-        "conditional_fields": {
-            item.field: {
-                "when_any": [
-                    {selector: list(allowed) for selector, allowed in clause}
-                    for clause in item.when_any
-                ]
-            }
-            for item in adapter.surface.conditions
-        },
-        "unsupported_fields": {**_GENERAL_UNAVAILABLE, **dict(adapter.surface.unavailable)},
+        "config_fields": sorted(surface.fields - conditional),
+        "conditional_fields": {field: {"when_any": clauses} for field, clauses in conditions.items() if clauses},
+        "unsupported_fields": {**_GENERAL_UNAVAILABLE, **dict(surface.unavailable)},
         "escape_hatches": {
             key: {"validation": "unverified", "recorded": True}
-            for key in sorted(adapter.surface.escape_hatches)
+            for key in sorted(surface.escape_hatches)
         },
-        "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
-        "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
-        "integer_minimums": dict(adapter.surface.integer_minimums),
-        "decided_fields": sorted(adapter.surface.decided_fields),
+        "nested_config_fields": deepcopy(surface.nested_config_fields or {}),
+        "config_value_choices": {field: list(choices) for field, choices in surface.config_value_choices},
+        "integer_minimums": dict(surface.integer_minimums),
+        "decided_fields": sorted(surface.decided_fields),
+        "decided_notes": dict(surface.decided),
         "required_fields": {
-            item.field: {
-                "when_any": [{selector: list(allowed) for selector, allowed in clause} for clause in item.when_any],
-                "otherwise": item.otherwise,
-            }
-            for item in adapter.surface.required
+            field: {"when_any": clauses, "otherwise": otherwise}
+            for field, (clauses, otherwise) in required.items() if clauses
         },
-        "boolean_fields": sorted(adapter.surface.boolean_fields),
+        "boolean_fields": sorted(surface.boolean_fields),
         "pinned_trainer": {"image": PINNED_IMAGES[adapter.image_name], "source": dict([BUILD_SOURCES[adapter.image_name]])},
-        "model_facts": adapter.model_facts() if adapter.model_facts is not None else {},
+        "model_facts": adapter.model_facts(arch) if adapter.model_facts is not None else {},
     }

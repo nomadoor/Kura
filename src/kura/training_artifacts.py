@@ -930,14 +930,19 @@ def missing_training_state_error(capture_required: bool, *, trainer_completed: b
 EPOCH_SAVE_FLAGS = frozenset({"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"})
 
 
+# The one schedule whose state a Resume restores, and what capabilities says about lr_scheduler.
+RESUME_LR_SCHEDULER = "constant"
+LR_SCHEDULER_DECIDED = f"forwarded as the trainer spells it; a State Resume needs {RESUME_LR_SCHEDULER}"
+
+
 def require_constant_scheduler_for_resume(backend_label: str, scheduler: Any) -> None:
     """A Resume restores a scheduler's state only for a constant schedule; every backend asks here.
 
     `scheduler` is the backend's authored lr_scheduler; omitted is the trainers' default, constant.
     """
-    if scheduler is not None and scheduler != "constant":
+    if scheduler is not None and scheduler != RESUME_LR_SCHEDULER:
         raise ValueError(
-            f"{backend_label} State Resume initially requires lr_scheduler: constant, not {scheduler!r}; "
+            f"{backend_label} State Resume initially requires lr_scheduler: {RESUME_LR_SCHEDULER}, not {scheduler!r}; "
             "create a Fork from Weight to change the schedule"
         )
 

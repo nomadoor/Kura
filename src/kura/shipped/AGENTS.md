@@ -16,7 +16,8 @@ read the skill named at the end of this file before that task.
    `kura dataset validate` and `kura dataset inspect`.
 3. `kura run new --experiment <name> --slug <words>`, then fill in
    `runs/<run-id>/run.yaml` (`training-parameter-planning`;
-   `kura run capabilities <backend>` lists what `backend.config` accepts).
+   `kura run capabilities <backend>` lists what `backend.config` accepts;
+   `--arch <value>` adds one architecture's model facts).
 4. `kura run compile <run-id>`, then `kura run plan <run-id>`: show the plan to
    the user and get approval.
 5. `kura run execute <run-id>`, stay with it until it returns, and report from

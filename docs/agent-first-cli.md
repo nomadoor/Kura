@@ -80,7 +80,13 @@ reading adapter source or guessing a trainer's spelling:
 uv run kura run capabilities musubi-tuner
 uv run kura run capabilities ai-toolkit --json
 uv run kura run capabilities sd-scripts --json
+uv run kura run capabilities ai-toolkit --arch zimage:turbo
 ```
+
+The default output is the surface; `--arch <value>` adds one architecture's
+model facts (AI-Toolkit's pinned baseline entry, the model roles sd-scripts and
+Musubi read) and keeps only the fields that can apply to it. Any command piped
+into a reader that closes early (`| head`) ends quietly with exit code 0.
 
 Unknown top-level keys are rejected with a correction when Kura knows the
 likely spelling. Reviewed nested fields, such as sd-scripts dataset controls,

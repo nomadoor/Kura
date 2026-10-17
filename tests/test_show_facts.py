@@ -13,6 +13,7 @@ import tomllib
 import unittest
 from copy import deepcopy
 from typing import Any
+from unittest.mock import patch
 
 import yaml
 
@@ -23,7 +24,9 @@ from kura.backends.musubi_models import _musubi_model_expectations
 from kura.backends.sd_scripts import ENTRYPOINTS, command_sd_scripts, display_sd_scripts
 from kura.backends.sd_scripts_models import OPTIONAL_ROLES, ROLE_CONTRACTS
 from kura.backends.shared import MODEL_DOWNLOAD_KEYS
-from kura.cli import cmd_run_capabilities
+from kura.backends.ai_toolkit import AI_TOOLKIT_OPTIMIZER_DECIDED
+from kura.cli import cmd_run_capabilities, main as cli_main
+from kura.training_artifacts import LR_SCHEDULER_DECIDED, RESUME_LR_SCHEDULER
 from kura.images import BUILD_SOURCES, PINNED_IMAGES
 from kura.run_commands.plan import format_run_plan
 from kura.run_envelope import SettingsRefused
@@ -34,17 +37,17 @@ from tests.backend_fixtures import with_required  # noqa: E402
 from tests.platform_support import DATASET_IO, posix_only  # noqa: E402
 
 
-def _capabilities_text(backend: str) -> str:
+def _capabilities_text(backend: str, arch: str | None = None) -> str:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        assert cmd_run_capabilities(argparse.Namespace(backend=backend, json=False)) == 0
+        assert cmd_run_capabilities(argparse.Namespace(backend=backend, json=False, arch=arch)) == 0
     return output.getvalue()
 
 
-def _capabilities_json(backend: str) -> dict[str, Any]:
+def _capabilities_json(backend: str, arch: str | None = None) -> dict[str, Any]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        assert cmd_run_capabilities(argparse.Namespace(backend=backend, json=True)) == 0
+        assert cmd_run_capabilities(argparse.Namespace(backend=backend, json=True, arch=arch)) == 0
     return json.loads(output.getvalue())
 
 
@@ -83,15 +86,18 @@ class CapabilitiesShowAdapterFactsTests(unittest.TestCase):
                 self.assertEqual(pinned, {"image": PINNED_IMAGES[adapter.image_name], "source": {build_arg: value}})
                 self.assertIn(value, _capabilities_text(name))
 
-    def test_ai_toolkit_shows_the_pinned_upstream_ui_baseline_of_every_model_arch(self) -> None:
-        payload = _capabilities_json("ai-toolkit")
-        facts = payload["model_facts"]
+    def test_ai_toolkit_shows_the_pinned_upstream_ui_baseline_of_one_model_arch_on_request(self) -> None:
         baseline = load_baseline()
+        choices = backend_capabilities("ai-toolkit")["config_value_choices"]["model_arch"]
+        by_arch = {}
+        for value in choices:
+            facts = backend_capabilities("ai-toolkit", arch=value)["model_facts"]
+            self.assertEqual(set(facts["baseline"]["model_arch"]), {value})
+            by_arch[value] = facts["baseline"]["model_arch"][value]
+        facts = _capabilities_json("ai-toolkit", "moss_image:base")["model_facts"]
         self.assertEqual(facts["baseline"]["label"], "pinned upstream UI baseline")
         self.assertEqual(facts["baseline"]["commit"], baseline["upstream"]["commit"])
-        by_arch = facts["baseline"]["model_arch"]
-        self.assertEqual(set(by_arch), set(payload["config_value_choices"]["model_arch"]))
-        moss = by_arch["moss_image:base"]
+        moss = facts["baseline"]["model_arch"]["moss_image:base"]
         entry = baseline["entries"]["moss_image:base"]
         self.assertEqual(moss["entry"], "moss_image:base")
         self.assertEqual(moss["name_or_path"], "OpenMOSS-Team/MOSS-Image-Base")
@@ -104,7 +110,7 @@ class CapabilitiesShowAdapterFactsTests(unittest.TestCase):
         self.assertIn("wan21:14b", by_arch["wan21"]["error"])
         self.assertIn("authored values win", facts["native_config"])
 
-        text = _capabilities_text("ai-toolkit")
+        text = _capabilities_text("ai-toolkit", "moss_image:base")
         self.assertIn("pinned upstream UI baseline", text)
         self.assertIn(baseline["upstream"]["commit"], text)
         self.assertIn("moss_image:base (entry moss_image:base): name_or_path OpenMOSS-Team/MOSS-Image-Base", text)
@@ -158,6 +164,96 @@ class CapabilitiesShowAdapterFactsTests(unittest.TestCase):
         for path in ("dataset_config.general", "dataset_config.datasets[]", "dataset_config.datasets[].subsets[]"):
             self.assertIn("subset", nested[path]["num_repeats"]["required"])
         self.assertIn("num_repeats (integer, min=1, required:", _capabilities_text("sd-scripts"))
+
+
+class CapabilitiesSurfaceAndArchTests(unittest.TestCase):
+    """The default output is the surface; --arch adds one architecture's facts (text and JSON alike)."""
+
+    def test_the_default_output_is_the_surface_without_per_arch_baselines(self) -> None:
+        for name in BACKENDS:
+            with self.subTest(backend=name):
+                text = _capabilities_text(name)
+                self.assertLess(len(text.encode("utf-8")), 16_000)
+                self.assertNotIn("(entry ", text)
+                payload = _capabilities_json(name)
+                self.assertNotIn("model_arch", payload["model_facts"].get("baseline", {}))
+                for field in payload["config_fields"]:
+                    self.assertIn(field, text)
+        text = _capabilities_text("ai-toolkit")
+        self.assertIn("--arch <value>", text)
+        self.assertIn("moss_image:base", text)  # still listed among the selector values
+
+    def test_arch_filters_roles_and_conditional_fields_to_that_architecture(self) -> None:
+        payload = _capabilities_json("musubi-tuner", "zimage")
+        self.assertEqual(set(payload["model_facts"]["model_roles"]), {"architecture=zimage"})
+        conditional = payload["conditional_fields"]
+        self.assertIn("fp8_llm", conditional)
+        self.assertEqual(conditional["fp8_llm"]["when_any"], [{"architecture": ["zimage", "framepack"]}])
+        self.assertIn("text_encoder_batch_size", conditional)  # no architecture clause: applies to every one
+        self.assertNotIn("convrot_int8", conditional)
+        self.assertNotIn("one_frame", conditional)
+        self.assertIn("discrete_flow_shift", payload["required_fields"])
+        self.assertNotIn("h3_guidance_loss_scale", payload["required_fields"])
+        text = _capabilities_text("musubi-tuner", "zimage")
+        self.assertIn("architecture=zimage: dit (safetensors)", text)
+        self.assertNotIn("architecture=wan:", text)
+        self.assertNotIn("convrot_int8:", text)
+
+        sd = _capabilities_json("sd-scripts", "anima")
+        self.assertEqual(set(sd["model_facts"]["model_roles"]), {"architecture=anima, mode=lora", "architecture=anima, mode=controlnet_lllite"})
+        self.assertNotIn("guidance_scale", sd["required_fields"])
+        self.assertIn("discrete_flow_shift", sd["required_fields"])
+
+    def test_text_and_json_carry_the_same_filtered_facts(self) -> None:
+        for name, arch in (("ai-toolkit", "zimage:turbo"), ("musubi-tuner", "flux2"), ("sd-scripts", "sdxl")):
+            with self.subTest(backend=name):
+                payload, text = _capabilities_json(name, arch), _capabilities_text(name, arch)
+                for field in payload["conditional_fields"]:
+                    self.assertIn(f"  {field}: ", text)
+                for key in payload["model_facts"].get("model_roles", {}):
+                    self.assertIn(f"  {key}: ", text)
+                for value in payload["model_facts"].get("baseline", {}).get("model_arch", {}):
+                    self.assertIn(f"  {value}", text)
+
+    def test_an_unknown_arch_is_refused_naming_the_values(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            code = cmd_run_capabilities(argparse.Namespace(backend="musubi-tuner", json=False, arch="z-image"))
+        self.assertEqual(code, 1)
+        self.assertIn("z-image", stderr.getvalue())
+        self.assertIn("zimage", stderr.getvalue())
+        self.assertIn("qwen_image", stderr.getvalue())
+        with self.assertRaisesRegex(ValueError, "sdxl"):
+            backend_capabilities("sd-scripts", arch="sd1")
+
+    def test_decided_fields_without_a_list_say_why_from_their_owner(self) -> None:
+        for name in BACKENDS:
+            with self.subTest(backend=name):
+                payload = _capabilities_json(name)
+                self.assertEqual(payload["decided_notes"]["lr_scheduler"], LR_SCHEDULER_DECIDED)
+                self.assertIn(f"  lr_scheduler: {LR_SCHEDULER_DECIDED}", _capabilities_text(name))
+        self.assertIn(RESUME_LR_SCHEDULER, LR_SCHEDULER_DECIDED)
+        ai = _capabilities_json("ai-toolkit")
+        self.assertEqual(ai["decided_notes"]["optimizer_type"], AI_TOOLKIT_OPTIMIZER_DECIDED)
+        self.assertNotIn("exact values only", _capabilities_text("ai-toolkit").split("lr_scheduler:")[-1].splitlines()[0])
+
+
+class ClosedPipeTests(unittest.TestCase):
+    def test_a_closed_pipe_ends_any_command_quietly(self) -> None:
+        class ClosedPipe(io.StringIO):
+            def write(self, text: str) -> int:
+                raise BrokenPipeError
+
+            def fileno(self) -> int:
+                return 1
+
+        with patch.object(sys, "argv", ["kura", "run", "capabilities", "ai-toolkit"]), \
+                patch("kura.cli._load_secrets"), patch("kura.cli._refresh_managed_files"), \
+                patch("kura.cli.os.dup2") as dup2, patch.object(sys, "stdout", ClosedPipe()):
+            with self.assertRaises(SystemExit) as stopped:
+                cli_main()
+        self.assertEqual(stopped.exception.code, 0)
+        dup2.assert_called_once()
 
 
 class AiToolkitEffectiveSettingsTests(unittest.TestCase):

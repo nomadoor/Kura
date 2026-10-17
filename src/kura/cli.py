@@ -420,7 +420,11 @@ def _create_resume_derived_run(
 
 
 def cmd_run_capabilities(args: argparse.Namespace) -> int:
-    payload = backend_capabilities(args.backend)
+    try:
+        payload = backend_capabilities(args.backend, getattr(args, "arch", None))
+    except ValueError as exc:
+        print(f"cannot show capabilities: {exc}", file=sys.stderr)
+        return 1
     if getattr(args, "json", False):
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -460,7 +464,13 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
         print("backend.config fields that take true or false (not quoted): " + ", ".join(payload["boolean_fields"]))
     if payload["integer_minimums"]:
         print("backend.config integer fields (whole numbers, at least): " + ", ".join(f"{field} >= {minimum}" for field, minimum in payload["integer_minimums"].items()))
-    print("backend.config fields Kura decides from (exact values only; escape hatches may not set them): " + ", ".join(payload["decided_fields"]))
+    print("backend.config fields Kura decides from (escape hatches may not set them):")
+    notes = payload["decided_notes"]
+    listed = [field for field in payload["decided_fields"] if field not in notes]
+    if listed:
+        print("  " + ", ".join(listed) + ": exact values only, as listed above")
+    for field, note in sorted(notes.items()):
+        print(f"  {field}: {note}")
     if payload["required_fields"]:
         print("backend.config fields you must write (Kura adds no training default):")
         for field, contract in payload["required_fields"].items():
@@ -489,8 +499,9 @@ def _print_model_facts(facts: dict[str, Any]) -> None:
         print(
             f"model_arch {baseline['label']} (AI-Toolkit commit {baseline['commit']}): what the upstream UI "
             "builds for each value, not a choice Kura made; compile fills only the keys a run leaves unset"
+            + ("" if "model_arch" in baseline else "; `kura run capabilities ai-toolkit --arch <value>` prints one value's entry")
         )
-        for value, entry in baseline["model_arch"].items():
+        for value, entry in baseline.get("model_arch", {}).items():
             if entry is None:
                 print(f"  {value}: no baseline entry; compile names the values to author")
             elif "error" in entry:
@@ -1702,6 +1713,7 @@ def main() -> None:
     resume.set_defaults(func=cmd_run_resume)
     capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface, its pinned trainer, and the model facts Kura owns")
     capabilities.add_argument("backend", choices=backend_names())
+    capabilities.add_argument("--arch", metavar="VALUE", help="Also show one architecture selector value's facts (its baseline entry or model roles) and only the fields that apply to it")
     capabilities.add_argument("--json", action="store_true", help="Print the surface contract as JSON")
     capabilities.set_defaults(func=cmd_run_capabilities)
     compile_parser = run_sub.add_parser("compile", help="Freeze run.yaml into resolved inputs")
@@ -1884,7 +1896,15 @@ def main() -> None:
         _load_secrets()
     if args.func is not cmd_init:
         _refresh_managed_files()
-    raise SystemExit(args.func(args))
+    try:
+        code = args.func(args)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # The reader went away (`kura ... | head`); that is not an error. Point stdout at devnull so
+        # the interpreter's own final flush does not fail again.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        code = 0
+    raise SystemExit(code)
 
 
 def cmd_runner_status(_: argparse.Namespace) -> int:
