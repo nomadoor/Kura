@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 PINNED_IMAGES: dict[str, str] = {
-    "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a",
+    "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c",
     "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472",
     "sd-scripts": "nomadoor/kura-sd-scripts@sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06",
     "comfyui": "nomadoor/kura-comfyui@sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097",
@@ -21,7 +21,7 @@ PINNED_IMAGES: dict[str, str] = {
 # The build argument that selects each image's upstream source, and the value
 # the pinned image was built with. AI-Toolkit builds on the upstream image.
 BUILD_SOURCES: dict[str, tuple[str, str]] = {
-    "ai-toolkit": ("AI_TOOLKIT_IMAGE", "ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc"),
+    "ai-toolkit": ("AI_TOOLKIT_IMAGE", "ostris/aitoolkit:0.13.30@sha256:58cfb049ed8d3e2abc4770b48ba8bd7193072f8d553c647cf4fec6b44f7027d7"),
     "musubi-tuner": ("MUSUBI_TUNER_REF", "v0.3.5"),
     "sd-scripts": ("SD_SCRIPTS_REF", "37a1cbbc5725ed2a3575506e7bd2001c9908ac92"),
     "comfyui": ("COMFYUI_REF", "0f42ba51463174fb255f2c4605ae0e0b441fe6d7"),
@@ -40,6 +40,7 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06": "12.8",
     "sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097": "13.0",
     "sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a": "13.0",
+    "sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c": "13.0",
     "sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472": "13.0",
 }
 

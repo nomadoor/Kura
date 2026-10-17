@@ -164,7 +164,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
     conditions=(
         _when("bypass_guidance_embedding", model_arch=_ai_toolkit_arch_values("flex2")),
         _when("extras_name_or_path", model_arch=_ai_toolkit_arch_values("zimage_l2p")),
-        _when("model_edit", model_arch=_ai_toolkit_arch_values("krea2")),
+        _when("model_edit", model_arch=(*_ai_toolkit_arch_values("krea2"), *_ai_toolkit_arch_values("moss_image"))),
     ),
     escape_hatches=frozenset({"command", "native_config"}),
     boolean_fields=frozenset({

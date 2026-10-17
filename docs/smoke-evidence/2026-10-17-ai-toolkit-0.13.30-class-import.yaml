@@ -1,0 +1,24 @@
+schema_version: 1
+backend: ai-toolkit
+observed_at: 2026-10-17
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c
+  base_image: ostris/aitoolkit:0.13.30@sha256:58cfb049ed8d3e2abc4770b48ba8bd7193072f8d553c647cf4fec6b44f7027d7
+  embedded_commit: dcebc7442df70e5239c68167919fd2909c615769
+  finite_gradient_patch_commit: d1985f9bf380b6ce1c409b7875e2d367df486e19
+  packages: {torch: 2.13.0+cu130, torchvision: 0.28.0+cu130, diffusers: 0.39.0.dev0, transformers: 5.5.3, accelerate: 1.15.0}
+probe:
+  kind: registered-diffusion-class-imports
+  command: python -c "from toolkit.util import get_model as g; g.get_all_models()" (docker run --gpus all --network none)
+  selectors: [flux3, iris3b, ming_image, moss_image, minimax_h3_vsa, qwen_image_2]
+observed:
+  registered_archs: 60
+  imported_model_classes: 49
+  failed_extension_imports: 0
+  selected_imported: 6
+  expected: 6
+scope: >-
+  Proves that the immutable patched image contains and imports every registered diffusion
+  implementation, including the four archs new in 0.13.30 and the two whose code changed.
+  The packages match the 0.13.18 image's /opt/kura-runtime.json exactly. It is not compile,
+  launch, or optimizer-step evidence for any training mode.
