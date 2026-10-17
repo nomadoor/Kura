@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -594,6 +596,64 @@ class AccelerateStateRunnerTests(unittest.TestCase):
             published = publish_completed_training_states(root, run_dir, allow_final_state=True)
             self.assertEqual([item["observed_step"] for item in published], [20])
             self.assertIn("kura-state-info.json", {item["path"] for item in published[0]["files"]})
+
+    def _collected_outputs(self, root: Path, run: dict[str, Any], executor: str) -> Path:
+        """The directory a run's executor publishes states from: Docker's own run directory,
+        or the copy RunPod's collection downloads."""
+        run_dir = self._musubi_run_dir(root, run)
+        if executor == "docker":
+            return run_dir
+        downloaded = run_dir / "downloads" / run_dir.name
+        downloaded.mkdir(parents=True)
+        shutil.copytree(run_dir / "resolved", downloaded / "resolved")
+        shutil.copy2(run_dir / "status.json", downloaded / "status.json")
+        return downloaded
+
+    def test_the_trainers_end_state_at_a_saved_step_is_not_published_again(self) -> None:
+        # Under --save_state sd-scripts and Musubi also write `<name>-state` at the end; at the
+        # step of the last step state it is the same save again (only its RNG file differs).
+        import kura.executors.docker as docker
+        import kura.run_commands.runpod_ssh as runpod_ssh
+        import kura.training_artifacts as training_artifacts
+
+        self.assertIs(docker.publish_completed_training_states, training_artifacts.publish_completed_training_states)
+        self.assertIs(runpod_ssh.publish_completed_training_states, training_artifacts.publish_completed_training_states)
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory, patch.object(
+                training_artifacts, "publish_training_state_candidate", wraps=training_artifacts.publish_training_state_candidate,
+            ) as owner:
+                root = Path(directory)
+                run = musubi_run()
+                run["recipe"]["steps"] = 20
+                collected = self._collected_outputs(root, run, executor)
+                step_state = _write_state(collected / "outputs" / "derived-step0020-state")
+                _write_state_marker(step_state, "musubi-tuner", 20)
+                final = _write_state(collected / "outputs" / "derived-state")
+                (final / "random_states_0.pkl").write_bytes(_torch_archive_bytes(b"end-of-training rng"))
+                _write_state_marker(final, "musubi-tuner", 20)
+
+                published = publish_completed_training_states(root, collected, allow_final_state=True)
+
+                self.assertEqual([item["observed_step"] for item in published], [20])
+                kept = {item["path"]: item["sha256"] for item in published[0]["files"]}
+                self.assertEqual(kept["random_states_0.pkl"], hashlib.sha256((step_state / "random_states_0.pkl").read_bytes()).hexdigest())
+                self.assertEqual(len(list((root / "artifacts" / "training-state").glob("*/manifest.json"))), 1)
+                self.assertTrue(final.is_dir())  # Kura copies; the trainer's folder stays
+                self.assertEqual(owner.call_count, 2)
+
+    def test_the_trainers_end_state_at_a_step_with_no_step_state_is_published(self) -> None:
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = musubi_run()
+                run["recipe"]["steps"] = 20
+                collected = self._collected_outputs(root, run, executor)
+                _write_state_marker(_write_state(collected / "outputs" / "derived-step0010-state"), "musubi-tuner", 10)
+                _write_state_marker(_write_state(collected / "outputs" / "derived-state"), "musubi-tuner", 20)
+
+                published = publish_completed_training_states(root, collected, allow_final_state=True)
+
+                self.assertEqual(sorted(item["observed_step"] for item in published), [10, 20])
 
     def test_a_musubi_artifact_published_before_the_marker_still_resumes(self) -> None:
         # Resume reads an artifact's own inventory, never the contract's required files.

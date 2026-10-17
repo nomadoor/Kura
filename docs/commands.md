@@ -172,7 +172,9 @@ zero), so their checkpoints and states are named, saved, and stopped at logical
 steps, and the endpoint state is saved at the end of training; a Resume keeps the
 configured cadence. Both trainers run through one Kura state runner that marks
 each complete state with the step it holds, so Musubi Tuner's final state is
-published too. Musubi Tuner restarts the epoch on Resume, so data order is not
+published too, unless a state of the run at its step is already published: the
+trainers write the end state again at the last step state's step, and that
+repeat is not copied a second time (its folder stays in `outputs/`). Musubi Tuner restarts the epoch on Resume, so data order is not
 continued. AI-Toolkit saves when its completed optimizer updates are a multiple
 of the cadence and names and records each step save by them (Kura's image
 patches upstream, which used the 0-based iteration index, one below), and Kura

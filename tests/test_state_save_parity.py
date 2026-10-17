@@ -126,7 +126,7 @@ class ManagedStateCadenceTests(unittest.TestCase):
         run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
         script = sd_scripts.command_sd_scripts(run)["argv"][2]
         self.assertIn(
-            "--save_every_n_steps 50 --save_last_n_steps 100 --save_state --save_state_on_train_end "
+            "--save_every_n_steps 50 --save_last_n_steps 100 --save_state "
             "--save_last_n_steps_state 50",
             script,
         )

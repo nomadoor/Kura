@@ -4384,7 +4384,7 @@ class MusubiBackendTests(unittest.TestCase):
         }
         script = command_musubi_tuner(run)["argv"][2]
         self.assertIn("--save_state", script)
-        self.assertIn("--save_state_on_train_end", script)
+        self.assertNotIn("--save_state_on_train_end", script)
         # The patched trainer continues the logical step: it is given the logical target and
         # the recipe's cadence (no cap at the 10 steps the run adds).
         self.assertIn("--save_every_n_steps 30", script)

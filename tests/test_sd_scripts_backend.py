@@ -156,7 +156,7 @@ class SdScriptsBackendTests(unittest.TestCase):
         }
         script = command_sd_scripts(run)["argv"][2]
         self.assertIn("--save_state", script)
-        self.assertIn("--save_state_on_train_end", script)
+        self.assertNotIn("--save_state_on_train_end", script)
         # sd-scripts counts logical steps on Resume: with no cadence it saves state at the end.
         self.assertNotIn("--save_every_n_steps", script)
         self.assertIn("--save_last_n_steps_state 100", script)
