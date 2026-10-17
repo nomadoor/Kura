@@ -14,7 +14,9 @@ Use this reference only for `backend.name: sd-scripts`.
 - Record measured disk-cache estimates or a visible, reviewed exception.
 - When native outputs require conversion, validate the source, conversion, and
   published artifact. Preserve failed native conversion inputs as recovery
-  material, never as successful outputs.
+  material, never as successful outputs. The Anima wrapper removes a native
+  file only after the trainer exits, once a fresh conversion of it matches the
+  published output.
 - Keep model-patch artifacts distinct from trained adapters and validate their
   type-specific metadata before publication.
 - Resume passes `--resume` and `--skip_until_initial_step` with the logical

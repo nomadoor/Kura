@@ -91,11 +91,15 @@ def recover(files, recovery_dir):
     recovery_dir.mkdir(parents=True, exist_ok=True)
     for source in files:
         destination = recovery_dir / source.name
-        if not destination.exists():
+        if source.exists() and not destination.exists():
             shutil.copy2(source, destination)
 
 
-def publish(files, spec, published):
+def publish(files, spec, published, *, remove_sources=False):
+    # remove_sources is the post-exit pass: every native is converted again
+    # (callers pass an empty `published`), and a native is unlinked only once
+    # its published output matches that fresh conversion.  A failure raises
+    # before the unlink, so the native stays for recovery.
     staging_dir = pathlib.Path(spec["staging_dir"])
     output_dir = pathlib.Path(spec["output_dir"])
     converter = spec["converter"]
@@ -117,9 +121,13 @@ def publish(files, spec, published):
                 fail(f"published output conflicts with converted native weight: {destination}")
             staging.unlink()
             published.add(source.name)
+            if remove_sources:
+                source.unlink()
             continue
         os.replace(staging, destination)
         published.add(source.name)
+        if remove_sources:
+            source.unlink()
         print(json.dumps({"path": str(destination), "kind": "lora", "tensor_count": tensor_count}, ensure_ascii=False), flush=True)
 
 
@@ -169,8 +177,14 @@ def train_and_publish(spec):
             time.sleep(1)
         returncode = child.wait()
         files = native_files(native_dir, output_name, require_final=returncode == 0)
-        publish(files, spec, published)
-        if returncode != 0:
+        if returncode == 0:
+            # A completed run: convert every native again, and remove each one whose published
+            # output matches, so no checkpoint is kept twice.
+            publish(files, spec, set(), remove_sources=True)
+        else:
+            # A stopped or failed run keeps its natives and a recovery copy, as before, and
+            # finishes within the stop grace period.
+            publish(files, spec, published)
             recover(files, recovery_dir)
         if forwarded_signal is not None:
             return 128 + forwarded_signal

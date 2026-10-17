@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
+from kura.executors.common import StaleRunnerEpoch, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -80,7 +80,7 @@ def highest_epoch(workspace: Path) -> int:
     """
     found = [current_epoch(workspace)]
     for run_dir in (workspace / "runs").glob("*") if (workspace / "runs").is_dir() else []:
-        found.append(_status(run_dir).get("epoch") if isinstance(_status(run_dir).get("epoch"), int) else 0)
+        found.append(status_runner_epoch(_status(run_dir)))
         for claim in requests_dir(run_dir).glob("*.claim.json") if requests_dir(run_dir).is_dir() else []:
             epoch = _read_json(claim).get("epoch")
             found.append(epoch if isinstance(epoch, int) else 0)

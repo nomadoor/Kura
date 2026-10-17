@@ -593,7 +593,7 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
     with _run_operation_lock(run_dir, "status", blocking=blocking):
         status = _load_status(run_dir)
         original = copy.deepcopy(status)
-        recorded_epoch = status.get("epoch") if isinstance(status.get("epoch"), int) else 0
+        recorded_epoch = status_runner_epoch(status)
         runner_epoch = _runner_child_epoch()
         if runner_epoch is not None and runner_epoch < recorded_epoch:
             # A newer runner took over this run; a replaced follower stops instead of
@@ -602,8 +602,10 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
         mutate(status)
         # Command-line writers are serialized by the run locks and keep the epoch they found.
         epoch = runner_epoch if runner_epoch is not None else max(recorded_epoch, _workspace_epoch(run_dir))
+        # `runner_epoch` replaces the old `epoch` key, which readers took for a training epoch.
+        status.pop("epoch", None)
         if epoch:
-            status["epoch"] = epoch
+            status["runner_epoch"] = epoch
         redacted = _redact_secrets(record("run_status", status))
         # Adding the record fields alone is no new fact, so it never rewrites the file.
         if without_record_fields(redacted) != without_record_fields(original):
@@ -656,6 +658,17 @@ def _shadow_projection(run_dir: Path, written: dict[str, Any]) -> None:
 
 class StaleRunnerEpoch(RuntimeError):
     """A follower of a replaced runner tried to write a run a newer runner controls."""
+
+
+def status_runner_epoch(status: dict[str, Any]) -> int:
+    """The runner epoch a status was written under, or 0.
+
+    Status writes `runner_epoch`; a status written before it was named so holds `epoch`.
+    The higher of the two counts, so an older Kura that adds `epoch` beside a stale
+    `runner_epoch` still fences this one.
+    """
+    values = [status.get(key) for key in ("runner_epoch", "epoch")]
+    return max([value for value in values if isinstance(value, int) and not isinstance(value, bool)], default=0)
 
 
 def _runner_child_epoch() -> int | None:

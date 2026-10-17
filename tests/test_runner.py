@@ -221,7 +221,23 @@ class EpochTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 _mutate_run_status(run_dir, lambda status: status.update({"state": "interrupted"}))
             written = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual((written["state"], written["epoch"]), ("interrupted", 7))
+            self.assertEqual((written["state"], written["runner_epoch"]), ("interrupted", 7))
+            self.assertNotIn("epoch", written)
+
+    def test_status_names_the_runner_epoch_and_reads_the_old_key(self) -> None:
+        with _workspace() as (_, run_dir):
+            # A status written before the rename still fences a replaced follower.
+            _status(run_dir, state="running", epoch=5)
+            with patch.dict(os.environ, {"KURA_RUNNER_EPOCH": "3"}), self.assertRaises(StaleRunnerEpoch):
+                _mutate_run_status(run_dir, lambda status: status.update({"state": "failed"}))
+            with patch.dict(os.environ, {"KURA_RUNNER_EPOCH": "5"}):
+                _mutate_run_status(run_dir, lambda status: status.update({"state": "failed"}))
+            written = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((written["state"], written["runner_epoch"]), ("failed", 5))
+            self.assertNotIn("epoch", written)
+            # The new key fences in the same way.
+            with patch.dict(os.environ, {"KURA_RUNNER_EPOCH": "4"}), self.assertRaises(StaleRunnerEpoch):
+                _mutate_run_status(run_dir, lambda status: status.update({"state": "interrupted"}))
 
     def test_a_render_of_a_replaced_follower_records_nothing(self) -> None:
         from kura import render
@@ -292,6 +308,8 @@ class EpochTests(unittest.TestCase):
         with _workspace() as (root, run_dir):
             _status(run_dir, state="running", epoch=9)
             self.assertEqual(runner.highest_epoch(root), 9)
+            _status(run_dir, state="running", runner_epoch=11)
+            self.assertEqual(runner.highest_epoch(root), 11)
 
     def test_a_follower_of_a_replaced_runner_exits(self) -> None:
         with _workspace() as (root, run_dir):

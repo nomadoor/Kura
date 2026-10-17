@@ -102,7 +102,9 @@ workspace; network shares are not supported.
 
 **4. Writers are fenced by an epoch.** The runner file carries an epoch that
 grows each time a runner starts. Claims, realizations, and `status.json`
-record the epoch that wrote them, and a status update applies only if the
+record the epoch that wrote them (`status.json` names it `runner_epoch`, so it
+is not read as a training epoch; older status files call it `epoch`, and
+readers take the higher of the two), and a status update applies only if the
 `last_realization` and epoch it was based on are still current. A CLI writer
 records the current runner epoch, or 0 when there is no runner file; CLI
 writers are serialized by the run operation locks as today. The advisory lock

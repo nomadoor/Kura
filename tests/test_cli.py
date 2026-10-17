@@ -1804,9 +1804,12 @@ class RunPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "download-plan"
-            cached = root / "cache" / "models" / "musubi" / "example--model" / "vae" / "vae.safetensors"
+            repo = root / "cache" / "huggingface" / "hub" / "models--example--model"
+            cached = repo / "snapshots" / "abc" / "vae.safetensors"
             cached.parent.mkdir(parents=True)
             cached.write_bytes(b"x" * 1024)
+            (repo / "refs").mkdir()
+            (repo / "refs" / "main").write_text("abc", encoding="utf-8")
             run_dir.mkdir(parents=True)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
@@ -2046,7 +2049,7 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
         self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
 
-    def _plan_cached_musubi_model(self, *, link_target: str, hf_cache: Path | None = None) -> dict:
+    def _plan_cached_musubi_model(self, *, link_target: str | None = None, hf_cache: Path | None = None, ref: str | None = "main", revision: str | None = None) -> dict:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config: dict = {"schema_version": 2}
@@ -2056,12 +2059,18 @@ class RunPlanTests(unittest.TestCase):
             (root / "datasets" / "tiny").mkdir(parents=True)
             run_dir = root / "runs" / "local"
             run_dir.mkdir(parents=True)
-            target = (hf_cache or root / "cache" / "huggingface") / "hub" / "models--repo--model" / "snapshots" / "abc" / "weights.safetensors"
+            repo = (hf_cache or root / "cache" / "huggingface") / "hub" / "models--repo--model"
+            target = repo / "snapshots" / "abc" / "weights.safetensors"
             target.parent.mkdir(parents=True)
             target.write_bytes(b"x" * 123)
-            cache_file = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
-            cache_file.parent.mkdir(parents=True)
-            cache_file.symlink_to(link_target)
+            if ref is not None:
+                (repo / "refs" / ref).parent.mkdir(parents=True)
+                (repo / "refs" / ref).write_text("abc", encoding="utf-8")
+            if link_target is not None:
+                cache_file = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
+                cache_file.parent.mkdir(parents=True)
+                cache_file.symlink_to(link_target)
+            download = {"repo": "repo/model", "filename": "weights.safetensors", **({"revision": revision} if revision else {})}
             run = {
                 "id": "local",
                 "type": "train",
@@ -2069,7 +2078,7 @@ class RunPlanTests(unittest.TestCase):
                 "datasets": [{"id": "tiny"}],
                 "recipe": {"steps": 1},
                 "compute": {"executor": "docker"},
-                "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {"architecture": "flux2", "model_version": "klein-base-4b", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}})},
+                "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {"architecture": "flux2", "model_version": "klein-base-4b", "model_downloads": {"dit": download}})},
             }
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             previous = Path.cwd()
@@ -2080,23 +2089,25 @@ class RunPlanTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-    @posix_only(POSIX_PATHS)
-    def test_local_plan_follows_a_link_written_through_the_legacy_cache_target(self) -> None:
-        downloads = self._plan_cached_musubi_model(link_target="/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
-        self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (0, 123), downloads)
-
-    @posix_only(POSIX_PATHS)
-    def test_local_plan_counts_a_model_cached_outside_the_workspace(self) -> None:
-        relative = "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors"
+    def test_local_plan_counts_a_model_in_the_shared_cache_with_no_workspace_link(self) -> None:
+        # The container decides from the Hugging Face cache, so a file another
+        # workspace downloaded there is cached here before this workspace links it.
         with tempfile.TemporaryDirectory() as elsewhere:
-            downloads = self._plan_cached_musubi_model(link_target=relative, hf_cache=Path(elsewhere).resolve() / "hf")
+            hf_cache = Path(elsewhere).resolve() / "hf"
+            downloads = self._plan_cached_musubi_model(hf_cache=hf_cache)
         self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (0, 123), downloads)
         self.assertTrue(downloads["items"][0]["cached"])
+        self.assertEqual(downloads["items"][0]["cache_path"], str(hf_cache / "hub" / "models--repo--model" / "snapshots" / "abc" / "weights.safetensors"))
+        self.assertEqual(downloads["items"][0]["runtime_reference"], "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors")
 
-    def test_local_plan_treats_unmapped_absolute_symlink_as_not_cached(self) -> None:
-        downloads = self._plan_cached_musubi_model(link_target="/opt/elsewhere/weights.safetensors")
+    @posix_only(POSIX_PATHS)
+    def test_local_plan_counts_a_workspace_link_only_when_the_cache_resolves_the_revision(self) -> None:
+        link = "/workspace/cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors"
+        downloads = self._plan_cached_musubi_model(link_target=link, ref=None)
         self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (200, 0), downloads)
         self.assertFalse(downloads["items"][0]["cached"])
+        downloads = self._plan_cached_musubi_model(link_target=link, ref="release/v1", revision="release/v1")
+        self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (0, 123), downloads)
 
     def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
         run = {

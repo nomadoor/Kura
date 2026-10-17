@@ -45,6 +45,30 @@ def local_hf_cache(workspace: Path, config: dict[str, Any]) -> Path:
     return path.resolve(strict=False)
 
 
+def hf_cached_file(hf_cache: Path, repo_id: str, filename: str, *, revision: str | None = None, repo_type: str | None = None) -> Path | None:
+    """The file a container's `try_to_load_from_cache` finds for this download, read on the host.
+
+    `hf_cache` is the cache's HF_HOME (`local_hf_cache`); files live in
+    `hub/<models|datasets|spaces>--<org>--<name>/snapshots/<commit>/<filename>`.
+    The revision defaults to `main`; a branch or tag is read through
+    `refs/<revision>` (a name with `/` is a nested file), and a commit names its
+    snapshot directly. Returns None when the container would download the file.
+    """
+    repo = hf_cache / "hub" / "--".join([f"{repo_type or 'model'}s", *repo_id.split("/")])
+    commit = revision or "main"
+    try:
+        ref = repo / "refs" / commit
+        if ref.is_file():
+            commit = ref.read_text(encoding="utf-8").strip()
+        snapshots = repo / "snapshots"
+        if not snapshots.is_dir() or commit not in os.listdir(snapshots):
+            return None
+        path = snapshots / commit / filename
+        return path if path.is_file() else None
+    except OSError:
+        return None
+
+
 def local_docker_mounts(workspace: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
     """The configured local Docker mounts plus the Hugging Face cache, as every reader sees them."""
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
