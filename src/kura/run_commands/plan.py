@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
-import posixpath
 import re
 import subprocess
 import sys
@@ -35,7 +33,7 @@ from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
-from kura.paths import local_docker_mounts, local_hf_cache, to_host_path
+from kura.paths import hf_cached_file, local_docker_mounts, local_hf_cache
 from kura.storage import probe_storages
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
@@ -327,22 +325,6 @@ def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int |
     return _hf_file_size_probe(item, timeout_sec=timeout_sec).get("size_bytes")
 
 
-def _cached_host_file(container_link: str | None, *, workspace: Path | None, mounts: list[dict[str, Any]]) -> Path | None:
-    """The host file a container's model link reaches, read in the container's namespace."""
-    if workspace is None or not container_link:
-        return None
-    link = to_host_path(container_link, workspace=workspace, mounts=mounts)
-    if link is None or not link.is_symlink():
-        return link
-    try:
-        target = os.readlink(link)
-    except OSError:
-        return link
-    # Containers write these links; a relative one is relative to the link's container directory.
-    container_target = target if posixpath.isabs(target) else posixpath.normpath(posixpath.join(posixpath.dirname(container_link), target))
-    return to_host_path(container_target, workspace=workspace, mounts=mounts) or link
-
-
 def _cached_file_size(candidate: Path | None) -> int | None:
     if candidate is None:
         return None
@@ -372,9 +354,12 @@ def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | N
     items: list[dict[str, Any]] = []
     unknown: list[str] = []
     probe_failures: list[dict[str, str]] = []
-    mounts = local_docker_mounts(workspace, config or {}) if workspace is not None else []
+    # The container decides from the Hugging Face cache, not from the workspace link, so the plan does too.
+    hf_cache = local_hf_cache(workspace, config or {}) if workspace is not None else None
     for item in specs:
-        cache_path = _cached_host_file(item.get("link_path"), workspace=workspace, mounts=mounts)
+        cache_path = None
+        if hf_cache is not None and item.get("repo_id") and item.get("filename"):
+            cache_path = hf_cached_file(hf_cache, item["repo_id"], item["filename"], revision=item.get("revision"), repo_type=item.get("repo_type"))
         cached_size = _cached_file_size(cache_path)
         cached = cached_size is not None
         probe = {"status": "cached", "size_bytes": cached_size} if cached else _hf_file_size_probe(item)

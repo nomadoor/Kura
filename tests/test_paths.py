@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, to_container, to_host, to_host_path, to_workspace_relative
+from kura.paths import hf_cached_file, inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, to_container, to_host, to_host_path, to_workspace_relative
 from tests.platform_support import POSIX_PATHS, posix_only
 
 
@@ -75,6 +75,59 @@ class HuggingFaceCacheLocationTests(unittest.TestCase):
             self.assertIsNone(to_workspace_relative(f"/workspace/cache/huggingface/{blob}", workspace=workspace, mounts=mounts))
             inside = local_docker_mounts(workspace, {})
             self.assertEqual(to_workspace_relative(f"/root/.cache/huggingface/{blob}", workspace=workspace, mounts=inside), f"cache/huggingface/{blob}")
+
+
+def _cache_file(hf_cache: Path, repo_dir: str, commit: str, filename: str, ref: str | None = None) -> Path:
+    """Lay out one file as huggingface_hub writes it: a snapshot, and a ref naming its commit."""
+    repo = hf_cache / "hub" / repo_dir
+    path = repo / "snapshots" / commit / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"weights")
+    if ref is not None:
+        (repo / "refs" / ref).parent.mkdir(parents=True, exist_ok=True)
+        (repo / "refs" / ref).write_text(commit, encoding="utf-8")
+    return path
+
+
+class HuggingFaceCachedFileTests(unittest.TestCase):
+    def test_the_default_revision_is_main_read_through_its_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            path = _cache_file(cache, "models--org--name", "a" * 40, "dit.safetensors", ref="main")
+            self.assertEqual(hf_cached_file(cache, "org/name", "dit.safetensors"), path)
+            self.assertEqual(hf_cached_file(cache, "org/name", "dit.safetensors", revision="main"), path)
+            self.assertIsNone(hf_cached_file(cache, "org/name", "vae.safetensors"))
+            self.assertIsNone(hf_cached_file(cache, "org/other", "dit.safetensors"))
+
+    def test_a_snapshot_with_no_ref_for_the_revision_is_not_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            _cache_file(cache, "models--org--name", "a" * 40, "dit.safetensors")
+            self.assertIsNone(hf_cached_file(cache, "org/name", "dit.safetensors"))
+            self.assertIsNone(hf_cached_file(cache, "org/name", "dit.safetensors", revision="dev"))
+
+    def test_a_commit_revision_reads_its_snapshot_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            path = _cache_file(cache, "models--org--name", "b" * 40, "sub/dit.safetensors")
+            self.assertEqual(hf_cached_file(cache, "org/name", "sub/dit.safetensors", revision="b" * 40), path)
+
+    def test_a_branch_name_with_a_slash_reads_a_nested_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            path = _cache_file(cache, "models--org--name", "c" * 40, "dit.safetensors", ref="pr/feature")
+            self.assertEqual(hf_cached_file(cache, "org/name", "dit.safetensors", revision="pr/feature"), path)
+            self.assertIsNone(hf_cached_file(cache, "org/name", "dit.safetensors"))
+
+    def test_each_repo_type_has_its_own_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            for repo_type, prefix in (("model", "models"), ("dataset", "datasets"), ("space", "spaces")):
+                with self.subTest(repo_type=repo_type):
+                    path = _cache_file(cache, f"{prefix}--org--{repo_type}", "d" * 40, "file.bin", ref="main")
+                    self.assertEqual(hf_cached_file(cache, f"org/{repo_type}", "file.bin", repo_type=repo_type), path)
+            # A dataset is not found under the model prefix.
+            self.assertIsNone(hf_cached_file(cache, "org/dataset", "file.bin"))
 
 
 if __name__ == "__main__":

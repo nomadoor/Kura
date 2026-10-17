@@ -416,6 +416,11 @@ class SdScriptsBackendTests(unittest.TestCase):
         self.assertIn("sd-scripts Anima publication failed", script)
         self.assertIn("-step[0-9]{8}", script)
         self.assertNotIn("/outputs/native", script)
+        # The same wrapper, and so the same post-exit removal, runs on both executors.
+        for executor in ("docker", "runpod"):
+            run = base_run("anima", "lora")
+            run["compute"] = {"executor": executor}
+            self.assertEqual(command_sd_scripts(run)["argv"], command_sd_scripts(base_run("anima", "lora"))["argv"], executor)
 
     def test_anima_publication_script_publishes_final_and_every_step_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -451,6 +456,12 @@ class SdScriptsBackendTests(unittest.TestCase):
                 ["vivi-step00000100.safetensors", "vivi-step00000200.safetensors", "vivi.safetensors"],
             )
             self.assertFalse(recovery.exists())
+            # Each native is removed once its published output is verified.
+            self.assertEqual(list(native.iterdir()), [])
+            # A rerun after the natives are gone accepts the published final.
+            with patch("subprocess.run", side_effect=convert), patch("sys.argv", ["publish", json.dumps(spec)]):
+                namespace["main"]()
+            write_safetensors(native / "vivi.safetensors", keys)
             write_safetensors(outputs / "vivi.safetensors", keys, {"regenerated": "metadata"})
             with patch("subprocess.run", side_effect=convert), patch("sys.argv", ["publish", json.dumps(spec)]):
                 namespace["main"]()
@@ -458,6 +469,7 @@ class SdScriptsBackendTests(unittest.TestCase):
                 sorted(path.name for path in outputs.iterdir()),
                 ["vivi-step00000100.safetensors", "vivi-step00000200.safetensors", "vivi.safetensors"],
             )
+            self.assertEqual(list(native.iterdir()), [])
 
     def test_anima_publication_failure_recovers_every_native_checkpoint_without_partial_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -484,6 +496,7 @@ class SdScriptsBackendTests(unittest.TestCase):
 
             self.assertEqual(sorted(path.name for path in (root / "recovery").iterdir()), names)
             self.assertEqual(list((root / "outputs").iterdir()), [])
+            self.assertEqual(sorted(path.name for path in native.iterdir()), names)
 
     def test_anima_training_wrapper_publishes_stable_checkpoint_before_training_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -544,11 +557,14 @@ class SdScriptsBackendTests(unittest.TestCase):
             with patch("subprocess.Popen", return_value=Child()), patch("subprocess.run", side_effect=convert), patch("time.sleep", side_effect=advance):
                 self.assertEqual(namespace["train_and_publish"](spec), 0)
 
-            self.assertEqual(converted, ["vivi-step00000100.safetensors", "vivi.safetensors"])
+            # The post-exit pass converts the mid-training checkpoint again and
+            # removes each native only after its output matches.
+            self.assertEqual(converted, ["vivi-step00000100.safetensors", "vivi-step00000100.safetensors", "vivi.safetensors"])
             self.assertEqual(
                 sorted(path.name for path in (root / "outputs").iterdir()),
                 ["vivi-step00000100.safetensors", "vivi.safetensors"],
             )
+            self.assertEqual(list(native.iterdir()), [])
 
     def test_anima_publication_rejects_header_complete_but_tensor_data_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -628,6 +644,45 @@ class SdScriptsBackendTests(unittest.TestCase):
 
             self.assertTrue((root / "outputs" / "vivi-step00000100.safetensors").is_file())
             self.assertTrue((root / "recovery" / "vivi-step00000100.safetensors").is_file())
+            self.assertFalse((native / "vivi-step00000100.safetensors").exists())
+
+    def test_anima_post_exit_keeps_native_whose_published_output_does_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native = root / "native"
+            outputs = root / "outputs"
+            native.mkdir()
+            outputs.mkdir()
+            keys = ["layer.lora_down.weight", "layer.lora_up.weight"]
+            write_safetensors(native / "vivi-step00000100.safetensors", keys)
+            write_safetensors(native / "vivi.safetensors", keys)
+            # A published output that a fresh conversion does not reproduce.
+            write_safetensors(outputs / "vivi-step00000100.safetensors", keys + ["other.lora_up.weight"])
+            namespace = {"__name__": "__test__"}
+            exec(script_source("sd_scripts_publish_anima.py"), namespace)
+            child = Mock()
+            child.poll.return_value = 0
+            child.wait.return_value = 0
+
+            def convert(command, check):
+                Path(command[-1]).write_bytes(Path(command[-2]).read_bytes())
+
+            spec = {
+                "native_dir": str(native),
+                "staging_dir": str(root / "staging"),
+                "output_dir": str(outputs),
+                "recovery_dir": str(root / "recovery"),
+                "output_name": "vivi",
+                "converter": "converter.py",
+                "train_argv": ["train"],
+            }
+            with patch("subprocess.Popen", return_value=child), patch("subprocess.run", side_effect=convert):
+                with self.assertRaisesRegex(RuntimeError, "conflicts with converted native weight"):
+                    namespace["train_and_publish"](spec)
+
+            names = ["vivi-step00000100.safetensors", "vivi.safetensors"]
+            self.assertEqual(sorted(path.name for path in native.iterdir()), names)
+            self.assertEqual(sorted(path.name for path in (root / "recovery").iterdir()), names)
 
     def test_anima_lllite_rejects_unsupported_memory_modes(self) -> None:
         run = base_run("anima", "controlnet_lllite")

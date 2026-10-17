@@ -70,11 +70,14 @@ def tensor_fingerprint(path):
     return hashlib.sha256(descriptor).hexdigest(), data_hash.hexdigest()
 
 
-def native_files(native_dir, output_name, *, require_final):
+def native_files(native_dir, output_name, *, require_final, output_dir=None):
+    # A final whose native source a previous post-exit pass already verified
+    # and removed is published in output_dir, so it satisfies require_final.
     final_name = output_name + ".safetensors"
     checkpoint = re.compile(re.escape(output_name) + r"-step[0-9]{8}\.safetensors\Z")
+    final_published = output_dir is not None and (pathlib.Path(output_dir) / final_name).is_file()
     if not native_dir.is_dir():
-        if require_final:
+        if require_final and not final_published:
             fail(f"missing native output directory: {native_dir}")
         return []
     matches = sorted(
@@ -82,7 +85,7 @@ def native_files(native_dir, output_name, *, require_final):
         for path in native_dir.iterdir()
         if path.is_file() and (path.name == final_name or checkpoint.fullmatch(path.name))
     )
-    if require_final and not any(path.name == final_name for path in matches):
+    if require_final and not final_published and not any(path.name == final_name for path in matches):
         fail(f"missing final native LoRA: {native_dir / final_name}")
     return matches
 
@@ -91,11 +94,17 @@ def recover(files, recovery_dir):
     recovery_dir.mkdir(parents=True, exist_ok=True)
     for source in files:
         destination = recovery_dir / source.name
-        if not destination.exists():
+        # A source the post-exit pass already removed was verified against its
+        # published output first, so nothing of it is lost.
+        if source.exists() and not destination.exists():
             shutil.copy2(source, destination)
 
 
-def publish(files, spec, published):
+def publish(files, spec, published, *, remove_sources=False):
+    # remove_sources is the post-exit pass: every native is converted again
+    # (callers pass an empty `published`), and a native is unlinked only once
+    # its published output matches that fresh conversion.  A failure raises
+    # before the unlink, so the native stays for recovery.
     staging_dir = pathlib.Path(spec["staging_dir"])
     output_dir = pathlib.Path(spec["output_dir"])
     converter = spec["converter"]
@@ -117,9 +126,13 @@ def publish(files, spec, published):
                 fail(f"published output conflicts with converted native weight: {destination}")
             staging.unlink()
             published.add(source.name)
+            if remove_sources:
+                source.unlink()
             continue
         os.replace(staging, destination)
         published.add(source.name)
+        if remove_sources:
+            source.unlink()
         print(json.dumps({"path": str(destination), "kind": "lora", "tensor_count": tensor_count}, ensure_ascii=False), flush=True)
 
 
@@ -168,10 +181,10 @@ def train_and_publish(spec):
                 pass
             time.sleep(1)
         returncode = child.wait()
-        files = native_files(native_dir, output_name, require_final=returncode == 0)
-        publish(files, spec, published)
+        files = native_files(native_dir, output_name, require_final=returncode == 0, output_dir=spec["output_dir"])
         if returncode != 0:
             recover(files, recovery_dir)
+        publish(files, spec, set(), remove_sources=True)
         if forwarded_signal is not None:
             return 128 + forwarded_signal
         return returncode
@@ -195,9 +208,9 @@ def main():
     if spec.get("train_argv"):
         raise SystemExit(train_and_publish(spec))
     native_dir = pathlib.Path(spec["native_dir"])
-    files = native_files(native_dir, spec["output_name"], require_final=True)
+    files = native_files(native_dir, spec["output_name"], require_final=True, output_dir=spec["output_dir"])
     try:
-        publish(files, spec, set())
+        publish(files, spec, set(), remove_sources=True)
     except BaseException:
         recover(files, pathlib.Path(spec["recovery_dir"]))
         raise

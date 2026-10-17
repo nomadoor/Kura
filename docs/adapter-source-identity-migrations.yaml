@@ -92,6 +92,78 @@ records:
       kind: source-tree-sha256
       scope: selected-adapter-v3
       value: 01f6140241b50c1b3a2143a381545875eb8750312f94c0eb39e6a6127bb9725f
+  - id: anima-native-removal-sd-scripts-2026-10-17
+    backend: sd-scripts
+    reason: 'After the trainer exits, the Anima LoRA publication wrapper converts every native checkpoint again, including the ones it published during training, and removes the native file from cache/sd-scripts/native-output only once its published output matches that conversion; a conversion that fails or does not match keeps the native file and the recovery copy, and a rerun accepts a final already published in outputs. The mid-training loop, native weights, conversion, published adapters, and the training command are unchanged; SD 1.5, SDXL, FLUX.1, and LLLite runs do not use the wrapper.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-release-conformance-docker-2026-10-17
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 01f6140241b50c1b3a2143a381545875eb8750312f94c0eb39e6a6127bb9725f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 5d048b04cc6f651da0bca17fdb6215a9a3b6e414c6789797c5bbdb6962e9c8cf
+  - id: status-runner-epoch-runpod-executor-2026-10-17
+    executor: runpod
+    reason: 'status.json names the runner epoch runner_epoch and drops the old epoch key in the same write, so it is not read as a training epoch; the fence reads the higher of the two, so a status an older Kura wrote still fences a replaced follower, and run_end and controlled_by records keep their epoch field. Launch, transfer, training, collection, and Pod stops are unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 9c31fdff706e3c556e4f98eb29072edcb419299d0f076bd39526774e3c29b699
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 25440998d11b408bcee94204d93d39ba4857b6ca98b31e31c92dfec8236a8299
   - id: ai-toolkit-0.13.30-comment-2026-10-17
     backend: ai-toolkit
     reason: 'A comment in the AI-Toolkit adapter now cites the exact trainer lines behind the one-reference FLUX.3 projection. No code changed, so every configuration and command is the same.'
