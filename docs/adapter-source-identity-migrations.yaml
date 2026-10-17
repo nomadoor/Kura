@@ -115,7 +115,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 5d048b04cc6f651da0bca17fdb6215a9a3b6e414c6789797c5bbdb6962e9c8cf
+      value: df29212c647ee67c13e19f39a538cafc0bab1de2a49c5b087fd0be3ed48016c2
   - id: status-runner-epoch-runpod-executor-2026-10-17
     executor: runpod
     reason: 'status.json names the runner epoch runner_epoch and drops the old epoch key in the same write, so it is not read as a training epoch; the fence reads the higher of the two, so a status an older Kura wrote still fences a replaced follower, and run_end and controlled_by records keep their epoch field. Launch, transfer, training, collection, and Pod stops are unchanged.'
