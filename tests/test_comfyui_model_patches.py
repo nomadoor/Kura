@@ -161,6 +161,8 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         specs, unknown = resolve_model_specs(workflow, {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "revision": "a" * 40}}})
         self.assertEqual(unknown, [])
         self.assertEqual(module._checked_specs(specs), specs)
+        url_specs, _ = resolve_model_specs(workflow, {"checkpoints": {"toy.safetensors": {"url": "https://example.com/toy.safetensors"}}})
+        self.assertEqual(module._checked_specs(url_specs), url_specs)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.assertEqual(module.prepare([], comfyui_root=root / "ComfyUI", cache_dir=None), [])

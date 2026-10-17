@@ -6,6 +6,7 @@ import json
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -209,6 +210,10 @@ trap cleanup EXIT
 if [ -f "$secret_file" ]; then
   . "$secret_file"
 fi
+if ! python /opt/kura_comfy_prepare.py --help 2>/dev/null | grep -q models_json; then
+  echo "this ComfyUI image predates Kura's compiled model list; use the image this Kura pins (remove images.comfyui or --image)" >&2
+  exit 1
+fi
 python /opt/kura_comfy_prepare.py {shlex.quote(models_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
 {lora_line}
 cd /opt/ComfyUI
@@ -264,9 +269,9 @@ def launch_render_runpod(
         if requested is not None:
             runpod_config["gpu_type_ids"] = requested
             runpod_config["gpu_type_priority"] = "custom"
+        # The models compile resolved (comfyui_models.resolve_model_specs); the Pod links exactly these.
         model_specs = frozen.get("comfyui_models")
-        model_registry = frozen.get("comfyui_model_registry")
-        if not isinstance(model_specs, list) or not isinstance(model_registry, dict):
+        if not isinstance(model_specs, list):
             raise ValueError("runpod render requires a manifest compiled for executor.name=runpod; set executor.name=runpod in run.yaml and recompile before launching on RunPod")
         loras = _render_runpod_loras(workspace, run_dir, frozen)
         images = _render_runpod_images(run_dir, frozen)
@@ -331,12 +336,12 @@ def launch_render_runpod(
         workflow_path = run_dir / "resolved" / "workflow_used.json"
         remote_workflow = f"{remote_run_dir}/resolved/workflow_used.json"
         _scp_to_runpod(details, workflow_path, remote_workflow)
-        # The image downloads and links only the models compile resolved (comfyui_models.resolve_model_specs).
-        models_path = run_dir / "resolved" / "comfyui_models.json"
-        if not models_path.is_file():
-            raise ValueError("resolved/comfyui_models.json is missing; compile the render again")
+        # The image downloads and links only the models the plan showed: the manifest's comfyui_models.
         remote_models = f"{remote_run_dir}/resolved/comfyui_models.json"
-        _scp_to_runpod(details, models_path, remote_models)
+        with tempfile.TemporaryDirectory() as staging:
+            models_path = Path(staging) / "comfyui_models.json"
+            models_path.write_text(json.dumps(model_specs, ensure_ascii=False), encoding="utf-8")
+            _scp_to_runpod(details, models_path, remote_models)
         remote_loras: list[dict[str, str]] = []
         for item in loras:
             remote_path = "/opt/ComfyUI/models/loras/" + item["name"]

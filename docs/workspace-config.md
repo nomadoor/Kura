@@ -47,7 +47,7 @@ overridden.
 | `images.ai-toolkit` | Image for AI-Toolkit runs, locally and on RunPod | the pinned digest |
 | `images.musubi-tuner` | Image for Musubi Tuner runs | the pinned digest |
 | `images.sd-scripts` | Image for sd-scripts runs | the pinned digest |
-| `images.comfyui` | Image for RunPod render sessions | the pinned digest |
+| `images.comfyui` | Image for RunPod render sessions; it must carry the `kura_comfy_prepare.py` of this Kura (read the compiled model list), so use a build from the same checkout | the pinned digest |
 
 An override is for deliberately running another image, such as one built while
 developing Kura. Prefer a digest; the plan and `kura doctor workspace` warn

@@ -3243,8 +3243,7 @@ class RenderNotificationTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
-                (resolved / "comfyui_model_registry.json").write_text("{}", encoding="utf-8")
-                (resolved / "comfyui_models.json").write_text("[]", encoding="utf-8")
+                (resolved / "workflow_used.json").exists()
                 (resolved / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
@@ -3289,7 +3288,8 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertTrue(remote_image.startswith("/opt/ComfyUI/input/Kura_tmp/"))
             mapping = render.call_args.kwargs["image_name_overrides"]
             self.assertEqual(mapping, {frozen_name: remote_image.removeprefix("/opt/ComfyUI/input/")})
-            # The Pod gets the models compile resolved, never the registry to resolve again.
+            # The Pod gets the manifest's resolved models (no resolved/comfyui_models.json is needed),
+            # never the registry to resolve again.
             uploaded = [str(call.args[2]) for call in scp.call_args_list]
             self.assertIn("/workspace/runs/render-1/resolved/comfyui_models.json", uploaded)
             self.assertFalse(any(path.endswith("comfyui_model_registry.json") for path in uploaded))
@@ -8561,6 +8561,10 @@ class RunPodLifecycleTests(unittest.TestCase):
         # The Pod's own deadline-file guard bounds it; no second, fixed timer.
         self.assertNotIn("runpodctl", script)
         self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
+        # The image links the compiled list; an older image that reads a registry stops with a clear reason.
+        self.assertIn("kura_comfy_prepare.py /workspace/runs/render-1/resolved/comfyui_models.json", script)
+        self.assertNotIn("--registry-json", script)
+        self.assertIn("grep -q models_json", script)
 
     def test_runpod_comfyui_start_failure_reports_ssh_error(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}

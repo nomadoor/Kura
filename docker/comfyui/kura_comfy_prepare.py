@@ -37,12 +37,12 @@ def _checked_specs(specs: Any) -> list[dict[str, str]]:
     checked: list[dict[str, str]] = []
     for spec in specs:
         if not isinstance(spec, dict) or not all(isinstance(value, str) and value for value in spec.values()):
-            raise ValueError(f"resolved model spec must map names to non-empty strings: {spec!r}")
+            raise ValueError(f"resolved model spec must map names to non-empty strings: {spec!r}; compile the render again")
         unknown = sorted(set(spec) - SPEC_KEYS)
         if unknown:
             raise ValueError(f"resolved model spec has unsupported key(s): {', '.join(unknown)}; compile the render again")
         if ("repo" in spec) == ("url" in spec) or not all(key in spec for key in ("name", "filename", "target_dir", "target_name")):
-            raise ValueError(f"resolved model spec needs exactly one of repo or url, and name, filename, target_dir, target_name: {spec!r}")
+            raise ValueError(f"resolved model spec needs exactly one of repo or url, and name, filename, target_dir, target_name: {spec!r}; compile the render again")
         checked.append(spec)
     return checked
 

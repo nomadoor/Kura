@@ -20,6 +20,7 @@ why, so it is not raised again.
 - 2026-10-17 | AI-Toolkit baseline | The pinned UI fills `model.assistant_lora_path` (a training adapter) for `qwen_image_2:turbo`, `ming_image`, and the MiniMax-H3 entries, but the baseline fills only the keys docs/adr/upstream-training-baseline.md lists, so a Kura run of those entries trains without the adapter unless the author writes it. Decide in the ADR whether the baseline fills it; filling it changes what the MiniMax-H3 evidence trained | CodeRabbit on the AI-Toolkit 0.13.30 upgrade pull request | P11
 - 2026-10-17 | docker queries | `docker info --format {{.DockerRootDir}}` is asked in three places (doctor's storage summary, doctor's docker checks, and `docker_data_location`), and doctor's `_docker_run` has no timeout | review of the image-build free-space pull request | -
 - 2026-10-17 | tests | No test covers the doctor build-cache advisory at its 10 GiB boundary, or `kura image build` stopping on a workspace.yaml that still holds the retired `docker.build_cache_limit_gb` | review of the image-build free-space pull request | -
+- 2026-10-17 | ComfyUI specs | A RunPod render compiled before 2026-10-16 may hold a model spec with both repo and url or an empty target_name; the image refuses it on the Pod (saying to compile again) instead of the launch refusing it before a Pod exists | review of the ComfyUI prepare pull request | P11
 
 ## Rejected
 
