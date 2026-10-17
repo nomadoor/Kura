@@ -110,6 +110,13 @@ MODEL_DOWNLOAD_REQUIRED_KEYS = ("repo", "filename")
 _RETIRED_DOWNLOAD_KEYS = {"repo_id": "repo", "file": "filename", "filenames": "filename (a list)"}
 
 
+def family_card_hint(architecture: str) -> str:
+    """Where the files a recorded run trained from are written down. Kura keeps no default-weights
+    table (which weights to train from is the user's choice); every refusal of a missing model role
+    and `kura run capabilities` point at the family card instead."""
+    return f"the family card .kura/knowledge/model-families/{architecture}.md lists verified entries when one exists"
+
+
 def model_source_facts() -> dict[str, Any]:
     """The entry shapes `model_downloads` and `model_paths` read, for `kura run capabilities`."""
     return {
@@ -119,6 +126,7 @@ def model_source_facts() -> dict[str, Any]:
             "filename": "a file in the repository, or a list whose first file is the one the trainer is pointed at",
         },
         "model_paths.<role>": "a file path as the trainer container sees it; it wins over a model_downloads entry for the same role",
+        "verified model_downloads": family_card_hint("<architecture>"),
     }
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from kura.backends.shared import download_specs_for, model_downloads, model_source_facts, recorded_model_source
+from kura.backends.shared import download_specs_for, family_card_hint, model_downloads, model_source_facts, recorded_model_source
 from kura.backends.shared import explicit_model_paths as shared_explicit_model_paths
 from kura.container_scripts import script_source
 from kura.provenance import artifact_pinning
@@ -89,12 +89,15 @@ def sd_scripts_model_download_specs(run: dict[str, Any]) -> tuple[list[dict[str,
 def sd_scripts_model_paths(run: dict[str, Any]) -> dict[str, str]:
     paths = explicit_model_paths(run)
     paths.update(sd_scripts_model_download_specs(run)[1])
-    required = ROLE_CONTRACTS.get((sd_scripts_architecture(run), sd_scripts_mode(run)))
+    architecture = sd_scripts_architecture(run)
+    required = ROLE_CONTRACTS.get((architecture, sd_scripts_mode(run)))
     if required is None:
         return paths
     missing = [role for role in required if not paths.get(role)]
     if missing:
-        raise ValueError("sd-scripts model_paths/model_downloads missing required role(s): " + ", ".join(missing))
+        raise ValueError(
+            "sd-scripts model_paths/model_downloads missing required role(s): " + ", ".join(missing) + "; " + family_card_hint(architecture)
+        )
     return paths
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from kura.backends.shared import family_card_hint
 from kura.run_envelope import backend_config
 
 
@@ -52,8 +53,8 @@ def _musubi_architecture(run: dict[str, Any]) -> str:
     return value
 
 
-def _require_paths(paths: dict[str, str], names: tuple[str, ...]) -> list[str]:
+def _require_paths(paths: dict[str, str], names: tuple[str, ...], architecture: str) -> list[str]:
     missing = [name for name in names if not paths.get(name)]
     if missing:
-        raise ValueError("Musubi Tuner model_paths missing: " + ", ".join(missing))
+        raise ValueError("Musubi Tuner model_paths/model_downloads missing role(s): " + ", ".join(missing) + "; " + family_card_hint(architecture))
     return [paths[name] for name in names]

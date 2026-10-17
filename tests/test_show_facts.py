@@ -23,7 +23,8 @@ from kura.backends.ai_toolkit_baseline import load_baseline
 from kura.backends.musubi_models import _musubi_model_expectations
 from kura.backends.sd_scripts import ENTRYPOINTS, command_sd_scripts, display_sd_scripts
 from kura.backends.sd_scripts_models import OPTIONAL_ROLES, ROLE_CONTRACTS
-from kura.backends.shared import MODEL_DOWNLOAD_KEYS
+from kura.backends.musubi_command import command_musubi_tuner
+from kura.backends.shared import MODEL_DOWNLOAD_KEYS, family_card_hint
 from kura.backends.ai_toolkit import AI_TOOLKIT_OPTIMIZER_DECIDED
 from kura.cli import cmd_run_capabilities, main as cli_main
 from kura.training_artifacts import LR_SCHEDULER_DECIDED, RESUME_LR_SCHEDULER
@@ -238,6 +239,50 @@ class CapabilitiesSurfaceAndArchTests(unittest.TestCase):
         self.assertNotIn("exact values only", _capabilities_text("ai-toolkit").split("lr_scheduler:")[-1].splitlines()[0])
 
 
+class MissingRoleRefusalNamesTheFamilyCardTests(unittest.TestCase):
+    """Kura keeps no default-weights table; a missing role points at the family card, which may list
+    the files a recorded run trained from."""
+
+    def test_sd_scripts_names_the_card_of_its_architecture(self) -> None:
+        run = sd_run("anima")
+        del run["backend"]["config"]["model_paths"]["qwen3"]
+        with self.assertRaises(SettingsRefused) as caught:
+            validate_backend_config(run)
+        self.assertIn("missing required role(s): qwen3; " + family_card_hint("anima"), str(caught.exception))
+
+    def test_musubi_names_the_card_of_its_architecture(self) -> None:
+        def musubi(config: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "id": "facts-mu", "type": "train", "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", config)},
+            }
+
+        cases = (
+            ({"architecture": "zimage", "model_paths": {"dit": "/models/dit.safetensors"}}, "zimage", "vae, text_encoder"),
+            ({"architecture": "zimage"}, "zimage", "model_paths, model_downloads, or model_bundle"),
+            (
+                {"architecture": "wan", "task": "i2v-14B", "model_paths": {"dit": "/m/d.safetensors", "vae": "/m/v.safetensors", "t5": "/m/t5.pth"}},
+                "wan", "model_downloads.clip",
+            ),
+        )
+        for config, architecture, missing in cases:
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    command_musubi_tuner(musubi(config))
+                message = str(caught.exception)
+                self.assertIn(missing, message)
+                self.assertIn(family_card_hint(architecture), message)
+        self.assertEqual(
+            family_card_hint("zimage"),
+            "the family card .kura/knowledge/model-families/zimage.md lists verified entries when one exists",
+        )
+
+    def test_capabilities_say_where_verified_entries_are(self) -> None:
+        for name in ("sd-scripts", "musubi-tuner"):
+            with self.subTest(backend=name):
+                self.assertIn(family_card_hint("<architecture>"), _capabilities_text(name))
+
+
 class ClosedPipeTests(unittest.TestCase):
     def test_a_closed_pipe_ends_any_command_quietly(self) -> None:
         class ClosedPipe(io.StringIO):
@@ -373,7 +418,11 @@ class SdScriptsProblemsTogetherTests(unittest.TestCase):
     def test_one_problem_is_reported_alone(self) -> None:
         run = sd_run("sdxl")
         del run["backend"]["config"]["model_paths"]["base"]
-        with self.assertRaisesRegex(SettingsRefused, r"^sd-scripts model_paths/model_downloads missing required role\(s\): base$"):
+        with self.assertRaisesRegex(
+            SettingsRefused,
+            r"^sd-scripts model_paths/model_downloads missing required role\(s\): base; the family card "
+            r"\.kura/knowledge/model-families/sdxl\.md lists verified entries when one exists$",
+        ):
             validate_backend_config(run)
 
     def test_an_invalid_selector_still_stops_first(self) -> None:
