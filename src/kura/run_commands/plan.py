@@ -849,9 +849,26 @@ def local_min_free_gib(docker_config: dict[str, Any]) -> int:
     return _configured_gib(docker_config.get("min_free_gb"), default=100)
 
 
-def docker_build_cache_limit_gib(docker_config: dict[str, Any]) -> int:
-    """The Docker build cache size above which `kura doctor disk` warns and `kura image build` stops."""
-    return _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
+def storage_floor_problem(
+    status: Any, path: Path | str, required_bytes: int, *, action: str, minimum: str,
+    risk_setting: str | None = None, risk_accepted: bool = False,
+) -> str | None:
+    """Whether a store holds `required_bytes`, for every local disk gate (a launch, an image build).
+
+    On WSL2 a store whose Windows backing drive is unknown cannot be measured, so it is refused
+    unless the caller's risk setting accepts it."""
+    required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
+    if status.confidence == "unknown" and not risk_accepted:
+        return (
+            f"{path} is on storage with unknown physical backing free space; {action} requires at least {required_display_gib} GiB ({minimum}). "
+            "Set storage.host_drive in workspace.yaml" + (f" or set {risk_setting} if this is intentional" if risk_setting else "")
+        )
+    if status.effective_free_bytes < required_bytes:
+        return (
+            f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
+            f"{action} requires at least {required_display_gib} GiB ({minimum})"
+        )
+    return None
 
 
 def _local_launch_disk_preflight(
@@ -915,17 +932,12 @@ def _local_launch_disk_preflight(
             "estimated_write_bytes": estimated_write_bytes,
             "backing_estimated_write_bytes": backing_write_estimates[backing],
         }
-        required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
-        if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:
-            errors.append(
-                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB ({minimum}). "
-                "Set storage.host_drive in workspace.yaml or set safety.allow_storage_risk: true if this is intentional"
-            )
-        elif status.effective_free_bytes < required_bytes:
-            errors.append(
-                f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
-                f"local Docker launch requires at least {required_display_gib} GiB ({minimum})"
-            )
+        problem = storage_floor_problem(
+            status, path, required_bytes, action="local Docker launch", minimum=minimum,
+            risk_setting="safety.allow_storage_risk: true", risk_accepted=safety.get("allow_storage_risk") is True,
+        )
+        if problem:
+            errors.append(problem)
     if errors:
         raise ValueError("; ".join([*errors, _checkpoint_estimate_text(checkpoint_estimate)]))
     try:

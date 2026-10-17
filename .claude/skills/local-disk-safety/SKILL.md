@@ -123,8 +123,11 @@ or WSL/VHDX/Windows-side operations.
   environment variables. Warnings are blocking-risk findings; advisories are cleanup
   hygiene that does not by itself make the operation unsafe.
 - Local Docker launch and RunPod stage/download/pull checks use configurable
-  disk gates, and `kura doctor disk` warns against the same local floor and
-  build cache limit. `kura doctor workspace` lists the settings and their
+  disk gates, and `kura doctor disk` warns against the same local floor.
+  `kura image build` checks the disk where Docker keeps its data against that
+  floor when this host can see it (Docker Desktop keeps it in its own VM, so
+  there it only says so), and `kura doctor disk` reports build cache that
+  cleanup can free. `kura doctor workspace` lists the settings and their
   accepted values.
 - Local Docker launch adds known write estimates to the configured free-space
   floor, and the RunPod check compares them with `runpod.container_disk_gb`.

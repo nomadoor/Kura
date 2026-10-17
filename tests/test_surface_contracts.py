@@ -133,8 +133,14 @@ class SurfaceContractTests(unittest.TestCase):
                     validate_workspace_config(config)
                 self.assertIn(rejected, str(caught.exception))
 
-    def test_consumed_docker_build_cache_limit_is_declared(self) -> None:
-        validate_workspace_config({"docker": {"build_cache_limit_gb": 20}})
+    def test_the_retired_build_cache_limit_is_refused_and_migrated(self) -> None:
+        from kura.workspace import migrate_workspace_config
+
+        with self.assertRaisesRegex(ValueError, "docker.build_cache_limit_gb .*docker.min_free_gb"):
+            validate_workspace_config({"docker": {"build_cache_limit_gb": 20}})
+        migrated, notes = migrate_workspace_config({"docker": {"build_cache_limit_gb": 20, "min_free_gb": 50}})
+        self.assertEqual(migrated["docker"], {"min_free_gb": 50})
+        self.assertTrue(any("docker.build_cache_limit_gb" in note for note in notes))
 
     def test_workspace_schema_description_exposes_nested_contract(self) -> None:
         settings = workspace_schema_description()

@@ -28,7 +28,7 @@ from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storage, probe_storages
-from kura.run_commands.plan import docker_build_cache_limit_gib, local_min_free_gib
+from kura.run_commands.plan import local_min_free_gib
 from kura.workspace import comfyui_endpoint, validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
@@ -265,7 +265,6 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         config = _workspace_config()
         docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
         min_free_gib = local_min_free_gib(docker_config)
-        build_cache_limit_gib = docker_build_cache_limit_gib(docker_config)
     except (OSError, ValueError, YAMLError) as exc:
         print(f"disk: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -317,13 +316,15 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             threshold_bytes=30 * gib,
         ))
     for item in docker_storage.get("usage", []):
-        if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > build_cache_limit_gib * gib:
+        # Build cache that images still use cannot be freed, so only what cleanup can free is reported.
+        if str(item.get("Type", "")).lower() == "build cache" and (item.get("reclaimable_bytes") or 0) > 10 * gib:
             issues.append(_disk_issue(
-                code="docker_build_cache_large",
-                severity="warning",
-                message=f"Docker build cache exceeds {build_cache_limit_gib}GiB",
+                code="docker_build_cache_reclaimable",
+                severity="advisory",
+                message=f"Docker reports {(item.get('reclaimable_bytes') or 0) // gib}GiB of build cache that no image uses; `kura cleanup docker-cache` shows what it frees",
                 size_bytes=item.get("size_bytes"),
-                threshold_bytes=build_cache_limit_gib * gib,
+                reclaimable_bytes=item.get("reclaimable_bytes"),
+                threshold_bytes=10 * gib,
             ))
         if str(item.get("Type", "")).lower() == "images" and (item.get("size_bytes") or 0) > 50 * gib:
             issues.append(_disk_issue(

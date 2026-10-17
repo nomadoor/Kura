@@ -431,7 +431,7 @@ from any workspace. A build is tagged `kura-<name>:dev` on the local Docker host
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura image build <name> [--ref <ref>]` | Build an image from the editable checkout the running `kura` is installed from (it names it, and refuses when the current directory is in another checkout, such as a worktree); `--ref` overrides the upstream image (AI-Toolkit) or Git ref (Musubi Tuner, sd-scripts, ComfyUI) |
+| `uv run kura image build <name> [--ref <ref>]` | Build an image from the editable checkout the running `kura` is installed from (it names it, and refuses when the current directory is in another checkout, such as a worktree, and when the disk where Docker keeps its data, if this host can see it, has less than `docker.min_free_gb` free); `--ref` overrides the upstream image (AI-Toolkit) or Git ref (Musubi Tuner, sd-scripts, ComfyUI) |
 | `uv run kura image inspect <name>` | Show the local development build and the pinned image |
 | `uv run kura image publish <name> --tag <registry-ref> [--dry-run]` | Push the local development build to a registry reference |
 

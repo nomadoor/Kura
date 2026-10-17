@@ -34,7 +34,7 @@ from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, kura_docker_volumes, stopped_kura_containers, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
-from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
+from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
 from kura.fsio import atomic_write_yaml as _dump_yaml
@@ -56,7 +56,8 @@ from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
-from kura.run_commands.plan import docker_build_cache_limit_gib
+from kura.run_commands.plan import local_min_free_gib, storage_floor_problem
+from kura.storage import probe_storage
 from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_render_launch
 from kura.run_commands import cmd_run_logs
@@ -1438,20 +1439,31 @@ def cmd_image_build(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    if not getattr(args, "allow_large_build_cache", False):
-        # A development checkout may build outside any workspace; there the default limit applies.
-        try:
-            config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
-            docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
-            limit_gib = docker_build_cache_limit_gib(docker_config)
-        except (OSError, ValueError, YAMLError) as exc:
-            print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
+    # A build writes its layers where Docker keeps its data. The accident is that disk filling up,
+    # so the build stops below the free-space floor a local launch keeps (docker.min_free_gb). A
+    # development checkout may build outside any workspace; there the default floor applies.
+    try:
+        config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
+        docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+        floor_gib = local_min_free_gib(docker_config)
+    except (OSError, ValueError, YAMLError) as exc:
+        print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    daemon_problem = docker_daemon_problem()
+    if daemon_problem:
+        print(f"cannot build image: {daemon_problem}", file=sys.stderr)
+        return 1
+    root_dir, unseen = docker_data_location()
+    if root_dir is None:
+        print(f"note: Docker's data disk is not checked: {unseen}", file=sys.stderr)
+    else:
+        problem = storage_floor_problem(
+            probe_storage(root_dir, config), root_dir, floor_gib * 1024**3,
+            action="an image build", minimum=f"the docker.min_free_gb floor, where Docker keeps its data",
+        )
+        if problem:
+            print(f"cannot build image: {problem}; `kura doctor disk` lists what can be freed", file=sys.stderr)
             return 1
-        storage = _docker_storage_summary()
-        for item in storage.get("usage", []):
-            if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > limit_gib * 1024**3:
-                print(f"cannot build image: Docker build cache exceeds {limit_gib}GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
-                return 1
     ref_arg, default_ref = BUILD_SOURCES[args.name]
     dockerfile = checkout / "docker" / args.name / "Dockerfile"
     command = ["docker", "build", "--tag", tag, "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(checkout)]
@@ -1725,7 +1737,6 @@ def main() -> None:
     build = image_sub.add_parser("build", help="Build a runtime image from the editable checkout this kura runs from")
     build.add_argument("name", choices=tuple(PINNED_IMAGES))
     build.add_argument("--ref")
-    build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds docker.build_cache_limit_gb (default 30)")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
     inspect.add_argument("name", choices=tuple(PINNED_IMAGES))
