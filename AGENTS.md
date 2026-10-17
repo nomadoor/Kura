@@ -83,7 +83,7 @@ declared in `docs/adapter-source-identity-migrations.yaml`.
 **6. Verified by someone without your context.** Reviews and acceptance checks
 are done by an agent (or person) that has not seen your reasoning: give a
 reviewer the diff and the relevant ADRs, not your explanation. Before a
-milestone or release, a context-free agent installs Kura and does a user task
+milestone, a context-free agent installs Kura and does a user task
 from the shipped docs alone, and reports where it stumbled.
 
 **7. Promises are the checklist.** Kura's promises to its users are listed once,
@@ -158,9 +158,11 @@ replaces any delegation given earlier in a conversation or in memory.
    touches training state, Resume, saving, checkpoint naming, step accounting,
    model or dataset handoff, or an image or trainer pin also runs the
    conformance scenario (Validation, below) and reports its table. For a change
-   to behavior or records, also give a reviewer with none of your context the
-   design and the whole branch diff (principle 6), and fix what it finds on
-   the same branch.
+   that touches what Kura must never get wrong (billing that stops, data or
+   outputs kept, secrets, or what a record states), also give a reviewer with
+   none of your context the design and the whole branch diff (principle 6),
+   and fix what it finds on the same branch. Other changes rely on the tests,
+   the gate, and the pull request's review.
 5. **Open one pull request**, ready for review. Its body states the design,
    `Owner:` (the function), `Copies removed:` (or none), `Behavior changed:`,
    the promises touched, validation, and risks. CodeRabbit reviews it there.

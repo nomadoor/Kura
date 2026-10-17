@@ -50,7 +50,13 @@ Minor and Nit findings, and pre-existing issues the review happens to find,
 are added to `docs/backlog.md` in its one-line format and fixed later in one
 batch pull request. Never grow a pull request to fix a pre-existing issue.
 
-## Before a milestone closes or a release
+## Before a release
+
+A release is held only by a broken guard against what a user or agent cannot
+undo: billing that does not stop, data or outputs lost, a full disk, a leaked
+secret, or a record that states something that did not happen. Anything else is
+an ordinary bug, fixed when use reaches it.
+
 
 **Conformance.** Run the conformance scenario on every backend on local Docker,
 then the RunPod pass on Musubi Tuner or AI-Toolkit (`--runpod --backend <name>`): it prints
@@ -60,8 +66,11 @@ When asking, give the expected cost from the earlier passes in `docs/smoke-evide
 first; the ceiling is the worst case. Record both tables as smoke
 evidence under `docs/smoke-evidence/`.
 
+## Before a milestone closes
+
 Two checks by agents that have none of your context, each given only what is
 written below; report their findings to the maintainer with your assessment.
+They are not run for every release.
 
 **Acceptance test.** Install Kura from the branch into a fresh tool environment
 and create a fresh workspace with `kura init`; give the agent only that
