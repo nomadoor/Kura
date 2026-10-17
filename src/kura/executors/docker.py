@@ -315,7 +315,9 @@ def docker_data_location() -> tuple[Path | None, str]:
         return None, "`docker info` did not report it"
     if "docker desktop" in system.lower():
         return None, f"Docker Desktop keeps {root} inside its own VM"
-    if host and not host.startswith(("unix://", "npipe://")):
+    if not host:
+        return None, "`docker context inspect` did not name the engine's endpoint"
+    if not host.startswith(("unix://", "npipe://")):
         return None, f"the Docker engine is at {host}, not on this host"
     if not Path(root).is_dir():
         return None, f"{root} is not visible from here"

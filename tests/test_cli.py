@@ -639,6 +639,7 @@ class ImageCommandTests(unittest.TestCase):
                 (f"{directory}\tDocker Desktop", "unix:///var/run/docker.sock", None),
                 (f"{directory}\tUbuntu 24.04", "ssh://builder", None),
                 ("/var/lib/docker-not-here\tUbuntu 24.04", "unix:///var/run/docker.sock", None),
+                (f"{directory}\tUbuntu 24.04", "", None),
             ):
                 with self.subTest(info=info, host=host), patch(
                     "kura.executors.docker.subprocess.run",
