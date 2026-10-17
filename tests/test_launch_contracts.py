@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +15,8 @@ from kura.backends import command_musubi_tuner
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_PROJECTION_PROFILES, MUSUBI_VIDEO_SUFFIXES
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, command_ai_toolkit
 from kura.executors.docker import docker_command
-from kura.paths import local_docker_mounts
+from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, local_docker_mounts
+from kura.container_scripts import script_source
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
 from kura.run_commands.common import _load_frozen_command
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
@@ -142,18 +145,24 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         )
 
     def test_ai_toolkit_declares_its_backend_managed_model_write_root(self) -> None:
-        spec = command_ai_toolkit({
-            "id": "contract-run",
-            "backend": {"name": "ai-toolkit", "config": {}},
-            "model": {"base": "example/model"},
-            "recipe": {"steps": 1, "seed": 1},
-        })
-        self.assertEqual(spec["env"]["MODELS_PATH"], "/workspace/cache/ai-toolkit/models")
-        self.assertEqual(spec["write_roots"], [{
-            "role": "model-cache",
-            "path": "/workspace/cache/ai-toolkit/models",
-            "env": "MODELS_PATH",
-        }])
+        # AI-Toolkit's own model downloads go to the Hugging Face cache, the same
+        # path on both executors, so they land where docker.hf_cache points.
+        self.assertEqual(AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH + "/ai-toolkit-models")
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor):
+                spec = command_ai_toolkit({
+                    "id": "contract-run",
+                    "backend": {"name": "ai-toolkit", "config": {}},
+                    "model": {"base": "example/model"},
+                    "recipe": {"steps": 1, "seed": 1},
+                    "compute": {"executor": executor},
+                })
+                self.assertEqual(spec["env"]["MODELS_PATH"], AI_TOOLKIT_MODELS_PATH)
+                self.assertEqual(spec["write_roots"], [{
+                    "role": "model-cache",
+                    "path": AI_TOOLKIT_MODELS_PATH,
+                    "env": "MODELS_PATH",
+                }])
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -161,8 +170,8 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             docker_argv, _, _ = docker_command(workspace, run_dir, spec, "example:image", [], "r1")
         wrapper = docker_argv[docker_argv.index("kura-job") - 1]
-        self.assertIn('"/workspace/cache/ai-toolkit/models"', wrapper)
-        self.assertIn('test -w "/workspace/cache/ai-toolkit/models"', wrapper)
+        self.assertIn(f'"{AI_TOOLKIT_MODELS_PATH}"', wrapper)
+        self.assertIn(f'test -w "{AI_TOOLKIT_MODELS_PATH}"', wrapper)
 
         remote = _runpod_remote_job_script(
             workspace="/workspace",
@@ -175,8 +184,37 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             command="python run.py config.yaml",
             write_roots=spec["write_roots"],
         )
-        self.assertIn('mkdir -p "/workspace/cache/ai-toolkit/models"', remote)
-        self.assertIn('test -w "/workspace/cache/ai-toolkit/models"', remote)
+        self.assertIn(f'mkdir -p "{AI_TOOLKIT_MODELS_PATH}"', remote)
+        self.assertIn(f'test -w "{AI_TOOLKIT_MODELS_PATH}"', remote)
+
+    def test_runpod_job_lists_ai_toolkit_models_after_the_trainer(self) -> None:
+        spec = command_ai_toolkit({
+            "id": "contract-run",
+            "backend": {"name": "ai-toolkit", "config": {}},
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+            "compute": {"executor": "runpod"},
+        })
+        arguments = dict(
+            workspace="/workspace", run_id="contract-run", realization_id="r1",
+            remote_secret_path="/tmp/contract.env", archive_name="contract.tar.gz",
+            remote_archive="/workspace/contract.tar.gz", cwd="/app/ai-toolkit",
+            command="python run.py config.yaml",
+        )
+        remote = _runpod_remote_job_script(**arguments, write_roots=spec["write_roots"])
+        listing = remote.index("<<'KURA_AI_TOOLKIT_MODELS' || true")
+        self.assertLess(remote.index("python run.py config.yaml"), listing)
+        self.assertLess(listing, remote.index('"kind": "remote_exit"'))
+        self.assertIn(
+            f'python - {AI_TOOLKIT_MODELS_PATH} "$KURA_WORKSPACE/runs/$KURA_RUN_ID/realizations/$KURA_REALIZATION_ID.ai-toolkit-models.json"',
+            remote,
+        )
+        self.assertIn(script_source("ai_toolkit_models.py"), remote)
+        if shutil.which("sh"):
+            syntax = subprocess.run(["sh", "-n"], input=remote, text=True, capture_output=True, check=False)
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        # A command that declares no MODELS_PATH lists nothing.
+        self.assertNotIn("KURA_AI_TOOLKIT_MODELS", _runpod_remote_job_script(**arguments))
 
     def test_musubi_builtin_command_requires_a_trained_adapter_output(self) -> None:
         spec = command_musubi_tuner(_minimal_flux2_run())
@@ -238,7 +276,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             }},
         }
         spec = command_ai_toolkit(run)
-        self.assertEqual(spec["env"]["MODELS_PATH"], "/workspace/cache/ai-toolkit/models")
+        self.assertEqual(spec["env"]["MODELS_PATH"], AI_TOOLKIT_MODELS_PATH)
         self.assertEqual(spec["write_roots"][0]["role"], "model-cache")
         run["backend"]["config"]["command"]["env"]["MODELS_PATH"] = "/app/ai-toolkit/models"
         with self.assertRaisesRegex(ValueError, "MODELS_PATH"):

@@ -8,6 +8,87 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-models-in-hf-cache-2026-10-17
+    backend: ai-toolkit
+    reason: 'AI-Toolkit''s MODELS_PATH moves from the workspace''s cache/ai-toolkit/models to /workspace/cache/huggingface/ai-toolkit-models, inside the Hugging Face cache, so the model files the trainer resolves and downloads itself land where docker.hf_cache points; the compiled command''s MODELS_PATH and its model-cache write root change, while the native configuration is the same. The model requirement for a selector the trainer resolves is now recorded as backend-resolved-selector instead of huggingface-repository, pointing at resolved/ai-toolkit.yaml for the settings. The trainer now downloads into a directory no recorded smoke used, so the evidence below does not carry over.'
+    behavior_changed: true
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-docker-2026-10-17
+    - ai-toolkit-0.13.30-class-import-2026-10-17
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: e246ff13d8bfffdc642923cbae99771bae6f39dafb430c6df714b02e78a7af04
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f86b9ae5dfb6b28f2946a7acf38f54ef1d87e7716eed1f2dab082d6d691b61ff
+  - id: ai-toolkit-models-listing-runpod-executor-2026-10-17
+    executor: runpod
+    reason: 'After the trainer, the SSH remote job runs one stdlib script that lists the files under an AI-Toolkit command''s MODELS_PATH (path, size, mtime) into realizations/<id>.ai-toolkit-models.json, whatever the exit code and without changing it, and the download copies that one record home, with or without a frozen dataset handoff, never over a record already there; the executor identity now also covers that embedded script; a container_disk AI-Toolkit launch records that no listing is written. Upload, transfer verification, the trainer command, output collection, and every other record are unchanged, and a command without MODELS_PATH runs exactly as before.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 25440998d11b408bcee94204d93d39ba4857b6ca98b31e31c92dfec8236a8299
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: d46f59f7fad1bd9c3ae7e05d08bda9359c71b791d5f3261ef432752419198810
   - id: ai-toolkit-show-facts-2026-10-17
     backend: ai-toolkit
     reason: 'kura run capabilities shows each model_arch value''s pinned upstream UI baseline entry, how native_config merges, the shared model entry shapes, and the pinned trainer, and the plan display lists each effective train and model setting marked authored or baseline in place of the filled-baseline mapping. Compile now builds the authored sections in one function the display also reads, and the typed-field baseline keys are derived from the one typed-field table; both produce the same process keys in the same order, so every configuration builds the same native YAML and command.'

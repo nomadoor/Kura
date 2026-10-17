@@ -26,7 +26,8 @@ from kura.secrets import declared_secret
 from kura.yamlio import YAMLError
 from kura.storage import ensure_free_bytes
 from kura.container_scripts import script_source
-from kura.executors.runpod import project_runpod_dataset_handoff
+from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX, models_root
+from kura.executors.runpod import bring_home_ai_toolkit_models, project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
@@ -585,6 +586,8 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 if path.is_file()
             ] if recovery_root.is_dir() else []
             realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
+            if isinstance(realization_ref, str):
+                bring_home_ai_toolkit_models(run_dir, downloaded_run, Path(realization_ref).stem)
             input_postflight = (
                 project_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
                 if isinstance(realization_ref, str) else None
@@ -1887,6 +1890,16 @@ def _runpod_remote_job_script(
         {"env": {item["env"]: item["path"] for item in declared_roots}, "write_roots": declared_roots},
         workspace_path=workspace,
     )
+    models_path = models_root(declared_roots)
+    # Runs after the trainer whatever its exit code; it lists what AI-Toolkit
+    # resolved into MODELS_PATH and never changes the exit code.
+    models_listing = "" if models_path is None else (
+        f"python - {shlex.quote(models_path)} "
+        f'"$KURA_WORKSPACE/runs/$KURA_RUN_ID/realizations/$KURA_REALIZATION_ID{AI_TOOLKIT_MODELS_RECORD_SUFFIX}" '
+        "\"$KURA_REALIZATION_ID\" >> \"$KURA_LOG_PATH\" 2>&1 <<'KURA_AI_TOOLKIT_MODELS' || true\n"
+        f"{script_source('ai_toolkit_models.py')}\n"
+        "KURA_AI_TOOLKIT_MODELS"
+    )
     prepare_write_roots = "\n".join(
         f'mkdir -p "{path}" && test -w "{path}" || exit 1' for path in paths
     )
@@ -1992,6 +2005,7 @@ if [ "$exit_code" -eq 0 ]; then
 fi
 collect_runtime_diagnostics after_backend
 {inputs_postflight}
+{models_listing}
 export KURA_CGROUP_OOM_KILL_AFTER=$(read_oom_kill)
 export KURA_CGROUP_MEMORY_PEAK=$(read_memory_peak)
 export KURA_EXIT_CODE="$exit_code"

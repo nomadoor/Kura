@@ -12,7 +12,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, can_start, start_refusal
@@ -32,8 +32,8 @@ from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
-from kura.model_requirements import model_requirements
-from kura.paths import hf_cached_file, local_docker_mounts, local_hf_cache
+from kura.model_requirements import model_requirements, requirement_source
+from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, hf_cached_file, local_docker_mounts, local_hf_cache
 from kura.storage import probe_storages
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
@@ -194,7 +194,7 @@ def _model_artifact_filenames(requirements: list[dict[str, Any]]) -> list[dict[s
             {
                 "role": _plan_value(item.get("role")),
                 "filename": _plan_value(filename),
-                "source": _plan_value(identity.get("repo_id") or identity.get("path")),
+                "source": _plan_value(requirement_source(identity)),
             }
         )
     return artifacts
@@ -455,7 +455,9 @@ def _preflight_bytes(value: Any) -> str:
     return _format_bytes(number)
 
 
-def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str) -> list[dict[str, Any]]:
+def _model_download_preflight_report(
+    run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str, local_cache: Path,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     requirements = model_requirements(run, download_estimate)
@@ -463,13 +465,20 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
     if backend_managed and not kura_managed:
         sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
+        # The trainer's MODELS_PATH sits at the same place inside the cache on every executor.
+        inside_cache = PurePosixPath(AI_TOOLKIT_MODELS_PATH).relative_to(HF_CACHE_CONTAINER_PATH)
+        destination = (
+            f"the Pod's Hugging Face cache ({AI_TOOLKIT_MODELS_PATH})" if executor == "runpod"
+            else f"the Hugging Face cache at {local_cache.joinpath(*inside_cache.parts)}"
+        )
         return [
             _preflight_record(
                 "model-acquisition",
                 "info",
-                f"the trainer downloads {sources} itself before the first step, "
+                f"the trainer downloads {sources} itself before the first step into {destination}, "
+                "and may write tens of GB there, "
                 + ("on every run, while the Pod bills: each Pod starts with an empty cache"
-                   if executor == "runpod" else "unless the Hugging Face cache local runs mount already holds it")
+                   if executor == "runpod" else "reusing files an earlier run left there")
                 + "; Kura cannot know the size in advance",
                 "run.yaml",
             )
@@ -712,7 +721,9 @@ def collect_run_preflight(
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
-    records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
+    records.extend(_model_download_preflight_report(
+        run, estimate, executor=str(resolved_executor), local_cache=local_hf_cache(workspace, workspace_config),
+    ))
     records.extend(_disk_cache_preflight_report(run))
     important = (_adapter_display(run).get("checkpoint") or {})
     for warning in _disk_warnings(run, important):
@@ -1569,7 +1580,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 role = item.get("role") or "model"
                 acquisition = item.get("acquisition") or NOT_SET
                 identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
-                source = identity.get("repo_id") or identity.get("path") or NOT_SET
+                source = requirement_source(identity) or NOT_SET
                 filename = identity.get("filename")
                 if filename:
                     source = f"{source}:{filename}"

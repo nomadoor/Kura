@@ -308,6 +308,7 @@ def _adapter_source_parts(backend_name: str) -> tuple[list[tuple[str, bytes]], s
 # declared behavior-preserving executor migration.
 EXECUTOR_SOURCE_FILES: dict[str, tuple[str, ...]] = {
     "runpod": (
+        "container_scripts/ai_toolkit_models.py",
         "container_scripts/pod_self_delete.sh",
         "container_scripts/runpod_input_verify.py",
         "dataset_handoff.py",

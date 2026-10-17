@@ -1078,7 +1078,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertIn(f"/workspace/runs/{run_id}/resolved/ai-toolkit.yaml", command["argv"][3])
                 self.assertEqual(command["env"], {
                     "SEED": "1",
-                    "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
+                    "MODELS_PATH": "/workspace/cache/huggingface/ai-toolkit-models",
                     "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
                 })
 

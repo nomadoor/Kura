@@ -51,7 +51,7 @@ class AgentIndependentCliTests(unittest.TestCase):
 
     def test_ai_toolkit_requirement_records_no_revision_it_cannot_pin(self) -> None:
         requirement = model_requirements({"backend": {"name": "ai-toolkit"}, "model": {"base": "org/model"}})[0]
-        self.assertEqual(requirement["identity"], {"kind": "huggingface-repository", "repo_id": "org/model"})
+        self.assertEqual(requirement["identity"], {"kind": "backend-resolved-selector", "value": "org/model"})
         self.assertEqual(requirement["pinning"]["strength"], "mutable-reference")
 
     def _dataset(self, root: Path) -> None:

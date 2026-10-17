@@ -46,6 +46,32 @@ class LocalOutputPublicationTests(unittest.TestCase):
         (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/launch.json"}), encoding="utf-8")
         return run_dir
 
+    def test_the_host_lists_ai_toolkit_models_once_the_container_ended(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run(root)
+            models = root / "cache" / "huggingface" / "ai-toolkit-models"
+            (models / "flux3").mkdir(parents=True)
+            (models / "flux3" / "dit.safetensors").write_bytes(b"123")
+            (models / ".cache").mkdir()
+            (models / ".cache" / "x").write_bytes(b"x")
+            with patch("kura.executors.docker.write_models_record", wraps=docker_executor.write_models_record) as listing:
+                self._reconcile(run_dir)
+            listing.assert_called_once()
+            record = json.loads((run_dir / "realizations" / "launch.ai-toolkit-models.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["models_path"], "/workspace/cache/huggingface/ai-toolkit-models")
+            self.assertEqual([(item["path"], item["size_bytes"]) for item in record["files"]], [("flux3/dit.safetensors", 3)])
+
+    def test_a_command_without_models_path_writes_no_models_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            lock = run_dir / "resolved" / "backend-command.lock.json"
+            spec = json.loads(lock.read_text(encoding="utf-8"))
+            spec.pop("write_roots")
+            lock.write_text(json.dumps(spec), encoding="utf-8")
+            self._reconcile(run_dir)
+            self.assertFalse((run_dir / "realizations" / "launch.ai-toolkit-models.json").exists())
+
     def test_a_run_without_an_output_contract_records_its_unverified_publication(self) -> None:
         from kura.status_projection import project_status
 
@@ -499,6 +525,81 @@ class LocalOutputPublicationTests(unittest.TestCase):
             status = self._reconcile(run_dir)
             self.assertEqual(status["state"], "recovery_required")
             self.assertIn("required trained-adapter", status["publication_error"])
+
+
+class AiToolkitModelsRecordParityTests(unittest.TestCase):
+    """A schema-1 run (an explicit command, no frozen dataset handoff) still declares
+    MODELS_PATH, so both executors record the model files it resolved."""
+
+    def _run(self, root: Path) -> Path:
+        (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+        run_dir = root / "runs" / "example"
+        (run_dir / "resolved").mkdir(parents=True)
+        (run_dir / "realizations").mkdir()
+        spec = command_ai_toolkit({"id": "example", "backend": {"name": "ai-toolkit", "config": {
+            "command": {"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
+        }}})
+        (run_dir / "resolved" / "backend-command.lock.json").write_text(
+            json.dumps({**spec, "backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}}), encoding="utf-8",
+        )
+        (run_dir / "realizations" / "launch.json").write_text(json.dumps({"id": "launch", "container": {"id": "container-1"}}), encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({
+            "state": "running", "pod_id": "pod-1", "last_realization": "realizations/launch.json",
+        }), encoding="utf-8")
+        return run_dir
+
+    @staticmethod
+    def _models(base: Path) -> None:
+        models = base / "cache" / "huggingface" / "ai-toolkit-models"
+        models.mkdir(parents=True)
+        (models / "dit.safetensors").write_bytes(b"123")
+
+    def _files(self, run_dir: Path) -> list[tuple[str, int]]:
+        record = json.loads((run_dir / "realizations" / "launch.ai-toolkit-models.json").read_text(encoding="utf-8"))
+        return [(item["path"], item["size_bytes"]) for item in record["files"]]
+
+    def test_docker_and_runpod_both_record_the_models_of_a_schema_1_run(self) -> None:
+        from kura.container_scripts.ai_toolkit_models import write_models_record
+        from kura.paths import AI_TOOLKIT_MODELS_PATH
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "docker"
+            root.mkdir()
+            run_dir = self._run(root)
+            self._models(root)
+            observed = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}', "")
+            with patch("kura.executors.docker.subprocess.run", return_value=observed):
+                reconcile_docker(run_dir)
+            docker_files = self._files(run_dir)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "runpod"
+            root.mkdir()
+            run_dir = self._run(root)
+            pod = Path(directory) / "pod"
+            self._models(pod)
+            downloaded = run_dir / "downloads" / "example"
+            (downloaded / "realizations").mkdir(parents=True)
+            (downloaded / "outputs").mkdir()
+            # What the Pod's job leaves after the trainer, from the same listing function.
+            write_models_record(
+                str(pod / "cache" / "huggingface" / "ai-toolkit-models"),
+                str(downloaded / "realizations" / "launch.ai-toolkit-models.json"),
+                models_path=AI_TOOLKIT_MODELS_PATH, realization_id="launch",
+            )
+            (downloaded / "realizations" / "remote-exit-20260101.json").write_text(
+                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                cmd_run_download(argparse.Namespace(run_id="example", force=False))
+            finally:
+                os.chdir(previous)
+            runpod_files = self._files(run_dir)
+
+        self.assertEqual(docker_files, [("dit.safetensors", 3)])
+        self.assertEqual(runpod_files, docker_files)
 
 
 class RunPodOutputPublicationTests(unittest.TestCase):

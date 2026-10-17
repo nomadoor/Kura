@@ -17,6 +17,12 @@ DEFAULT_CONTAINER_ROOT = "/workspace"
 # says where it lives on the host.
 HF_CACHE_CONTAINER_PATH = "/workspace/cache/huggingface"
 DEFAULT_HF_CACHE = "cache/huggingface"
+# AI-Toolkit resolves many model selectors itself and downloads the files into
+# MODELS_PATH. It lives in the Hugging Face cache, beside (not inside) HF_HUB_CACHE,
+# so those files land on the drive `docker.hf_cache` names and no hub scan sees them.
+AI_TOOLKIT_MODELS_PATH = HF_CACHE_CONTAINER_PATH + "/ai-toolkit-models"
+# Runs compiled before AI_TOOLKIT_MODELS_PATH kept these files in the workspace here.
+LEGACY_AI_TOOLKIT_CACHE = "cache/ai-toolkit"
 # Before `docker.hf_cache`, workspaces could mount the cache here; links that
 # containers wrote then still point at it.
 LEGACY_HF_CACHE_CONTAINER_PATH = "/root/.cache/huggingface"

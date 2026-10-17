@@ -129,10 +129,25 @@ Backend-native output validators remain responsible for adapter-specific tensor
 keys and compatibility; this structural publication check does not judge LoRA
 quality or prove that the model is useful.
 
-AI-Toolkit still acquires its own base and companion models. Its backend-owned
-`MODELS_PATH` now points to a writable cache under the Kura workspace, checked
-before the training command starts. This does not copy the base model into each
-run or change model-acquisition ownership. AI-Toolkit trains from `model.base`,
+AI-Toolkit still acquires its own base and companion models. Many families
+resolve `model.base` to files of other repositories and download them into the
+trainer's `MODELS_PATH`, which Kura sets to `ai-toolkit-models/` inside the
+Hugging Face cache (`/workspace/cache/huggingface/ai-toolkit-models` in the
+container, under `docker.hf_cache` on the host), checked writable before the
+training command starts. Those files land on the drive the Hugging Face cache
+uses and are shared by every workspace using that cache; runs compiled earlier
+keep their frozen `cache/ai-toolkit/models` path, which `kura cleanup cache`
+lists as legacy. The model requirement records `model.base` as a
+`backend-resolved-selector` (older locks say `huggingface-repository`), and the
+settings that steer resolution stay in `resolved/ai-toolkit.yaml`. After the
+trainer ends, Kura lists every file under `MODELS_PATH` (path, size, and mtime,
+without dot-named entries) in `realizations/<id>.ai-toolkit-models.json`: the
+host lists it for a local Docker run, and the RunPod job lists it on the Pod and
+the record comes back with the download. The trainer does not say which local
+candidate it loaded; compare each mtime with the realization's `launched_at`. A
+`runpod.storage_mode: container_disk` run writes no listing, and its realization
+and status say
+`ai_toolkit_models: "not-recorded: runpod.storage_mode container_disk runs only the trainer, so no model-file listing is written"`. AI-Toolkit trains from `model.base`,
 so compile requires it there. The pinned trainer loads the repository's default
 branch and takes no revision, so a run has no `model.revision`: compile refuses
 it, because it would record a pin that never happened. sd-scripts and Musubi

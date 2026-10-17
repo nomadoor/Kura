@@ -1341,5 +1341,59 @@ class ContainerScriptTests(unittest.TestCase):
             script_source("missing.py")
 
 
+class AiToolkitModelsListingTests(unittest.TestCase):
+    def test_listing_leaves_out_dot_entries_and_records_size_and_mtime(self) -> None:
+        from kura.container_scripts.ai_toolkit_models import write_models_record
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ai-toolkit-models"
+            (root / "moss" / "text_encoders").mkdir(parents=True)
+            (root / "moss" / "text_encoders" / "te.safetensors").write_bytes(b"12345")
+            (root / "top.safetensors").write_bytes(b"1")
+            (root / ".cache" / "huggingface").mkdir(parents=True)
+            (root / ".cache" / "huggingface" / "lock").write_bytes(b"x")
+            (root / ".moss_image_download").mkdir()
+            (root / ".moss_image_download" / "partial").write_bytes(b"x")
+            (root / "moss" / ".hidden").write_bytes(b"x")
+            os.utime(root / "top.safetensors", (1_700_000_000, 1_700_000_000))
+            record_path = Path(directory) / "realizations" / "r1.ai-toolkit-models.json"
+
+            self.assertTrue(write_models_record(str(root), str(record_path), models_path="/workspace/cache/huggingface/ai-toolkit-models", realization_id="r1"))
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["kind"], "ai_toolkit_models")
+            self.assertEqual(record["realization_id"], "r1")
+            self.assertEqual(record["models_path"], "/workspace/cache/huggingface/ai-toolkit-models")
+            self.assertEqual(record["loaded_candidate"], "not-reported-by-trainer")
+            self.assertEqual([item["path"] for item in record["files"]], ["top.safetensors", "moss/text_encoders/te.safetensors"])
+            self.assertEqual(record["files"][1]["size_bytes"], 5)
+            from datetime import datetime
+            self.assertEqual(datetime.fromisoformat(record["files"][0]["mtime"]).timestamp(), 1_700_000_000)
+
+            # The record is append-only: a second listing keeps the first.
+            (root / "later.safetensors").write_bytes(b"1")
+            self.assertFalse(write_models_record(str(root), str(record_path), models_path="x", realization_id="r1"))
+            self.assertEqual(json.loads(record_path.read_text(encoding="utf-8")), record)
+
+    def test_the_pod_runs_the_same_listing_as_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "models"
+            root.mkdir()
+            (root / "a.safetensors").write_bytes(b"ab")
+            record_path = Path(directory) / "r2.ai-toolkit-models.json"
+            namespace = {"__name__": "__kura_pod__"}
+            exec(script_source("ai_toolkit_models.py"), namespace)
+            with patch.object(sys, "argv", ["-", str(root), str(record_path), "r2"]), patch("sys.stdout", new_callable=io.StringIO):
+                namespace["main"]()
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual([(item["path"], item["size_bytes"]) for item in record["files"]], [("a.safetensors", 2)])
+
+    def test_models_root_is_the_declared_models_path(self) -> None:
+        from kura.container_scripts.ai_toolkit_models import models_root
+
+        self.assertEqual(models_root([{"role": "model-cache", "path": "/workspace/x", "env": "MODELS_PATH"}]), "/workspace/x")
+        self.assertIsNone(models_root([{"role": "backend-cache", "path": "/workspace/y", "env": "KURA_MUSUBI_CACHE"}]))
+        self.assertIsNone(models_root(None))
+
+
 if __name__ == "__main__":
     unittest.main()
