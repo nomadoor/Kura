@@ -386,6 +386,13 @@ class WorkspaceSchemaTests(unittest.TestCase):
 
 
 class DevelopmentImageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # An image build asks the Docker daemon first; these tests run where no daemon may answer.
+        for name, value in (("docker_daemon_problem", None), ("docker_data_location", (None, "not measured in tests"))):
+            patcher = patch(f"kura.cli.{name}", return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_build_refuses_outside_an_editable_checkout(self) -> None:
         stderr = io.StringIO()
         with patch("kura.cli.development_checkout", return_value=None), patch("sys.stderr", stderr):

@@ -475,6 +475,13 @@ class InitCommandTests(unittest.TestCase):
 
 
 class ImageCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # An image build asks the Docker daemon first; these tests run where no daemon may answer.
+        for name, value in (("docker_daemon_problem", None), ("docker_data_location", (None, "not measured in tests"))):
+            patcher = patch(f"kura.cli.{name}", return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_ai_toolkit_image_records_embedded_source_commit(self) -> None:
         dockerfile = (Path(__file__).parents[1] / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
 
