@@ -456,12 +456,6 @@ class SdScriptsBackendTests(unittest.TestCase):
                 ["vivi-step00000100.safetensors", "vivi-step00000200.safetensors", "vivi.safetensors"],
             )
             self.assertFalse(recovery.exists())
-            # Each native is removed once its published output is verified.
-            self.assertEqual(list(native.iterdir()), [])
-            # A rerun after the natives are gone accepts the published final.
-            with patch("subprocess.run", side_effect=convert), patch("sys.argv", ["publish", json.dumps(spec)]):
-                namespace["main"]()
-            write_safetensors(native / "vivi.safetensors", keys)
             write_safetensors(outputs / "vivi.safetensors", keys, {"regenerated": "metadata"})
             with patch("subprocess.run", side_effect=convert), patch("sys.argv", ["publish", json.dumps(spec)]):
                 namespace["main"]()
@@ -469,7 +463,6 @@ class SdScriptsBackendTests(unittest.TestCase):
                 sorted(path.name for path in outputs.iterdir()),
                 ["vivi-step00000100.safetensors", "vivi-step00000200.safetensors", "vivi.safetensors"],
             )
-            self.assertEqual(list(native.iterdir()), [])
 
     def test_anima_publication_failure_recovers_every_native_checkpoint_without_partial_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -644,7 +637,8 @@ class SdScriptsBackendTests(unittest.TestCase):
 
             self.assertTrue((root / "outputs" / "vivi-step00000100.safetensors").is_file())
             self.assertTrue((root / "recovery" / "vivi-step00000100.safetensors").is_file())
-            self.assertFalse((native / "vivi-step00000100.safetensors").exists())
+            # A stopped or failed run keeps its natives; only a completed run removes them.
+            self.assertTrue((native / "vivi-step00000100.safetensors").exists())
 
     def test_anima_post_exit_keeps_native_whose_published_output_does_not_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

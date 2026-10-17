@@ -70,14 +70,11 @@ def tensor_fingerprint(path):
     return hashlib.sha256(descriptor).hexdigest(), data_hash.hexdigest()
 
 
-def native_files(native_dir, output_name, *, require_final, output_dir=None):
-    # A final whose native source a previous post-exit pass already verified
-    # and removed is published in output_dir, so it satisfies require_final.
+def native_files(native_dir, output_name, *, require_final):
     final_name = output_name + ".safetensors"
     checkpoint = re.compile(re.escape(output_name) + r"-step[0-9]{8}\.safetensors\Z")
-    final_published = output_dir is not None and (pathlib.Path(output_dir) / final_name).is_file()
     if not native_dir.is_dir():
-        if require_final and not final_published:
+        if require_final:
             fail(f"missing native output directory: {native_dir}")
         return []
     matches = sorted(
@@ -85,7 +82,7 @@ def native_files(native_dir, output_name, *, require_final, output_dir=None):
         for path in native_dir.iterdir()
         if path.is_file() and (path.name == final_name or checkpoint.fullmatch(path.name))
     )
-    if require_final and not final_published and not any(path.name == final_name for path in matches):
+    if require_final and not any(path.name == final_name for path in matches):
         fail(f"missing final native LoRA: {native_dir / final_name}")
     return matches
 
@@ -94,8 +91,6 @@ def recover(files, recovery_dir):
     recovery_dir.mkdir(parents=True, exist_ok=True)
     for source in files:
         destination = recovery_dir / source.name
-        # A source the post-exit pass already removed was verified against its
-        # published output first, so nothing of it is lost.
         if source.exists() and not destination.exists():
             shutil.copy2(source, destination)
 
@@ -181,10 +176,16 @@ def train_and_publish(spec):
                 pass
             time.sleep(1)
         returncode = child.wait()
-        files = native_files(native_dir, output_name, require_final=returncode == 0, output_dir=spec["output_dir"])
-        if returncode != 0:
+        files = native_files(native_dir, output_name, require_final=returncode == 0)
+        if returncode == 0:
+            # A completed run: convert every native again, and remove each one whose published
+            # output matches, so no checkpoint is kept twice.
+            publish(files, spec, set(), remove_sources=True)
+        else:
+            # A stopped or failed run keeps its natives and a recovery copy, as before, and
+            # finishes within the stop grace period.
+            publish(files, spec, published)
             recover(files, recovery_dir)
-        publish(files, spec, set(), remove_sources=True)
         if forwarded_signal is not None:
             return 128 + forwarded_signal
         return returncode
@@ -208,9 +209,9 @@ def main():
     if spec.get("train_argv"):
         raise SystemExit(train_and_publish(spec))
     native_dir = pathlib.Path(spec["native_dir"])
-    files = native_files(native_dir, spec["output_name"], require_final=True, output_dir=spec["output_dir"])
+    files = native_files(native_dir, spec["output_name"], require_final=True)
     try:
-        publish(files, spec, set(), remove_sources=True)
+        publish(files, spec, set())
     except BaseException:
         recover(files, pathlib.Path(spec["recovery_dir"]))
         raise

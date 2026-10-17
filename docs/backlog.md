@@ -21,6 +21,10 @@ why, so it is not raised again.
 - 2026-10-17 | docker queries | `docker info --format {{.DockerRootDir}}` is asked in three places (doctor's storage summary, doctor's docker checks, and `docker_data_location`), and doctor's `_docker_run` has no timeout | review of the image-build free-space pull request | -
 - 2026-10-17 | tests | No test covers the doctor build-cache advisory at its 10 GiB boundary, or `kura image build` stopping on a workspace.yaml that still holds the retired `docker.build_cache_limit_gb` | review of the image-build free-space pull request | -
 - 2026-10-17 | ComfyUI specs | A RunPod render compiled before 2026-10-16 may hold a model spec with both repo and url or an empty target_name; the image refuses it on the Pod (saying to compile again) instead of the launch refusing it before a Pod exists | review of the ComfyUI prepare pull request | P11
+- 2026-10-17 | runner epoch | A follower of an older Kura replaced by a new runner still writes `epoch` beside `runner_epoch` once, because the old reader knows only `epoch`; update Kura with the runner stopped, or say so in the upgrade notes | review of the sd-scripts acceptance fixes pull request | P9
+- 2026-10-17 | HF cache check | `hf_cached_file` strips a ref file's trailing whitespace and huggingface_hub does not, so a hand-edited ref could read as cached on the host and not in the container | review of the sd-scripts acceptance fixes pull request | -
+- 2026-10-17 | tests | No test covers a CLI writer without `KURA_RUNNER_EPOCH` rewriting an old `epoch` to `runner_epoch`, or a host-side parity test of `hf_cached_file` against `try_to_load_from_cache` where huggingface_hub is installed | review of the sd-scripts acceptance fixes pull request | -
+- 2026-10-17 | RunPod recovery | RunPod collection does not bring back `recovery/` (only outputs, checkpoints, samples, metrics), so an Anima native recovery copy made on a failed RunPod run stays on the Pod | review of the sd-scripts acceptance fixes pull request | P7
 
 ## Rejected
 
