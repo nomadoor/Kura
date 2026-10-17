@@ -376,7 +376,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 patch("kura.storage._auto_wsl_host_drive", return_value="C:"),
                 patch("kura.storage._windows_drive_free_bytes", side_effect=lambda drive: 10 if drive == "D:" else 900 * 1024**3),
                 patch("kura.storage.shutil.disk_usage", return_value=SimpleNamespace(free=900 * 1024**3, total=1000 * 1024**3)),
-                self.assertRaisesRegex(ValueError, "RunPod stage needs about .* on D:"),
+                self.assertRaisesRegex(ValueError, "effective free on D:; RunPod stage requires at least"),
             ):
                 stage_runpod(workspace=root, run_dir=run_dir, config={**self._workspace_config(), "storage": {"host_drive": "D:"}})
             self.assertFalse(any((run_dir / "transfer").iterdir()))

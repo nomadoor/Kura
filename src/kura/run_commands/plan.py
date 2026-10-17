@@ -34,7 +34,7 @@ from kura.images import image_cuda_version, launch_image, launch_image_warnings,
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements, requirement_source
 from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, hf_cached_file, local_docker_mounts, local_hf_cache
-from kura.storage import probe_storages
+from kura.storage import probe_storages, storage_floor_problem
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -879,28 +879,6 @@ def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | Non
 def local_min_free_gib(docker_config: dict[str, Any]) -> int:
     """The free space a local Docker run keeps on every backing store; `kura doctor disk` warns below it."""
     return _configured_gib(docker_config.get("min_free_gb"), default=100)
-
-
-def storage_floor_problem(
-    status: Any, path: Path | str, required_bytes: int, *, action: str, minimum: str,
-    risk_setting: str | None = None, risk_accepted: bool = False,
-) -> str | None:
-    """Whether a store holds `required_bytes`, for every local disk gate (a launch, an image build).
-
-    On WSL2 a store whose Windows backing drive is unknown cannot be measured, so it is refused
-    unless the caller's risk setting accepts it."""
-    required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
-    if status.confidence == "unknown" and not risk_accepted:
-        return (
-            f"{path} is on storage with unknown physical backing free space; {action} requires at least {required_display_gib} GiB ({minimum}). "
-            "Set storage.host_drive in workspace.yaml" + (f" or set {risk_setting} if this is intentional" if risk_setting else "")
-        )
-    if status.effective_free_bytes < required_bytes:
-        return (
-            f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
-            f"{action} requires at least {required_display_gib} GiB ({minimum})"
-        )
-    return None
 
 
 def _local_launch_disk_preflight(
