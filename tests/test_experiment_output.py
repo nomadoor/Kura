@@ -83,7 +83,8 @@ class ExperimentOutputTests(unittest.TestCase):
         self.assertIn("Experiment anima-control", output)
         self.assertIn("lr 0.0001", output)
         self.assertIn("steps 200", output)
-        self.assertIn("| —  <- this run", output)
+        self.assertIn("| notes: —  <- this run", output)
+        self.assertIn("| notes: Structure is sound but control is weak on diagonal lines.", output)
         self.assertIn("completed render runs for this run  1", output)
 
     def test_completion_compresses_checkpoint_paths_and_includes_context(self) -> None:

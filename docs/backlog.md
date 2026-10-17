@@ -37,6 +37,9 @@ why, so it is not raised again.
 - 2026-10-18 | tests | No test covers: AI-Toolkit with a local-path `model.base` giving no download warning, and the RunPod plan output showing the same warning and info lines as Docker | review of the unmeasured-download change | P8
 - 2026-10-18 | tests | The final-state dedupe tests cover Musubi Tuner only; add an sd-scripts case (step state and end state at one step, with its `train_state.json` fixture) on Docker and RunPod | review of the final-state / save-count change | P9
 - 2026-10-18 | reserved flags | `--save_state_on_train_end` stays on the adapter-owned flag lists (`musubi_command.py`, `sd_scripts.py`) though Kura no longer emits it; say why it stays (both trainers save the end state under `--save_state`, so an authored copy changes nothing Kura owns) or drop it from both | review of the final-state / save-count change | -
+- 2026-10-18 | AI-Toolkit models listing | The Docker host-side listing of MODELS_PATH (`list_model_files`) follows a symlinked model-directory root, because `os.walk` lists a linked root's target; refuse a linked root, or list it with no-follow stat | CodeRabbit on the AI-Toolkit model-download pull request | -
+- 2026-10-18 | shared HF cache | Concurrent acquisition of the same model by AI-Toolkit runs in workspaces that share one Hugging Face cache can collide in upstream's intermediate download directories; documented in docs/workspace-config.md, not enforced | CodeRabbit on the AI-Toolkit model-download pull request | -
+- 2026-10-18 | AI-Toolkit models listing | `bring_home_ai_toolkit_models` copies the RunPod listing straight to its final name in `realizations/`, so an interrupted copy leaves a truncated record that a later collection keeps (it skips a name already present); copy to a temporary file and rename it atomically | CodeRabbit on the AI-Toolkit model-download pull request | P9
 
 ## Rejected
 
