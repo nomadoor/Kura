@@ -1,0 +1,24 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-17'
+executor: runpod
+kura_commit: e2b73c2
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit over
+  RunPod after the image moved to 0.13.30 (embedded commit dcebc7442df70e5239c68167919fd2909c615769).
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --runpod --yes
+hardware:
+  gpu: RTX A4500 ($0.25/hr, chosen by RunPod from the pass's cheapest priced GPUs)
+runtime_image_digest: sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c
+adapter_source: 53ddcb147bacff045f73ac85c3c00e6350ff3ae6bbcecde05e999810bb7ed43d
+executor_source: 9c31fdff706e3c556e4f98eb29072edcb419299d0f076bd39526774e3c29b699
+pod_minutes: about 16 across 7 Pods (about $0.07 GPU), every Pod stopped
+results:
+  P1: pass
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass (every Pod recorded pod_stopped_at)
+  P7: pass
+  P8: not measured on RunPod
+runs: [20261017-1223_conf-ai-one-control_4633, 20261017-1227_conf-ai-one-control-2_2129, 20261017-1231_conf-ai-one-split_9bcc, 20261017-1232_conf-ai-one-resume_5f69, 20261017-1234_conf-ai-multi-fresh_f076, 20261017-1236_conf-ai-multi-split_1a18, 20261017-1237_conf-ai-multi-resume_e598]
