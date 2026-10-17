@@ -176,8 +176,19 @@ contracts:
     disposition: support
     evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
     runtime_note: No real optimizer-step smoke has been run for MiniMax-H3 VSA/Fast on either set of weights.
-  - id: ai-sd1-native-options
-    change_ids: [ai-train-options, ai-loader-internals]
+  - id: ai-native-options-passthrough
+    change_ids: [ai-train-options]
+    backend: ai-toolkit
+    family: sd1
+    variant: native-options
+    mode: text-to-image-with-new-native-options
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-source-diff-of-shared-trainer-code], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_passes_new_0_13_30_native_options_through_unchanged], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No run has used loss_type band, pool_datasets, or model_kwargs.rgba; they reach the trainer unchanged.
+  - id: ai-sd1-default-path
+    change_ids: [ai-loader-internals]
     backend: ai-toolkit
     family: sd1
     variant: base
@@ -185,7 +196,7 @@ contracts:
     dataset: {kind: image, conditioning: none}
     execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [exact-source-diff-of-shared-trainer-code], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_passes_new_0_13_30_native_options_through_unchanged], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [ai-toolkit-conformance-docker-2026-10-17], lifecycle: []}
+    evidence: {source: [exact-source-diff-of-shared-trainer-code], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_accepts_registered_sd1_without_rewriting_it], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [ai-toolkit-conformance-docker-2026-10-17], lifecycle: []}
   - id: ai-dgx-spark-host
     change_ids: [ai-dgx-spark]
     backend: ai-toolkit

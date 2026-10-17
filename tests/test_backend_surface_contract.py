@@ -1233,7 +1233,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ("ming_image", "inclusionAI/Ming-Image-0.1-Design", (), {}),
             ("moss_image", "OpenMOSS-Team/MOSS-Image-SFT", (), {}),
             ("moss_image:base_edit", "OpenMOSS-Team/MOSS-Image-Base", ("a.png", "b.png"), {"model_edit": True}),
-            ("qwen_image_2:turbo", "Qwen/Qwen-Image-2.1", (), {}),
+            # Turbo trains the distilled checkpoint through a training adapter the author supplies.
+            ("qwen_image_2:turbo", "Comfy-Org/Qwen-Image-2.1/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors", (), {
+                "native_config": {"model": {"assistant_lora_path": "ostris/qwen_image_2_turbo_training_adapter/qwen_image_2_turbo_training_adapter_v1.safetensors"}},
+            }),
         )
         for arch, model, controls, authored in cases:
             with self.subTest(arch=arch, controls=len(controls)), tempfile.TemporaryDirectory() as directory:
@@ -1249,6 +1252,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                 self.assertEqual(process["model"]["arch"], arch)
                 self.assertEqual(len(process["datasets"][0].get("control_path") or []), len(controls))
+                if arch == "qwen_image_2:turbo":
+                    self.assertTrue(process["model"]["model_kwargs"]["turbo"])
+                    self.assertEqual(process["model"]["assistant_lora_path"], authored["native_config"]["model"]["assistant_lora_path"])
                 if arch.startswith("moss_image"):
                     self.assertEqual(process["model"].get("model_kwargs", {}).get("edit", False), bool(controls))
         # flux3 reads one reference per sample, so a second one is refused rather than ignored.
