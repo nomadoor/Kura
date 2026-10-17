@@ -2638,11 +2638,10 @@ class RenderNotificationTests(unittest.TestCase):
             downloaded.parent.mkdir()
             downloaded.write_bytes(b"toy")
             module._download_model = lambda spec, cache_dir: downloaded
-            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
-            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            specs = [{"node": "1", "class_type": "CheckpointLoaderSimple", "input": "ckpt_name", "type": "checkpoints", "name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints", "target_name": "toy.safetensors"}]
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer), patch.dict(os.environ, {"KURA_WORKSPACE": str(root)}, clear=False):
-                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=root / "cache", registry=registry)
+                module.prepare(specs, comfyui_root=root / "ComfyUI", cache_dir=root / "cache")
             events = [json.loads(line) for line in buffer.getvalue().splitlines()]
             self.assertEqual(events[0]["event"], "model_ready")
             self.assertIsInstance(events[0]["source"], str)
@@ -2663,10 +2662,9 @@ class RenderNotificationTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_bytes(b"existing")
             module._download_model = lambda spec, cache_dir: downloaded
-            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
-            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            specs = [{"node": "1", "class_type": "CheckpointLoaderSimple", "input": "ckpt_name", "type": "checkpoints", "name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints", "target_name": "toy.safetensors"}]
             with patch.dict(os.environ, {"KURA_WORKSPACE": str(root)}, clear=False), self.assertRaisesRegex(ValueError, "refusing to replace existing ComfyUI model target"):
-                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=root / "cache", registry=registry)
+                module.prepare(specs, comfyui_root=root / "ComfyUI", cache_dir=root / "cache")
             self.assertFalse(target.is_symlink())
             self.assertEqual(target.read_bytes(), b"existing")
 
@@ -2676,11 +2674,10 @@ class RenderNotificationTests(unittest.TestCase):
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
-        registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+        specs = [{"node": "1", "class_type": "CheckpointLoaderSimple", "input": "ckpt_name", "type": "checkpoints", "name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints", "target_name": "toy.safetensors"}]
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "requires HF_HUB_CACHE or --cache-dir"):
-                module.prepare(workflow, comfyui_root=Path(directory) / "ComfyUI", cache_dir=None, registry=registry)
+                module.prepare(specs, comfyui_root=Path(directory) / "ComfyUI", cache_dir=None)
 
     def test_comfyui_prepare_rejects_private_cache_dir_before_download(self) -> None:
         spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
@@ -2690,12 +2687,11 @@ class RenderNotificationTests(unittest.TestCase):
         spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
-            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            specs = [{"node": "1", "class_type": "CheckpointLoaderSimple", "input": "ckpt_name", "type": "checkpoints", "name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints", "target_name": "toy.safetensors"}]
             module._download_model = Mock(side_effect=AssertionError("download should not start"))
             with patch.dict(os.environ, {"KURA_WORKSPACE": str(root / "workspace")}, clear=False):
                 with self.assertRaisesRegex(ValueError, "cache_dir must be under"):
-                    module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=root / "private-cache", registry=registry)
+                    module.prepare(specs, comfyui_root=root / "ComfyUI", cache_dir=root / "private-cache")
             module._download_model.assert_not_called()
 
     def test_comfyui_prepare_direct_download_rejects_unsafe_urls(self) -> None:
@@ -3248,6 +3244,7 @@ class RenderNotificationTests(unittest.TestCase):
                 )
                 (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
                 (resolved / "comfyui_model_registry.json").write_text("{}", encoding="utf-8")
+                (resolved / "comfyui_models.json").write_text("[]", encoding="utf-8")
                 (resolved / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
@@ -3292,6 +3289,10 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertTrue(remote_image.startswith("/opt/ComfyUI/input/Kura_tmp/"))
             mapping = render.call_args.kwargs["image_name_overrides"]
             self.assertEqual(mapping, {frozen_name: remote_image.removeprefix("/opt/ComfyUI/input/")})
+            # The Pod gets the models compile resolved, never the registry to resolve again.
+            uploaded = [str(call.args[2]) for call in scp.call_args_list]
+            self.assertIn("/workspace/runs/render-1/resolved/comfyui_models.json", uploaded)
+            self.assertFalse(any(path.endswith("comfyui_model_registry.json") for path in uploaded))
 
     def test_runpod_render_launch_requires_runpod_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8550,8 +8551,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 details,
                 workspace="/workspace",
                 run_id="render-1",
-                workflow_remote="/workspace/runs/render-1/resolved/workflow_used.json",
-                registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
+                models_remote="/workspace/runs/render-1/resolved/comfyui_models.json",
                 lora_remote_name=None,
                 lora_remote_path=None,
             )
@@ -8570,8 +8570,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     details,
                     workspace="/workspace",
                     run_id="render-1",
-                    workflow_remote="/workspace/runs/render-1/resolved/workflow_used.json",
-                    registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
+                    models_remote="/workspace/runs/render-1/resolved/comfyui_models.json",
                     lora_remote_name=None,
                     lora_remote_path=None,
                 )

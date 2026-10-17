@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare ComfyUI models for a workflow inside a RunPod ComfyUI session."""
+"""Download and link the ComfyUI models a RunPod render needs, as Kura resolved them at compile."""
 
 from __future__ import annotations
 
@@ -15,43 +15,10 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-MODEL_INPUTS: dict[str, tuple[tuple[str, str], ...]] = {
-    "CheckpointLoaderSimple": (("checkpoints", "ckpt_name"),),
-    "VAELoader": (("vae", "vae_name"),),
-    "CLIPLoader": (("clip", "clip_name"),),
-    "DualCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2")),
-    "TripleCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2"), ("clip", "clip_name3")),
-    "UNETLoader": (("diffusion_models", "unet_name"),),
-    "ControlNetLoader": (("controlnet", "control_net_name"),),
-    "ModelPatchLoader": (("model_patches", "name"),),
-}
-
-MODEL_DIRS = {
-    "checkpoints": "checkpoints",
-    "vae": "vae",
-    "clip": "clip",
-    "diffusion_models": "diffusion_models",
-    "controlnet": "controlnet",
-    "model_patches": "model_patches",
-}
-
-MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
-    "checkpoints": {
-        "v1-5-pruned-emaonly-fp16.safetensors": {
-            "repo": "Comfy-Org/stable-diffusion-v1-5-archive",
-            "filename": "v1-5-pruned-emaonly-fp16.safetensors",
-        }
-    },
-    "diffusion_models": {
-        "anima-base-v1.0.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/diffusion_models/anima-base-v1.0.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b"}
-    },
-    "clip": {
-        "qwen_3_06b_base.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/text_encoders/qwen_3_06b_base.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b", "target_dir": "text_encoders"}
-    },
-    "vae": {
-        "qwen_image_vae.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/vae/qwen_image_vae.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b"}
-    },
-}
+# The fields of one model Kura resolved at compile (kura.comfyui_models.resolve_model_specs),
+# written to resolved/comfyui_models.json. This script only downloads and links them: Kura decides
+# which models a workflow needs and where each comes from.
+SPEC_KEYS = frozenset({"node", "class_type", "input", "type", "name", "filename", "target_dir", "target_name", "repo", "url", "revision", "subfolder"})
 
 
 def _safe_child(root: Path, relative: str) -> Path:
@@ -64,55 +31,20 @@ def _safe_child(root: Path, relative: str) -> Path:
     return candidate
 
 
-def _required_models(workflow: dict[str, Any]) -> list[dict[str, str]]:
-    refs: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for node_id, node in workflow.items():
-        if not isinstance(node, dict):
-            continue
-        class_type = node.get("class_type")
-        inputs = node.get("inputs")
-        if not isinstance(class_type, str) or not isinstance(inputs, dict):
-            continue
-        for model_type, input_name in MODEL_INPUTS.get(class_type, ()):
-            value = inputs.get(input_name)
-            if not isinstance(value, str) or not value:
-                continue
-            key = (model_type, value)
-            if key in seen:
-                continue
-            seen.add(key)
-            refs.append({"node": str(node_id), "class_type": class_type, "input": input_name, "type": model_type, "name": value})
-    return refs
-
-
-def _resolve(ref: dict[str, str], registry: dict[str, Any]) -> dict[str, str] | None:
-    section = registry.get(ref["type"], {})
-    if not isinstance(section, dict):
-        return None
-    entry = section.get(ref["name"])
-    if not isinstance(entry, dict):
-        return None
-    repo = entry.get("repo") or entry.get("repo_id")
-    url = entry.get("url") or entry.get("direct_url")
-    filename = entry.get("filename") or entry.get("file") or ref["name"]
-    if (not repo and not url) or not filename:
-        return None
-    spec = {
-        **ref,
-        "filename": filename,
-        "target_dir": entry.get("target_dir") or MODEL_DIRS.get(ref["type"], ref["type"]),
-        "target_name": entry.get("target_name") or ref["name"],
-    }
-    if repo:
-        spec["repo"] = repo
-    if url:
-        spec["url"] = url
-    if entry.get("revision"):
-        spec["revision"] = entry["revision"]
-    if entry.get("subfolder"):
-        spec["subfolder"] = entry["subfolder"]
-    return spec
+def _checked_specs(specs: Any) -> list[dict[str, str]]:
+    if not isinstance(specs, list):
+        raise ValueError("comfyui_models.json must hold a list of resolved model specs")
+    checked: list[dict[str, str]] = []
+    for spec in specs:
+        if not isinstance(spec, dict) or not all(isinstance(value, str) and value for value in spec.values()):
+            raise ValueError(f"resolved model spec must map names to non-empty strings: {spec!r}")
+        unknown = sorted(set(spec) - SPEC_KEYS)
+        if unknown:
+            raise ValueError(f"resolved model spec has unsupported key(s): {', '.join(unknown)}; compile the render again")
+        if ("repo" in spec) == ("url" in spec) or not all(key in spec for key in ("name", "filename", "target_dir", "target_name")):
+            raise ValueError(f"resolved model spec needs exactly one of repo or url, and name, filename, target_dir, target_name: {spec!r}")
+        checked.append(spec)
+    return checked
 
 
 def _validate_direct_download_url(url: str) -> str:
@@ -171,25 +103,14 @@ def _require_workspace_cache_dir(cache_dir: Path) -> None:
         raise ValueError(f"ComfyUI model prepare cache_dir must be under {workspace}: {cache_dir}") from exc
 
 
-def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None, registry: dict[str, Any]) -> list[dict[str, str]]:
+def prepare(specs: Any, *, comfyui_root: Path, cache_dir: Path | None) -> list[dict[str, str]]:
     models_root = comfyui_root / "models"
-    specs: list[dict[str, str]] = []
-    unknown: list[dict[str, str]] = []
-    for ref in _required_models(workflow):
-        spec = _resolve(ref, registry)
-        if spec is None:
-            staged = _safe_child(models_root, f"{MODEL_DIRS.get(ref['type'], ref['type'])}/{ref['name']}")
-            if not staged.is_file():
-                unknown.append(ref)
-        else:
-            specs.append(spec)
-    if unknown:
-        raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
-    if specs and cache_dir is None:
+    checked = _checked_specs(specs)
+    if checked and cache_dir is None:
         raise ValueError("ComfyUI model prepare requires HF_HUB_CACHE or --cache-dir before downloading models")
-    if specs and cache_dir is not None:
+    if checked and cache_dir is not None:
         _require_workspace_cache_dir(cache_dir)
-    for spec in specs:
+    for spec in checked:
         downloaded = _download_model(spec, cache_dir)
         target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -199,27 +120,18 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
             raise ValueError(f"refusing to replace existing ComfyUI model target: {target}")
         os.symlink(downloaded, target)
         print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": str(downloaded)}, ensure_ascii=False), flush=True)
-    return specs
+    return checked
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("workflow_json")
-    parser.add_argument("--registry-json")
+    parser.add_argument("models_json", help="resolved/comfyui_models.json, the models Kura resolved at compile")
     parser.add_argument("--comfyui-root", default=os.environ.get("COMFYUI_ROOT", "/opt/ComfyUI"))
     parser.add_argument("--cache-dir", default=os.environ.get("HF_HUB_CACHE"))
     args = parser.parse_args()
-    workflow = json.loads(Path(args.workflow_json).read_text(encoding="utf-8"))
-    if not isinstance(workflow, dict):
-        raise ValueError("workflow_json must contain a ComfyUI API workflow object")
-    registry: dict[str, Any] = MODEL_REGISTRY
-    if args.registry_json:
-        loaded = json.loads(Path(args.registry_json).read_text(encoding="utf-8"))
-        if not isinstance(loaded, dict):
-            raise ValueError("registry_json must contain a model registry object")
-        registry = loaded
-    specs = prepare(workflow, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None, registry=registry)
-    print(json.dumps({"event": "models_prepared", "count": len(specs), "models": specs}, ensure_ascii=False), flush=True)
+    specs = json.loads(Path(args.models_json).read_text(encoding="utf-8"))
+    prepared = prepare(specs, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None)
+    print(json.dumps({"event": "models_prepared", "count": len(prepared), "models": prepared}, ensure_ascii=False), flush=True)
     return 0
 
 

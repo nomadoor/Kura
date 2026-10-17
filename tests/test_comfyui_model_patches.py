@@ -147,20 +147,31 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         for section, name in (("diffusion_models", "anima-base-v1.0.safetensors"), ("clip", "qwen_3_06b_base.safetensors"), ("vae", "qwen_image_vae.safetensors")):
             self.assertEqual(len(DEFAULT_MODEL_REGISTRY[section][name]["revision"]), 40)
 
-    def test_comfyui_prepare_accepts_an_already_staged_model_patch(self) -> None:
+    def test_comfyui_prepare_links_only_the_models_compile_resolved(self) -> None:
         import importlib.util
+
+        from kura.comfyui_models import resolve_model_specs
 
         spec = importlib.util.spec_from_file_location("kura_comfy_prepare_review", ROOT / "docker/comfyui/kura_comfy_prepare.py")
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        # The script reads exactly what Kura resolved, and nothing a registry or workflow says on its own.
+        workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+        specs, unknown = resolve_model_specs(workflow, {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "revision": "a" * 40}}})
+        self.assertEqual(unknown, [])
+        self.assertEqual(module._checked_specs(specs), specs)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            staged = root / "ComfyUI" / "models" / "model_patches" / "Kura_tmp" / "trained.safetensors"
-            staged.parent.mkdir(parents=True)
-            staged.write_bytes(b"weights")
-            workflow = {"4": {"class_type": "ModelPatchLoader", "inputs": {"name": "Kura_tmp/trained.safetensors"}}}
-            self.assertEqual(module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry={}), [])
+            self.assertEqual(module.prepare([], comfyui_root=root / "ComfyUI", cache_dir=None), [])
+            for bad, message in (
+                ([{**specs[0], "repo_id": "owner/toy"}], "unsupported key"),
+                ([{key: value for key, value in specs[0].items() if key != "target_dir"}], "needs exactly one of repo or url"),
+                ([{**specs[0], "url": "https://example.com/toy.safetensors"}], "needs exactly one of repo or url"),
+                ({"checkpoints": {}}, "list of resolved model specs"),
+            ):
+                with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                    module.prepare(bad, comfyui_root=root / "ComfyUI", cache_dir=root)
 
     def test_model_patch_checkpoint_stages_outside_lora_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

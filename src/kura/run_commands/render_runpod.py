@@ -166,7 +166,7 @@ def _render_runpod_images(run_dir: Path, frozen: dict[str, Any]) -> list[dict[st
     return list(items.values())
 
 
-def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, registry_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, lora_remote_files: list[dict[str, str]] | None = None) -> None:
+def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, models_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, lora_remote_files: list[dict[str, str]] | None = None) -> None:
     """Install the secrets, prepare the models, and start ComfyUI; the Pod's own lease guard bounds it."""
     secret_payload = _runpod_secret_env_payload(remote_notify=False)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
@@ -209,7 +209,7 @@ trap cleanup EXIT
 if [ -f "$secret_file" ]; then
   . "$secret_file"
 fi
-python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --registry-json {shlex.quote(registry_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
+python /opt/kura_comfy_prepare.py {shlex.quote(models_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
 {lora_line}
 cd /opt/ComfyUI
 nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
@@ -331,9 +331,12 @@ def launch_render_runpod(
         workflow_path = run_dir / "resolved" / "workflow_used.json"
         remote_workflow = f"{remote_run_dir}/resolved/workflow_used.json"
         _scp_to_runpod(details, workflow_path, remote_workflow)
-        registry_path = run_dir / "resolved" / "comfyui_model_registry.json"
-        remote_registry = f"{remote_run_dir}/resolved/comfyui_model_registry.json"
-        _scp_to_runpod(details, registry_path, remote_registry)
+        # The image downloads and links only the models compile resolved (comfyui_models.resolve_model_specs).
+        models_path = run_dir / "resolved" / "comfyui_models.json"
+        if not models_path.is_file():
+            raise ValueError("resolved/comfyui_models.json is missing; compile the render again")
+        remote_models = f"{remote_run_dir}/resolved/comfyui_models.json"
+        _scp_to_runpod(details, models_path, remote_models)
         remote_loras: list[dict[str, str]] = []
         for item in loras:
             remote_path = "/opt/ComfyUI/models/loras/" + item["name"]
@@ -345,7 +348,7 @@ def launch_render_runpod(
             _scp_to_runpod(details, item["source"], "/opt/ComfyUI/input/" + item["name"])
         check_stop()
         lora_remote_path = remote_loras[0]["path"] if len(remote_loras) == 1 else None
-        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path, lora_remote_files=remote_loras)
+        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, models_remote=remote_models, lora_remote_name=lora_name, lora_remote_path=lora_remote_path, lora_remote_files=remote_loras)
         local_port = _free_local_port()
         tunnel = subprocess.Popen([
             "ssh",
