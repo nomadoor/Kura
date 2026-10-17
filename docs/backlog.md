@@ -16,6 +16,8 @@ why, so it is not raised again.
 ## Open
 
 - 2026-10-16 | ComfyUI prepare | The RunPod render copies the merged `comfyui_model_registry.json` to the Pod, and `docker/comfyui/kura_comfy_prepare.py` resolves it again with its own `repo_id`/`direct_url`/`file` fallbacks and its own required-model scan; send the resolved `comfyui_models.json` and have the image read only that at the next image rebuild | review of the model selection pull request | -
+- 2026-10-17 | one owner | Which AI-Toolkit archs take `model_edit` is decided twice: the registry condition (`registry.py`, krea2 and moss_image) and the `AI_TOOLKIT_PROFILE_REQUIREMENTS` keys; derive the condition from the requirement keys | review of the AI-Toolkit 0.13.30 upgrade pull request | -
+- 2026-10-17 | tests | No test covers: moss_image with references and no `model_edit` (refused), `moss_image:base_edit` without `model_edit` (no `edit` in model_kwargs), `model_edit` refused for flux3, ming_image, and iris3b, ming_image with a reference (refused), and moss_image with an `OpenMOSS-Team/MOSS-Image-Base` base (conflict naming `moss_image:base`) | review of the AI-Toolkit 0.13.30 upgrade pull request | -
 
 ## Rejected
 

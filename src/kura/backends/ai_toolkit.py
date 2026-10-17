@@ -138,8 +138,10 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "control_selection": "generated-random-one-per-step",
     },
     "single-control-image": {
-        # flux3 reads one reference per sample (it keeps has_multiple_control_images unset,
-        # extensions_built_in/diffusion_models/flux3/flux3.py, pinned 0.13.30).
+        # flux3 reads one reference per sample: it keeps has_multiple_control_images unset, so the
+        # loader stacks the controls, and get_noise_prediction keeps lat[0] of each sample's one
+        # control (extensions_built_in/diffusion_models/flux3/flux3.py:513-531, pinned 0.13.30),
+        # though the upstream UI offers multi_control_paths for it.
         "architectures": ("flux3", "flux_kontext", "hidream_e1", "qwen_image_edit"),
         "shape": "image-control",
         "target_media": "image",

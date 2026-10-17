@@ -32,17 +32,17 @@ changes:
     source_refs: [https://github.com/ostris/ai-toolkit/tree/dcebc7442df70e5239c68167919fd2909c615769/extensions_built_in/diffusion_models/moss_image]
   - id: ai-qwen-image-2-turbo
     backend: ai-toolkit
-    summary: The qwen_image_2:turbo UI entry trains the 8-step distilled Qwen-Image 2.1 with an assistant training adapter (model_kwargs.turbo).
+    summary: The qwen_image_2:turbo UI entry trains the 8-step distilled Qwen-Image 2.1 (model_kwargs.turbo); its assistant training adapter is native_config.model.assistant_lora_path, which Kura's baseline does not fill.
     kind: execution-contract
     source_refs: [https://github.com/ostris/ai-toolkit/commit/f370e74]
   - id: ai-qwen-image-2-references
     backend: ai-toolkit
-    summary: Qwen-Image 2.1 passes reference images unresized (use_raw_control_images) and scales them to the target's area (model_kwargs.match_target_res, default true); its text-embedding cache is keyed on that.
+    summary: Qwen-Image 2.1 passes reference images unresized (use_raw_control_images) and scales them to the target's area (model_kwargs.match_target_res, default true); its text-embedding cache is keyed on that, and with batch_size above 1 the trainer refuses references whose token counts differ within a batch.
     kind: execution-contract
     source_refs: [https://github.com/ostris/ai-toolkit/commit/07abdbe]
   - id: ai-minimax-h3-vsa-weights
     backend: ai-toolkit
-    summary: minimax_h3_vsa now trains the FastH3 8-step V2 weights with a training adapter and gained a UI baseline entry; the MiniMax entries drop contrastive guidance defaults.
+    summary: minimax_h3_vsa now trains the FastH3 8-step V2 weights from model.base FastVideo/FastVideo-FastH3-Comfy (training shift 10, vsa_sparsity 0.8, was 0.9) and gained a UI baseline entry; the MiniMax entries drop contrastive guidance defaults and their training adapter is native_config.model.assistant_lora_path.
     kind: execution-contract
     source_refs: [https://github.com/ostris/ai-toolkit/commit/a776394, https://github.com/ostris/ai-toolkit/commit/60d0c28]
   - id: ai-train-options
@@ -150,10 +150,10 @@ contracts:
     variant: turbo
     mode: text-to-image-distilled-with-training-adapter
     dataset: {kind: image, conditioning: none}
-    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model, training-adapter], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
     disposition: support
     evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
-    runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Turbo; that the training adapter stays out of the saved LoRA is read from the source only.
+    runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Turbo; that an authored training adapter stays out of the saved LoRA is read from the source only.
   - id: ai-qwen-image-2-edit-references
     change_ids: [ai-qwen-image-2-references]
     backend: ai-toolkit
@@ -172,7 +172,7 @@ contracts:
     variant: vsa-fast-v2
     mode: text-to-image
     dataset: {kind: image, conditioning: none}
-    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model, training-adapter], cache_stages: [latents, text-embeddings], output: lora-safetensors, lifecycle_changed: false}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [latents, text-embeddings], output: lora-safetensors, lifecycle_changed: false}
     disposition: support
     evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
     runtime_note: No real optimizer-step smoke has been run for MiniMax-H3 VSA/Fast on either set of weights.
@@ -185,7 +185,7 @@ contracts:
     dataset: {kind: image, conditioning: none}
     execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [exact-source-diff-of-shared-trainer-code], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_accepts_registered_sd1_without_rewriting_it], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [ai-toolkit-conformance-docker-2026-10-17], lifecycle: []}
+    evidence: {source: [exact-source-diff-of-shared-trainer-code], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_passes_new_0_13_30_native_options_through_unchanged], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [ai-toolkit-conformance-docker-2026-10-17], lifecycle: []}
   - id: ai-dgx-spark-host
     change_ids: [ai-dgx-spark]
     backend: ai-toolkit

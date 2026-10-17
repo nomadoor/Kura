@@ -169,7 +169,7 @@ records:
       imported_classes: 49
     evidence_kind: parser
     outcome: passed
-    observed_at: 2026-10-17
+    observed_at: '2026-10-17'
     artifact: smoke-evidence/2026-10-17-ai-toolkit-0.13.30-class-import.yaml
   - id: ai-toolkit-conformance-docker-2026-10-11
     backend: ai-toolkit

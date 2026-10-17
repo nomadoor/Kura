@@ -1206,6 +1206,25 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertIn("/cache/dataset-view/", process["datasets"][0]["control_path"][0])
 
     @posix_only(DATASET_IO)
+    def test_ai_toolkit_passes_new_0_13_30_native_options_through_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = {
+                "id": "native-options",
+                "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd1", "dataset_config": {}, "native_config": {
+                    "train": {"loss_type": "band", "pool_datasets": True},
+                    "model": {"model_kwargs": {"rgba": True}},
+                }}},
+                "model": {"base": "stable-diffusion-v1-5/stable-diffusion-v1-5"}, "datasets": [{"id": "tiny"}],
+                "recipe": {"steps": 1, "seed": 1},
+            }
+            self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=())
+            BACKENDS["ai-toolkit"].compile(run, root)
+            process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+        self.assertEqual((process["train"]["loss_type"], process["train"]["pool_datasets"]), ("band", True))
+        self.assertTrue(process["model"]["model_kwargs"]["rgba"])
+
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture(self) -> None:
         cases = (
             ("flux3", "black-forest-labs/flux-3-image-klein-base", (), {}),
@@ -1254,7 +1273,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         )
         # minimax_h3_vsa gained a pinned UI entry in 0.13.30 (FastH3 8-step V2), so its baseline fills the rest.
         cases = tuple((*case, {}) for case in cases) + (
-            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", "sample.png", (), {}, {}),
+            ("minimax_h3_vsa", "FastVideo/FastVideo-FastH3-Comfy", "sample.png", (), {}, {}),
         )
         for arch, model, target, controls, dataset_config, authored in cases:
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
