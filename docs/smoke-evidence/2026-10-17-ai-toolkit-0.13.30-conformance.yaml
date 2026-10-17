@@ -1,0 +1,27 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-17'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit
+  after the image moved from 0.13.18 to 0.13.30 (embedded commit dcebc7442df70e5239c68167919fd2909c615769)
+  with Kura's step-save patch and the MiniMax-H3 finite-gradient patch applied.
+backends:
+  ai-toolkit:
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c
+    adapter_source: 0badef7ba7c5f200327c1f6445bb5b4c388f402a82da156e29038abb743fe385
+    runs: [20261017-0911_conf-ai-one-control_822f, 20261017-0912_conf-ai-one-control-2_3626, 20261017-0913_conf-ai-one-split_9278, 20261017-0913_conf-ai-one-resume_6a79, 20261017-0914_conf-ai-multi-fresh_a86c, 20261017-0914_conf-ai-multi-split_bc54, 20261017-0915_conf-ai-multi-resume_56d9]
+    p3: step count and scheduler equal the controls; the two controls differ, so exact learned-state equality is not checkable
+results:
+  P1: pass
+  P2: pass
+  P3: pass, as noted
+  P4: pass
+  P6: not run (local Docker)
+  P7: pass
+  P8: pass

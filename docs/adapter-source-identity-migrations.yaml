@@ -8,6 +8,36 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-0.13.30-2026-10-17
+    backend: ai-toolkit
+    reason: 'The pinned image moves from AI-Toolkit 0.13.18 (31ddc709) to 0.13.30 (dcebc744) with the same two Kura patches; torch, torchvision, diffusers, transformers, and accelerate are the same versions, and the save, load, step, and metadata code Kura''s state runner hooks is unchanged. The registry adds flux3, iris3b, ming_image, and moss_image (projected as image families, flux3 with one reference and moss_image with references in edit mode), and the UI baseline gains their entries, qwen_image_2:turbo, and minimax_h3_vsa, and fills qwen_image_2 model_kwargs.rgba false (the trainer''s own default). The families in the evidence below run the same trainer code with the same baseline values, so each builds the same configuration and trains the same way; the two families whose trainer code changed, Qwen-Image 2.1 references and MiniMax-H3 VSA, have no optimizer evidence. The SD 1.5 conformance run passed on the new image.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 573b2f01b51711e4680ae18d53d5b13c64f3a781c9c32f45a5ca4dbc4bd3acfa
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 0badef7ba7c5f200327c1f6445bb5b4c388f402a82da156e29038abb743fe385
   - id: disk-cache-every-backend-sd-scripts-2026-10-17
     backend: sd-scripts
     reason: 'Each backend says whether its trainer writes a run-scoped disk cache, and both disk checks count the size the author declares in safety.disk_cache_estimate_gb, one key for every backend; until it is declared the plan warns that the cache is not counted. sd-scripts backend.config.disk_cache_estimate_gb is retired (refused when written with a message that names the safety key, carried to safety.disk_cache_estimate_gb by copies, still read from a run an older Kura compiled), and a compiled manifest that holds a retired backend.config key is read as it is. Kura never forwarded the estimate to a trainer, so every recorded smoke compiles the same native configuration and command; the smoke harness now declares its 1 GiB estimate in safety.'

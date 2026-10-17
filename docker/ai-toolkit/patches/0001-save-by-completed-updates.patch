@@ -1,19 +1,20 @@
 Kura: decide, name, and record a step save by the optimizer updates it holds.
 
-Upstream jobs/process/BaseSDTrainProcess.py (ostris/aitoolkit:0.13.18, commit
-31ddc709c35d3d3b820c636745397561f806b246) runs the loop over the 0-based iteration index
-`step` and sets `self.step_num = step` (lines 2528-2538). It decides a save on that index
-(`is_save_step = ... self.step_num % save_every == 0`, ~2549), skips it on the first
-iteration (`if self.step_num != self.start_step`, ~2701), and saves after the iteration's
-optimizer update with `self.save(self.step_num)` (~2711). `save` names the file
-`<name>_<step:09d>.safetensors` (~517-521) and records `training_info.step = self.step_num`
-(~387-415), so with save_every 100 `_100` held 101 updates and recorded step 100, while the
-final unstepped save after the loop (~2800, ~2814) holds and records `self.step_num`.
+Upstream jobs/process/BaseSDTrainProcess.py (ostris/aitoolkit:0.13.30, commit
+dcebc7442df70e5239c68167919fd2909c615769) runs the loop over the 0-based iteration index
+`step` and sets `self.step_num = step` (lines 2533-2543). It decides a save on that index
+(`is_save_step = ... self.step_num % save_every == 0`, ~2554), skips it on the first
+iteration (`if self.step_num != self.start_step`, ~2706), and saves after the iteration's
+optimizer update with `self.save(self.step_num)` (~2716). `save` names the file
+`<name>_<step:09d>.safetensors` (~506-521) and records `training_info.step = self.step_num`
+(~391-415), so with save_every 100 `_100` held 101 updates and recorded step 100, while the
+final unstepped save after the loop (~2819) holds and records `self.step_num`.
 This decides a save when the completed updates (`self.step_num + 1`) are a multiple of
 save_every, names the save and its log line by them, and records them as training_info.step;
 a save on the first iteration is kept (it holds an update the loaded state does not), while
-sampling and logging still skip it. Upstream's own resume from a step save (which starts the
-loop at training_info.step) then continues after the update the save holds.
+sampling still skips it (logging runs with the save, at its own cadence). Upstream's own
+resume from a step save (which starts the loop at training_info.step) then continues after
+the update the save holds.
 Kura's AI-Toolkit state runner checks that a step save's name equals the completed optimizer
 updates it captures, and Kura's plan counts saves on multiples of save_every; both depend on
 this patch.

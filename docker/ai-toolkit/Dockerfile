@@ -1,4 +1,4 @@
-ARG AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc
+ARG AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.30@sha256:58cfb049ed8d3e2abc4770b48ba8bd7193072f8d553c647cf4fec6b44f7027d7
 FROM ${AI_TOOLKIT_IMAGE}
 
 ARG AI_TOOLKIT_IMAGE
@@ -37,7 +37,7 @@ RUN echo "${AI_TOOLKIT_H3_GRADIENT_PATCH_SHA256}  /tmp/minimax_h3_finite_gradien
         > /opt/kura-ai-toolkit-source-patch.json \
     && rm /tmp/minimax_h3_finite_gradients.patch
 
-# Upstream BaseSDTrainProcess.py (31ddc70, lines 2549 and 2701-2711) decides, names, and
+# Upstream BaseSDTrainProcess.py (dcebc74, lines 2554 and 2706-2716) decides, names, and
 # records a step save by the 0-based iteration index, so `_N` holds N+1 optimizer updates;
 # 0001 decides, names, and records it by the updates it holds, which Kura's AI-Toolkit state
 # runner and plan read. See the patch header.

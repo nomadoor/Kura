@@ -1,0 +1,208 @@
+schema_version: 1
+upgrade:
+  id: 2026-10-17-ai-toolkit-0.13.30
+  status: complete
+  backends:
+    - name: ai-toolkit
+      from: {kind: embedded-git-commit-plus-patch, value: "31ddc709c35d3d3b820c636745397561f806b246+d1985f9bf380b6ce1c409b7875e2d367df486e19"}
+      to: {kind: embedded-git-commit-plus-patch, value: "dcebc7442df70e5239c68167919fd2909c615769+d1985f9bf380b6ce1c409b7875e2d367df486e19"}
+      source_refs:
+        - https://github.com/ostris/ai-toolkit/compare/31ddc709c35d3d3b820c636745397561f806b246...dcebc7442df70e5239c68167919fd2909c615769
+
+changes:
+  - id: ai-flux3
+    backend: ai-toolkit
+    summary: FLUX.3 Image (arch flux3) was added; text-to-image plus reference i2i that reads one reference per sample.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/dcebc7442df70e5239c68167919fd2909c615769/extensions_built_in/diffusion_models/flux3]
+  - id: ai-iris3b
+    backend: ai-toolkit
+    summary: Iris-3B (arch iris3b), a pixel-space text-to-image model, was added.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/dcebc7442df70e5239c68167919fd2909c615769/extensions_built_in/diffusion_models/iris3b]
+  - id: ai-ming-image
+    backend: ai-toolkit
+    summary: Ming-Image (arch ming_image) text-to-image with a training adapter was added; a single-reference edit path exists in the trainer but not in the upstream UI.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/dcebc7442df70e5239c68167919fd2909c615769/extensions_built_in/diffusion_models/ming_image]
+  - id: ai-moss-image
+    backend: ai-toolkit
+    summary: MOSS-Image (arch moss_image, UI entries moss_image:base and moss_image:base_edit) was added; model_kwargs.edit turns on multi-reference edit.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/dcebc7442df70e5239c68167919fd2909c615769/extensions_built_in/diffusion_models/moss_image]
+  - id: ai-qwen-image-2-turbo
+    backend: ai-toolkit
+    summary: The qwen_image_2:turbo UI entry trains the 8-step distilled Qwen-Image 2.1 with an assistant training adapter (model_kwargs.turbo).
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/commit/f370e74]
+  - id: ai-qwen-image-2-references
+    backend: ai-toolkit
+    summary: Qwen-Image 2.1 passes reference images unresized (use_raw_control_images) and scales them to the target's area (model_kwargs.match_target_res, default true); its text-embedding cache is keyed on that.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/commit/07abdbe]
+  - id: ai-minimax-h3-vsa-weights
+    backend: ai-toolkit
+    summary: minimax_h3_vsa now trains the FastH3 8-step V2 weights with a training adapter and gained a UI baseline entry; the MiniMax entries drop contrastive guidance defaults.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/commit/a776394, https://github.com/ostris/ai-toolkit/commit/60d0c28]
+  - id: ai-train-options
+    backend: ai-toolkit
+    summary: New native options train.loss_type band, train.pool_datasets, and model_kwargs rgba, match_target_res, turbo, kv_cache and similar; all reach the trainer through native_config unchanged.
+    kind: enhancement
+    source_refs: [https://github.com/ostris/ai-toolkit/commit/831ccfa, https://github.com/ostris/ai-toolkit/commit/a949f21, https://github.com/ostris/ai-toolkit/commit/086b663]
+  - id: ai-loader-internals
+    backend: ai-toolkit
+    summary: Loader and loading internals changed without a surface change (uint8 cached pixel tensors, threaded batch loading, tokenizer online fallback, comfy-format loading, text-encoder unload fixes, Qwen-Image Edit Plus batch fixes); suffix lists and the save, load, step, and metadata code Kura hooks are unchanged.
+    kind: enhancement
+    source_refs: [https://github.com/ostris/ai-toolkit/compare/31ddc709c35d3d3b820c636745397561f806b246...dcebc7442df70e5239c68167919fd2909c615769]
+  - id: ai-dgx-spark
+    backend: ai-toolkit
+    summary: DGX Spark (integrated GPU) support, unified-memory patches that apply only on integrated NVIDIA GPUs, and the matching UI and manager changes.
+    kind: outside-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/commit/60ca869, https://github.com/ostris/ai-toolkit/commit/16ae8d2]
+  - id: ai-yue2-heads
+    backend: ai-toolkit
+    summary: YuE2 loads safetensors semantic heads and NAR adapters.
+    kind: outside-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/commit/d0ecde7]
+
+contracts:
+  - id: ai-flux3-t2i
+    change_ids: [ai-flux3]
+    backend: ai-toolkit
+    family: flux3
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for FLUX.3 Image.
+  - id: ai-flux3-reference
+    change_ids: [ai-flux3]
+    backend: ai-toolkit
+    family: flux3
+    variant: reference
+    mode: image-edit
+    dataset: {kind: image, conditioning: single-control-image}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for FLUX.3 Image with a reference.
+  - id: ai-iris3b-t2i
+    change_ids: [ai-iris3b]
+    backend: ai-toolkit
+    family: iris3b
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Iris-3B.
+  - id: ai-ming-image-t2i
+    change_ids: [ai-ming-image]
+    backend: ai-toolkit
+    family: ming-image
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Ming-Image.
+  - id: ai-ming-image-edit
+    change_ids: [ai-ming-image]
+    backend: ai-toolkit
+    family: ming-image
+    variant: edit
+    mode: image-edit
+    dataset: {kind: image, conditioning: single-control-image}
+    disposition: unsupported
+    missing_capability: The upstream UI does not expose Ming-Image edit and no run has shown how the trainer reads its reference, so Kura does not project a control role for ming_image.
+    evidence: {source: [exact-class-audit], compile: [], image: [], optimizer: [], lifecycle: []}
+  - id: ai-moss-image-t2i
+    change_ids: [ai-moss-image]
+    backend: ai-toolkit
+    family: moss-image
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for MOSS-Image.
+  - id: ai-moss-image-edit
+    change_ids: [ai-moss-image]
+    backend: ai-toolkit
+    family: moss-image
+    variant: edit
+    mode: image-edit
+    dataset: {kind: image, conditioning: multi-control-image}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for MOSS-Image edit.
+  - id: ai-qwen-image-2-turbo-t2i
+    change_ids: [ai-qwen-image-2-turbo]
+    backend: ai-toolkit
+    family: qwen-image-2.1
+    variant: turbo
+    mode: text-to-image-distilled-with-training-adapter
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model, training-adapter], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Turbo; that the training adapter stays out of the saved LoRA is read from the source only.
+  - id: ai-qwen-image-2-edit-references
+    change_ids: [ai-qwen-image-2-references]
+    backend: ai-toolkit
+    family: qwen-image-2.1
+    variant: edit
+    mode: image-edit
+    dataset: {kind: image, conditioning: uniform-multi-control-image}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_manifest_controls_inside_each_owned_view], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Edit before or after the reference change.
+  - id: ai-minimax-h3-vsa-image
+    change_ids: [ai-minimax-h3-vsa-weights]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: vsa-fast-v2
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model, training-adapter], cache_stages: [latents, text-embeddings], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for MiniMax-H3 VSA/Fast on either set of weights.
+  - id: ai-sd1-native-options
+    change_ids: [ai-train-options, ai-loader-internals]
+    backend: ai-toolkit
+    family: sd1
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-source-diff-of-shared-trainer-code], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_accepts_registered_sd1_without_rewriting_it], image: [ai-toolkit-0.13.30-class-import-2026-10-17], optimizer: [ai-toolkit-conformance-docker-2026-10-17], lifecycle: []}
+  - id: ai-dgx-spark-host
+    change_ids: [ai-dgx-spark]
+    backend: ai-toolkit
+    family: host-runtime
+    variant: integrated-gpu
+    mode: host-hardware
+    dataset: {kind: none, conditioning: none}
+    disposition: not_applicable
+    rationale: Kura runs AI-Toolkit in its pinned image on discrete NVIDIA GPUs locally and on RunPod; the unified-memory patches apply only on an integrated GPU and the manager is not used.
+    evidence: {source: [exact-source-diff], compile: [], image: [], optimizer: [], lifecycle: []}
+  - id: ai-yue2-audio
+    change_ids: [ai-yue2-heads]
+    backend: ai-toolkit
+    family: yue2
+    variant: base
+    mode: audio-generation
+    dataset: {kind: audio, conditioning: none}
+    disposition: unsupported
+    missing_capability: Kura owns no audio-training dataset and artifact contract.
+    evidence: {source: [exact-source-diff], compile: [], image: [], optimizer: [], lifecycle: []}

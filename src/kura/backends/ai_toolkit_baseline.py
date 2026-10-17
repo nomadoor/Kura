@@ -34,7 +34,7 @@ BASELINE_KEYS = {
 
 def trained_arch(model_arch: str) -> str:
     """The arch the pinned trainer trains for ``model_arch``: it drops a UI ``:tag`` and reads
-    ``flex1`` as ``flux`` (toolkit/config_modules.py:768-775), so Kura writes the value as given."""
+    ``flex1`` as ``flux`` (toolkit/config_modules.py:774-778), so Kura writes the value as given."""
     arch = model_arch.split(":", 1)[0]
     return "flux" if arch == "flex1" else arch
 

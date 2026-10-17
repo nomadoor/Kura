@@ -836,8 +836,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        base_pin = "ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc"
-        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a"
+        base_pin = "ostris/aitoolkit:0.13.30@sha256:58cfb049ed8d3e2abc4770b48ba8bd7193072f8d553c647cf4fec6b44f7027d7"
+        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c"
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
         self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
@@ -1206,6 +1206,42 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertIn("/cache/dataset-view/", process["datasets"][0]["control_path"][0])
 
     @posix_only(DATASET_IO)
+    def test_ai_toolkit_projects_every_new_0_13_30_diffusion_architecture(self) -> None:
+        cases = (
+            ("flux3", "black-forest-labs/flux-3-image-klein-base", (), {}),
+            ("flux3", "black-forest-labs/flux-3-image-klein-base", ("control.png",), {}),
+            ("iris3b", "speridlabs/iris-3b", (), {}),
+            ("ming_image", "inclusionAI/Ming-Image-0.1-Design", (), {}),
+            ("moss_image", "OpenMOSS-Team/MOSS-Image-SFT", (), {}),
+            ("moss_image:base_edit", "OpenMOSS-Team/MOSS-Image-Base", ("a.png", "b.png"), {"model_edit": True}),
+            ("qwen_image_2:turbo", "Qwen/Qwen-Image-2.1", (), {}),
+        )
+        for arch, model, controls, authored in cases:
+            with self.subTest(arch=arch, controls=len(controls)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = {
+                    "id": f"new-{arch.replace(':', '-').replace('_', '-')}",
+                    "backend": {"name": "ai-toolkit", "config": {"model_arch": arch, "dataset_config": {}, **authored}},
+                    "model": {"base": model}, "datasets": [{"id": "tiny"}],
+                    "recipe": {"steps": 1, "seed": 1},
+                }
+                self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=controls)
+                BACKENDS["ai-toolkit"].compile(run, root)
+                process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+                self.assertEqual(process["model"]["arch"], arch)
+                self.assertEqual(len(process["datasets"][0].get("control_path") or []), len(controls))
+                if arch.startswith("moss_image"):
+                    self.assertEqual(process["model"].get("model_kwargs", {}).get("edit", False), bool(controls))
+        # flux3 reads one reference per sample, so a second one is refused rather than ignored.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = {"id": "new-flux3-two", "backend": {"name": "ai-toolkit", "config": {"model_arch": "flux3", "dataset_config": {}}},
+                   "model": {"base": "black-forest-labs/flux-3-image-klein-base"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1}}
+            with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile matches architecture='flux3'"):
+                self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=("a.png", "b.png"))
+                BACKENDS["ai-toolkit"].compile(run, root)
+
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture(self) -> None:
         cases = (
             ("qwen_image_2", "Qwen/Qwen-Image-2.1", "sample.png", (), {}),
@@ -1216,12 +1252,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ("minimax_h3", "MiniMaxAI/MiniMax-H3", "sample.mp4", (), {"num_frames": 5, "fps": 24, "do_audio": False}),
             ("minimax_h3_ref2va", "MiniMaxAI/MiniMax-H3", "sample.mp4", ("portrait.png",), {"num_frames": 5, "fps": 24, "do_audio": False}),
         )
-        # minimax_h3_vsa has no pinned UI entry, so its scheduler and precision
-        # must be authored (docs/adr/upstream-training-baseline.md).
+        # minimax_h3_vsa gained a pinned UI entry in 0.13.30 (FastH3 8-step V2), so its baseline fills the rest.
         cases = tuple((*case, {}) for case in cases) + (
-            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", "sample.png", (), {}, {
-                "mixed_precision": "bf16", "native_config": {"train": {"noise_scheduler": "flowmatch"}},
-            }),
+            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", "sample.png", (), {}, {}),
         )
         for arch, model, target, controls, dataset_config, authored in cases:
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
