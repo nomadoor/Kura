@@ -1,0 +1,35 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-17'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on every backend
+  on local Docker, before the 0.6.0 release (main at e2b73c2, the AI-Toolkit 0.13.30 image).
+backends:
+  sd-scripts:
+    model: Comfy-Org/stable-diffusion-v1-5-archive (sd15)
+    runtime_image_digest: sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06
+    adapter_source: 109335f0359de17b709c2c6700eb10a0bc9d0641d9fdf8d46939207511983c9f
+    runs: [20261017-1319_conf-sd-one-control_9156, 20261017-1321_conf-sd-one-control-2_6751, 20261017-1322_conf-sd-one-split_f66d, 20261017-1323_conf-sd-one-resume_8ba3, 20261017-1323_conf-sd-multi-fresh_112d, 20261017-1325_conf-sd-multi-split_b01c, 20261017-1326_conf-sd-multi-resume_fd18]
+  ai-toolkit:
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c
+    adapter_source: 53ddcb147bacff045f73ac85c3c00e6350ff3ae6bbcecde05e999810bb7ed43d
+    runs: [20261017-1327_conf-ai-one-control_0b97, 20261017-1328_conf-ai-one-control-2_ff40, 20261017-1328_conf-ai-one-split_e3ff, 20261017-1329_conf-ai-one-resume_1ab6, 20261017-1330_conf-ai-multi-fresh_e1a2, 20261017-1330_conf-ai-multi-split_bf15, 20261017-1331_conf-ai-multi-resume_5868]
+  musubi-tuner:
+    model: Comfy-Org/Wan_2.1_ComfyUI_repackaged (wan 2.1 t2v 1.3B)
+    runtime_image_digest: sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472
+    adapter_source: 3d21d3928a92a417e07d6aeee5d54e0e79125e228879ac0f3287cdbf2c0fd99c
+    runs: [20261017-1332_conf-musubi-one-control_b60a, 20261017-1335_conf-musubi-one-control-2_2190, 20261017-1337_conf-musubi-one-split_df32, 20261017-1339_conf-musubi-one-resume_8d00, 20261017-1342_conf-musubi-multi-fresh_3a07, 20261017-1344_conf-musubi-multi-split_2e08, 20261017-1347_conf-musubi-multi-resume_3cf9]
+results:
+  P1: pass on every backend
+  P2: pass on every backend
+  P3: pass on every backend; AI-Toolkit and Musubi Tuner controls differ, so exact learned-state equality is not checkable there
+  P4: pass on every backend
+  P6: not run (local Docker)
+  P7: pass on every backend
+  P8: pass on every backend
