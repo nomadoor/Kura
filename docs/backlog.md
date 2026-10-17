@@ -15,12 +15,12 @@ why, so it is not raised again.
 
 ## Open
 
-- 2026-10-16 | ComfyUI prepare | The RunPod render copies the merged `comfyui_model_registry.json` to the Pod, and `docker/comfyui/kura_comfy_prepare.py` resolves it again with its own `repo_id`/`direct_url`/`file` fallbacks and its own required-model scan; send the resolved `comfyui_models.json` and have the image read only that at the next image rebuild | review of the model selection pull request | -
 - 2026-10-17 | one owner | Which AI-Toolkit archs take `model_edit` is decided twice: the registry condition (`registry.py`, krea2 and moss_image) and the `AI_TOOLKIT_PROFILE_REQUIREMENTS` keys; derive the condition from the requirement keys | review of the AI-Toolkit 0.13.30 upgrade pull request | -
 - 2026-10-17 | tests | No test covers: moss_image with references and no `model_edit` (refused), `moss_image:base_edit` without `model_edit` (no `edit` in model_kwargs), `model_edit` refused for flux3, ming_image, and iris3b, ming_image with a reference (refused), and moss_image with an `OpenMOSS-Team/MOSS-Image-Base` base (conflict naming `moss_image:base`) | review of the AI-Toolkit 0.13.30 upgrade pull request | -
 - 2026-10-17 | AI-Toolkit baseline | The pinned UI fills `model.assistant_lora_path` (a training adapter) for `qwen_image_2:turbo`, `ming_image`, and the MiniMax-H3 entries, but the baseline fills only the keys docs/adr/upstream-training-baseline.md lists, so a Kura run of those entries trains without the adapter unless the author writes it. Decide in the ADR whether the baseline fills it; filling it changes what the MiniMax-H3 evidence trained | CodeRabbit on the AI-Toolkit 0.13.30 upgrade pull request | P11
 - 2026-10-17 | docker queries | `docker info --format {{.DockerRootDir}}` is asked in three places (doctor's storage summary, doctor's docker checks, and `docker_data_location`), and doctor's `_docker_run` has no timeout | review of the image-build free-space pull request | -
 - 2026-10-17 | tests | No test covers the doctor build-cache advisory at its 10 GiB boundary, or `kura image build` stopping on a workspace.yaml that still holds the retired `docker.build_cache_limit_gb` | review of the image-build free-space pull request | -
+- 2026-10-17 | ComfyUI specs | A RunPod render compiled before 2026-10-16 may hold a model spec with both repo and url or an empty target_name; the image refuses it on the Pod (saying to compile again) instead of the launch refusing it before a Pod exists | review of the ComfyUI prepare pull request | P11
 
 ## Rejected
 
