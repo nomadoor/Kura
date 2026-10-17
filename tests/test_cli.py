@@ -187,7 +187,7 @@ class InitCommandTests(unittest.TestCase):
             self.assertIsNone(status["last_step"])
             self.assertEqual(
                 sorted(path.name for path in (Path(directory) / "runs" / run_id).iterdir()),
-                ["notes.md", "plan.md", "run.yaml", "status.json"],
+                ["notes.md", "run.yaml", "status.json"],
             )
 
     def test_render_new_and_doctor_use_the_configured_comfyui_endpoint(self) -> None:
@@ -241,7 +241,7 @@ class InitCommandTests(unittest.TestCase):
             self.assertIsNone(status["last_step"])
             self.assertEqual(
                 sorted(path.name for path in (Path(directory) / "runs" / run_id).iterdir()),
-                ["notes.md", "plan.md", "run.yaml", "status.json"],
+                ["notes.md", "run.yaml", "status.json"],
             )
 
     @posix_only(DATASET_IO)
