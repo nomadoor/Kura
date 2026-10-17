@@ -8,6 +8,54 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: declared-model-download-runpod-executor-2026-10-18
+    executor: runpod
+    reason: 'The RunPod container-disk check counts the model files AI-Toolkit downloads itself at safety.model_download_estimate_gb when the run declares it, through the one helper that also sizes a declared disk cache; an undeclared download adds nothing, as before, and is shown in the plan as not counted. No recorded smoke declares the key, so each would stage, launch, run, and collect exactly as it did; the Pod, the transfer, the trainer command, output collection, and every record are unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: d46f59f7fad1bd9c3ae7e05d08bda9359c71b791d5f3261ef432752419198810
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 722b5fbd3ca46022f96cde9d9d310584bdb9cb42c75f371b25df32d88cb4796c
   - id: ai-toolkit-models-in-hf-cache-2026-10-17
     backend: ai-toolkit
     reason: 'AI-Toolkit''s MODELS_PATH moves from the workspace''s cache/ai-toolkit/models to /workspace/cache/huggingface/ai-toolkit-models, inside the Hugging Face cache, so the model files the trainer resolves and downloads itself land where docker.hf_cache points; the compiled command''s MODELS_PATH and its model-cache write root change, while the native configuration is the same. The model requirement for a selector the trainer resolves is now recorded as backend-resolved-selector instead of huggingface-repository, pointing at resolved/ai-toolkit.yaml for the settings. The trainer now downloads into a directory no recorded smoke used, so the evidence below does not carry over.'

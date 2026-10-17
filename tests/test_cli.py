@@ -1993,10 +1993,10 @@ class RunPlanTests(unittest.TestCase):
                 os.chdir(previous)
         output = stdout.getvalue()
         self.assertIn("Preflight", output)
-        self.assertIn("[info] model-acquisition", output)
+        self.assertIn("[warning] model-acquisition", output)
         self.assertIn("the trainer downloads example itself before the first step into the Hugging Face cache at ", output)
-        self.assertIn(str((root / "cache" / "huggingface").resolve() / "ai-toolkit-models"), output)
-        self.assertIn("may write tens of GB there", output)
+        self.assertIn(str((root / "cache" / "huggingface").resolve()) + " (diffusers repositories in hub/, single files in ai-toolkit-models/)", output)
+        self.assertIn("set safety.model_download_estimate_gb to count it", output)
         self.assertNotIn("estimated model downloads write 0 B", output)
         self.assertIn("[info] disk", output)
         self.assertNotIn("Disk warnings", output)
@@ -2198,7 +2198,7 @@ class RunPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch("kura.run_commands.plan._dataset_layout_preflight_report", return_value=[]):
             records = collect_run_preflight(run, Path(directory), config={}, executor="docker", download_estimate={"bytes": 0, "items": [], "unknown": [], "probe_failures": []})
         checks = {record["check"]: record["severity"] for record in records if record["check"] in {"checkpoint-safety", "sd-scripts-disk-cache"}}
-        self.assertEqual(checks, {"checkpoint-safety": "info", "sd-scripts-disk-cache": "warning"})
+        self.assertEqual(checks, {"checkpoint-safety": "info", "sd-scripts-disk-cache": "info"})
         enforce_preflight_errors([record for record in records if record["check"] in checks or record["check"] == "disk"])
 
     def test_many_checkpoints_are_reported_and_never_refused_on_any_backend(self) -> None:

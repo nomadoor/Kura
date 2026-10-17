@@ -26,12 +26,13 @@ def _runs_that_write_a_cache() -> dict[str, dict]:
 
 
 class DiskCacheTests(unittest.TestCase):
-    def test_every_backend_that_writes_a_cache_warns_until_its_size_is_declared(self) -> None:
+    def test_every_backend_that_writes_a_cache_says_it_is_not_counted_until_its_size_is_declared(self) -> None:
         for case, run in _runs_that_write_a_cache().items():
             with self.subTest(case=case):
                 report = plan._disk_cache_preflight_report(run)
-                self.assertEqual(report[0]["severity"], "warning")
-                self.assertIn("set safety.disk_cache_estimate_gb to count it", report[0]["fact"])
+                self.assertEqual(report[0]["severity"], "info")
+                self.assertIn("not counted in the disk estimate", report[0]["fact"])
+                self.assertIn("set safety.disk_cache_estimate_gb for large or video datasets", report[0]["fact"])
                 run["safety"] = {"disk_cache_estimate_gb": 2.5}
                 estimate = plan._disk_cache_estimate(run)
                 self.assertEqual((estimate["status"], estimate["bytes"]), ("declared-estimate", int(2.5 * 1024**3)))
