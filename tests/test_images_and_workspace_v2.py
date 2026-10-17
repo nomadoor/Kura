@@ -389,7 +389,7 @@ class DevelopmentImageTests(unittest.TestCase):
     def test_build_refuses_outside_an_editable_checkout(self) -> None:
         stderr = io.StringIO()
         with patch("kura.cli.development_checkout", return_value=None), patch("sys.stderr", stderr):
-            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None, allow_large_build_cache=True)), 1)
+            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None)), 1)
         self.assertIn(PINNED_IMAGES["sd-scripts"], stderr.getvalue())
 
     def test_build_uses_the_checkout_definitions_from_any_workspace(self) -> None:
@@ -401,7 +401,7 @@ class DevelopmentImageTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "sha256:built\n", "")
 
         with patch("kura.cli.development_checkout", return_value=ROOT), patch("kura.cli._docker_run", side_effect=run), patch("sys.stdout", io.StringIO()):
-            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None, allow_large_build_cache=True)), 0)
+            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None)), 0)
         build = calls[0]
         self.assertEqual(build[build.index("--file") + 1], str(ROOT / "docker" / "sd-scripts" / "Dockerfile"))
         self.assertEqual(build[-1], str(ROOT))
@@ -421,7 +421,7 @@ class DevelopmentImageTests(unittest.TestCase):
             os.chdir(other / "datasets")
             try:
                 with patch("kura.cli.development_checkout", return_value=ROOT), patch("kura.cli._docker_run") as docker_run, patch("sys.stderr", stderr):
-                    self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None, allow_large_build_cache=True)), 1)
+                    self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None)), 1)
             finally:
                 os.chdir(previous)
             docker_run.assert_not_called()
@@ -429,7 +429,7 @@ class DevelopmentImageTests(unittest.TestCase):
             self.assertIn(str(other), stderr.getvalue())
         stderr = io.StringIO()
         with patch("kura.cli.development_checkout", return_value=ROOT), patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "sha256:built\n", "")), patch("sys.stdout", io.StringIO()), patch("sys.stderr", stderr):
-            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None, allow_large_build_cache=True)), 0)
+            self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None)), 0)
         self.assertIn(f"from {ROOT}", stderr.getvalue())
 
     def test_publish_needs_a_target_tag(self) -> None:

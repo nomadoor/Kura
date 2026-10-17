@@ -121,7 +121,6 @@ WORKSPACE_SCHEMA = _mapping({
         "hf_cache": _STRING,
         "mounts": _sequence(_DOCKER_MOUNT),
         "min_free_gb": _NUMBER,
-        "build_cache_limit_gb": _NUMBER,
     }),
     "comfyui": _mapping({
         **{name: _STRING for name in ("endpoint", "lora_dir", "lora_stage_subdir", "model_patches_dir", "model_patch_stage_subdir", "input_dir", "input_stage_subdir")},
@@ -162,6 +161,7 @@ WORKSPACE_OBSOLETE_KEYS = {
     "runpod.template_id": "Kura starts every Pod from its own start script so the maximum lease is armed at start",
     "runpod.cloud_type": _CLOUD_TYPES,
     "comfyui.runpod.cloud_type": _CLOUD_TYPES,
+    "docker.build_cache_limit_gb": "image builds check the free space where Docker keeps its data against docker.min_free_gb, and `kura doctor disk` reports build cache that can be freed",
 }
 
 _WORKSPACE_ALIASES = {

@@ -571,50 +571,53 @@ class ImageCommandTests(unittest.TestCase):
 
             self.assertIn("AI_TOOLKIT_IMAGE=ostris/aitoolkit:custom", commands[0])
 
-    def test_image_build_rejects_large_build_cache_by_default(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text(
-                yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
-                encoding="utf-8",
-            )
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with (
-                    patch("kura.cli.development_checkout", return_value=REPOSITORY),
-                    patch("kura.cli._docker_storage_summary", return_value={"usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}]}),
-                    patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
-                ):
-                    code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None, allow_large_build_cache=False))
-            finally:
-                os.chdir(previous)
-            self.assertEqual(code, 1)
-            self.assertIn("Docker build cache exceeds 30GiB", stderr.getvalue())
+    def test_image_build_checks_free_space_where_docker_keeps_its_data(self) -> None:
+        from types import SimpleNamespace
 
-    def test_image_build_reads_the_build_cache_limit_doctor_reads(self) -> None:
-        # One setting decides both doctor's warning and image build's stop; outside a workspace the default applies.
-        cache = {"usage": [{"Type": "Build Cache", "size_bytes": 25 * 1024**3}]}
-        for config, expected_code in (({"docker": {"build_cache_limit_gb": 20}}, 1), ({"docker": {"build_cache_limit_gb": 40}}, 0), (None, 0)):
-            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+        # The floor is the one a local launch keeps; the build cache size decides nothing.
+        big_cache = [{"Type": "Build Cache", "size_bytes": 300 * 1024**3, "reclaimable_bytes": 0}]
+        for free_gib, expected in ((50, 1), (200, 0)):
+            with self.subTest(free_gib=free_gib), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                if config is not None:
-                    (root / "workspace.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+                (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"min_free_gb": 100}}), encoding="utf-8")
                 previous = Path.cwd()
                 os.chdir(root)
                 try:
                     with (
                         patch("kura.cli.development_checkout", return_value=REPOSITORY),
-                        patch("kura.cli._docker_storage_summary", return_value=cache),
-                        patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                        patch("kura.cli._docker_storage_summary", return_value={"root_dir": str(root), "usage": big_cache}),
+                        patch("kura.cli.probe_storage", return_value=SimpleNamespace(effective_free_bytes=free_gib * 1024**3, backing_id="D:")) as probe,
+                        patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")) as docker_run,
                         patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
                     ):
-                        code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None, allow_large_build_cache=False))
+                        code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None))
                 finally:
                     os.chdir(previous)
-                self.assertEqual(code, expected_code, stderr.getvalue())
-                if expected_code:
-                    self.assertIn("Docker build cache exceeds 20GiB", stderr.getvalue())
+                self.assertEqual(code, expected, stderr.getvalue())
+                self.assertEqual(probe.call_args.args[0], root)
+                if expected:
+                    self.assertIn("50 GiB effective free, below the 100 GiB docker.min_free_gb floor", stderr.getvalue())
+                    docker_run.assert_not_called()
+
+    def test_image_build_says_when_it_cannot_see_dockers_data(self) -> None:
+        # Docker Desktop keeps its data inside its own VM; the build goes on and says it was not checked.
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path.cwd()
+            os.chdir(directory)
+            try:
+                with (
+                    patch("kura.cli.development_checkout", return_value=REPOSITORY),
+                    patch("kura.cli._docker_storage_summary", return_value={"root_dir": "/var/lib/docker-not-here"}),
+                    patch("kura.cli.probe_storage") as probe,
+                    patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                    patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
+                ):
+                    code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 0)
+        probe.assert_not_called()
+        self.assertIn("its free space is not checked", stderr.getvalue())
 
 
 class DoctorDockerTests(unittest.TestCase):
@@ -875,7 +878,7 @@ class DoctorDockerTests(unittest.TestCase):
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", return_value=20),
-                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}], "kura_managed": {}}),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3, "reclaimable_bytes": 12 * 1024**3}], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 2, "samples": ["cache/root-owned"], "truncated": False}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                 ):
@@ -886,8 +889,10 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["workspace_root"], str(root))
             self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
-            self.assertEqual(payload["issues"][0]["severity"], "warning")
-            self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
+            self.assertIn("warning", {issue["severity"] for issue in payload["issues"]})
+            # Only the build cache cleanup can free is reported, as advice rather than a warning.
+            self.assertIn("12GiB of Docker build cache can be freed with `kura cleanup docker-cache --yes`", payload["advisories"])
+            self.assertFalse(any("build cache" in item for item in payload["warnings"]))
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
             self.assertEqual(list(payload)[:4], ["diagnosis", "warnings", "advisories", "issues"])
             # Concise: one storage entry per backing store, docker usage by type, no per-path filesystem copies.
@@ -896,7 +901,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertIn("workspace", backing["paths"])
             self.assertIn("huggingface_cache", backing["paths"])
             self.assertNotIn("mount", backing)
-            self.assertEqual(payload["docker_storage"]["usage"], {"Build Cache": {"size_bytes": 31 * 1024**3}})
+            self.assertEqual(payload["docker_storage"]["usage"], {"Build Cache": {"size_bytes": 31 * 1024**3, "reclaimable_bytes": 12 * 1024**3}})
             self.assertEqual(payload["sizes"]["runs"], {"path": str(root / "runs"), "size_bytes": 20})
             self.assertEqual(payload["root_owned"], {"count": 2, "samples": ["cache/root-owned"], "scan_stopped_at_limit": False})
 
