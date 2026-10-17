@@ -92,7 +92,9 @@ the answer.
 
 Before launching, run `kura run plan <run-id>` and show the output to the user.
 Do not reconstruct launch settings from memory. Launch only after explicit
-approval. A compiled run never changes: if anything changes afterward, start a
+approval. If the user asked for an unattended run (to go ahead without
+waiting for them), that request is the approval: write the plan the run ran
+under, and the request, in the run's `notes.md`. A compiled run never changes: if anything changes afterward, start a
 new run from its settings with `kura run new --from <run-id>`, make the change
 in the new `run.yaml`, compile it, and show its plan again. Do not silently
 change batch, resolution, precision, or other quality, memory, or cost

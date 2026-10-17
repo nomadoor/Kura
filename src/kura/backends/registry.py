@@ -7,16 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_PINNED_MODEL_ARCHS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, musubi_disk_cache, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
-from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES, musubi_model_download_specs
+from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES, musubi_model_download_specs, musubi_model_facts
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
-from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache, training_state_contract_sd_scripts
-from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
-from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
+from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache, training_state_contract_sd_scripts, validate_sd_scripts_authored
+from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset
+from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs, sd_scripts_model_facts
+from kura.images import BUILD_SOURCES, PINNED_IMAGES
 from kura.run_envelope import COMMON_RECIPE_FIELDS, RETIRED_TRAIN_RUN_KEYS, SettingsRefused, backend_config
 
 
@@ -131,6 +132,8 @@ class BackendAdapter:
     # author's `safety.disk_cache_estimate_gb`, which plan counts for every backend.
     disk_cache: Callable[[dict[str, Any]], str | None] | None = None
     general_resolution: Callable[[dict[str, Any]], Any] | None = None
+    # Model facts the adapter already owns (baselines, model roles, entry shapes), for capabilities.
+    model_facts: Callable[[], dict[str, Any]] | None = None
     default_ports: tuple[str, ...] = ("22/tcp",)
 
 
@@ -180,7 +183,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         "dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS,
         **AI_TOOLKIT_DATASET_OPTION_CAPABILITIES,
     },
-    config_value_choices=(("model_arch", tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS)}))),),
+    config_value_choices=(("model_arch", AI_TOOLKIT_MODEL_ARCH_VALUES),),
     # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer. Its -1 accumulation
     # (a whole epoch) is refused: Kura counts and resumes by optimizer steps.
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 0), ("gradient_accumulation_steps", 1)),
@@ -404,6 +407,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         training_state=training_state_contract_ai_toolkit,
         runtime_checks=runtime_checks_ai_toolkit,
         disk_cache=ai_toolkit_disk_cache,
+        model_facts=ai_toolkit_model_facts,
         default_ports=("8675/http", "22/tcp"),
     ),
     "musubi-tuner": BackendAdapter(
@@ -416,15 +420,17 @@ BACKENDS: dict[str, BackendAdapter] = {
         runtime_checks=runtime_checks_musubi,
         disk_cache=musubi_disk_cache,
         general_resolution=musubi_general_resolution,
+        model_facts=musubi_model_facts,
     ),
     "sd-scripts": BackendAdapter(
         name="sd-scripts", image_name="sd-scripts", compile=_compile_sd_scripts, command=command_sd_scripts,
         display=display_sd_scripts, requirements=requirements_sd_scripts, surface=SD_SCRIPTS_SURFACE,
         project_dataset=project_sd_scripts_dataset,
-        validate_authored=validate_sd_scripts_dataset_config,
+        validate_authored=validate_sd_scripts_authored,
         download_specs=sd_scripts_model_download_specs,
         training_state=training_state_contract_sd_scripts,
         disk_cache=sd_scripts_disk_cache,
+        model_facts=sd_scripts_model_facts,
     ),
 }
 
@@ -622,4 +628,6 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
             for item in adapter.surface.required
         },
         "boolean_fields": sorted(adapter.surface.boolean_fields),
+        "pinned_trainer": {"image": PINNED_IMAGES[adapter.image_name], "source": dict([BUILD_SOURCES[adapter.image_name]])},
+        "model_facts": adapter.model_facts() if adapter.model_facts is not None else {},
     }

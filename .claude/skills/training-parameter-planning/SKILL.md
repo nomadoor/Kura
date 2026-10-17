@@ -75,9 +75,16 @@ values each shipped card covers:
 | `flux2` | `flux2`, `flux2_klein_4b`, `flux2_klein_9b` | — | `flux2` |
 | `flux_kontext` | `flux_kontext` | — | `flux_kontext` |
 | `krea2` | `krea2` | — | `krea2` |
+| `moss_image` | `moss_image:base` | — | — |
 
 Every other selector value `kura run capabilities <backend>` lists has no
-shipped card; a user card in `knowledge/model-families/` may cover it.
+shipped card; a user card in `knowledge/model-families/` may cover it. For a
+family without a card, read the pinned trainer's own source and docs for that
+architecture: `kura run capabilities <backend>` prints the pinned trainer image
+and the source it was built from (for AI-Toolkit, also the commit of the
+pinned upstream UI baseline and each `model_arch` value's baseline entry).
+Say which file you read; it is evidence about the trainer, not a recipe
+someone has verified.
 
 ## Build the proposal
 

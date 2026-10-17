@@ -7,8 +7,8 @@ import re
 from typing import Any
 
 from kura.container_scripts import script_source
-from kura.backends.common import _musubi_architecture, _musubi_backend_override
-from kura.backends.shared import _truthy, download_specs_for, explicit_model_paths, model_downloads, recorded_model_source
+from kura.backends.common import MUSUBI_ARCHITECTURES, _musubi_architecture, _musubi_backend_override
+from kura.backends.shared import _truthy, download_specs_for, explicit_model_paths, model_downloads, model_source_facts, recorded_model_source
 from kura.provenance import artifact_pinning
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
@@ -284,14 +284,11 @@ def _musubi_model_version(run: dict[str, Any], *, default: str = "original") -> 
     return value
 
 
-def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
-    architecture = _musubi_architecture(run)
-    override = _musubi_backend_override(run)
+def _musubi_role_formats(architecture: str, flux2_model_version: str | None = None) -> dict[str, str]:
+    """The model roles `architecture` reads and the format Kura checks for each."""
     text_encoder_format = "safetensors"
-    if architecture == "flux2":
-        model_version = _musubi_flux2_model_version(run)
-        if model_version != "dev":
-            text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version else "qwen3_4b_text_encoder"
+    if architecture == "flux2" and flux2_model_version != "dev":
+        text_encoder_format = "qwen3_8b_text_encoder" if "9b" in str(flux2_model_version) else "qwen3_4b_text_encoder"
     defaults: dict[str, dict[str, str]] = {
         "flux2": {
             "dit": "flux2_dit",
@@ -369,7 +366,13 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "text_encoder_clip": "hf_model_id_or_path",
         },
     }
-    expectations = dict(defaults.get(architecture, {}))
+    return dict(defaults.get(architecture, {}))
+
+
+def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
+    architecture = _musubi_architecture(run)
+    override = _musubi_backend_override(run)
+    expectations = _musubi_role_formats(architecture, _musubi_flux2_model_version(run) if architecture == "flux2" else None)
     authored = override.get("model_expectations", {})
     if not isinstance(authored, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in authored.items()):
         raise ValueError("Musubi model_expectations must map model roles to a format name")
@@ -382,6 +385,21 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             + (f" names format(s) {', '.join(unknown_formats)}; use one of: {', '.join(MODEL_FORMATS)}" if unknown_formats else "")
         )
     return {**expectations, **authored}
+
+
+def musubi_model_facts() -> dict[str, Any]:
+    """The model roles each architecture reads, with the format Kura checks, and the entry shapes
+    that name them. Which roles a run needs depends on its task and options; compile names any
+    missing one."""
+    roles: dict[str, dict[str, Any]] = {}
+    for architecture in sorted(MUSUBI_ARCHITECTURES):
+        for version in FLUX2_MODEL_VERSIONS if architecture == "flux2" else (None,):
+            key = f"architecture={architecture}" + (f", model_version={version}" if version else "")
+            roles[key] = {"formats": _musubi_role_formats(architecture, version)}
+    return {
+        "model_roles": roles,
+        "model_sources": model_source_facts(),
+    }
 
 
 def _musubi_model_sources(run: dict[str, Any], paths: dict[str, str]) -> dict[str, dict[str, str]]:

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry, trained_arch
+from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, baseline_facts, load_baseline, select_baseline_entry, trained_arch, ui_entry_values
 from kura.backends.dataset_profiles import (
     caption_presence,
     classify_dataset_shape,
@@ -64,6 +64,8 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "sd3", "sdxl", "ssd", "vega", "wan21", "wan21_i2v", "wan22_14b",
     "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
 })
+# Every model_arch value Kura accepts: a pinned arch, or a UI entry name the trainer reads as one.
+AI_TOOLKIT_MODEL_ARCH_VALUES = tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS)}))
 
 # Pinned AI-Toolkit dcebc744, toolkit/data_loader.py:40-42. These
 # are the folder loader's exact lowercase extension lists.
@@ -1152,11 +1154,11 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     dataset_config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
     try:
         baseline = ai_toolkit_baseline(run)
-    except ValueError as exc:
-        baseline = {"error": str(exc)}
-    filled = baseline if isinstance(baseline, dict) and "error" not in baseline else {"train": {}, "model": {}}
+    except ValueError:
+        baseline = None
+    filled = baseline if isinstance(baseline, dict) else {"train": {}, "model": {}}
     return {
-        "baseline": baseline,
+        "effective_settings": _ai_toolkit_effective_settings(run),
         "architecture": native.get("model_arch") or _nested(config, "model", "arch"),
         "rank": _first_set(native.get("network_dim"), _nested(config, "network", "linear")),
         "alpha": _first_set(native.get("network_alpha"), _nested(config, "network", "linear_alpha")),
@@ -1241,15 +1243,98 @@ def _ai_toolkit_frozen_native_blocks(
     return native_datasets, views, wrapped
 
 
+# The native process key each Kura-typed field writes, by section.
+_AI_TOOLKIT_TYPED_FIELDS = {
+    "network": {"linear": "network_dim", "linear_alpha": "network_alpha"},
+    "train": {
+        "lr": "learning_rate", "lr_scheduler": "lr_scheduler", "optimizer": "optimizer_type",
+        "dtype": "mixed_precision", "batch_size": "batch_size",
+        "gradient_accumulation_steps": "gradient_accumulation_steps",
+        "gradient_checkpointing": "gradient_checkpointing",
+        "bypass_guidance_embedding": "bypass_guidance_embedding",
+    },
+    "model": {
+        "extras_name_or_path": "extras_name_or_path",
+        "low_vram": "low_vram",
+        "quantize": "quantize",
+        "quantize_te": "quantize_te",
+    },
+    "save": {"save_every": "save_every_n_steps", "max_step_saves_to_keep": "save_last_n_steps"},
+}
 # Kura-typed fields that author a baseline key (docs/adr/upstream-training-baseline.md).
 _AI_TOOLKIT_AUTHORED_BASELINE_KEYS = {
-    ("train", "lr"): "learning_rate",
-    ("train", "optimizer"): "optimizer_type",
-    ("train", "dtype"): "mixed_precision",
-    ("model", "low_vram"): "low_vram",
-    ("model", "quantize"): "quantize",
-    ("model", "quantize_te"): "quantize_te",
+    (section, key): field
+    for section, fields in _AI_TOOLKIT_TYPED_FIELDS.items() for key, field in fields.items()
+    if key in BASELINE_KEYS.get(section, ())
 }
+# How backend.config.native_config reaches the trainer, for `kura run capabilities`.
+AI_TOOLKIT_NATIVE_CONFIG_MERGE = (
+    "each native_config section (train, model, network, save, ...) merges key by key into the process "
+    "Kura generates; authored values win (native_config keys and the typed fields, which may not both set "
+    "one key), and the pinned upstream UI baseline of the selected model_arch fills only the baseline keys "
+    "left unset, a mapping such as model_kwargs or optimizer_params only its missing subkeys. A key Kura "
+    "owns (paths, datasets, steps, seed, saving, schedule) is refused there"
+)
+
+
+def _ai_toolkit_authored_sections(override: dict[str, Any]) -> dict[str, Any]:
+    """The native process sections the run authors: native_config's sections with the typed fields
+    written into them. Compile merges these over Kura's own process values, and the baseline fills
+    only what they leave unset."""
+    native = override.get("native_config")
+    if "native_config" in override and not isinstance(native, dict):
+        raise ValueError("backend.config.native_config must be a mapping for AI-Toolkit.")
+    sections: dict[str, Any] = deepcopy(native) if isinstance(native, dict) else {}
+    for section, fields in _AI_TOOLKIT_TYPED_FIELDS.items():
+        for native_key, authored_key in fields.items():
+            if authored_key in override:
+                raw_section = native.get(section) if isinstance(native, dict) else None
+                if isinstance(raw_section, dict) and native_key in raw_section:
+                    raise ValueError(
+                        f"AI-Toolkit backend.config.{authored_key} duplicates "
+                        f"backend.config.native_config.{section}.{native_key}"
+                    )
+                sections.setdefault(section, {})[native_key] = deepcopy(override[authored_key])
+    if "model_edit" in override:
+        raw_model = native.get("model") if isinstance(native, dict) else None
+        raw_kwargs = raw_model.get("model_kwargs") if isinstance(raw_model, dict) else None
+        if isinstance(raw_kwargs, dict) and "edit" in raw_kwargs:
+            raise ValueError(
+                "AI-Toolkit backend.config.model_edit duplicates "
+                "backend.config.native_config.model.model_kwargs.edit"
+            )
+        sections.setdefault("model", {}).setdefault("model_kwargs", {})["edit"] = deepcopy(override["model_edit"])
+    return sections
+
+
+def _ai_toolkit_effective_settings(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Each train and model value the generated process gets from the run or from the pinned
+    upstream UI baseline, marked by where it came from. Display only: compile decides."""
+    if _ai_toolkit_backend_override(run).get("command") is not None:
+        return None
+    try:
+        authored = _ai_toolkit_authored_sections(_ai_toolkit_backend_override(run))
+        baseline = ai_toolkit_baseline(run)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    assert baseline is not None
+
+    def leaves(values: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+        found: dict[str, Any] = {}
+        for key, value in values.items():
+            if isinstance(value, dict) and value:
+                found.update(leaves(value, f"{prefix}{key}."))
+            else:
+                found[f"{prefix}{key}"] = value
+        return found
+
+    settings: dict[str, Any] = {"entry": baseline["entry"], "commit": baseline["commit"]}
+    for section in ("train", "model"):
+        section_values = authored.get(section) if isinstance(authored.get(section), dict) else {}
+        rows = {key: {"value": value, "source": "authored"} for key, value in leaves(section_values).items()}
+        rows.update({key: {"value": value, "source": "baseline"} for key, value in leaves(baseline[section]).items()})
+        settings[section] = dict(sorted(rows.items()))
+    return settings
 
 
 def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
@@ -1452,52 +1537,11 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         },
     }
     process = config["config"]["process"][0]
-    if "native_config" in override and not isinstance(native, dict):
-        raise ValueError("backend.config.native_config must be a mapping for AI-Toolkit.")
-    if isinstance(native, dict):
-        for section, values in native.items():
-            if section in process and isinstance(process[section], dict) and isinstance(values, dict):
-                process[section].update(deepcopy(values))
-            else:
-                process[section] = deepcopy(values)
-    ordinary = {
-        "network": {"linear": "network_dim", "linear_alpha": "network_alpha"},
-        "train": {
-            "lr": "learning_rate", "lr_scheduler": "lr_scheduler", "optimizer": "optimizer_type",
-            "dtype": "mixed_precision", "batch_size": "batch_size",
-            "gradient_accumulation_steps": "gradient_accumulation_steps",
-            "gradient_checkpointing": "gradient_checkpointing",
-            "bypass_guidance_embedding": "bypass_guidance_embedding",
-        },
-        "model": {
-            "extras_name_or_path": "extras_name_or_path",
-            "low_vram": "low_vram",
-            "quantize": "quantize",
-            "quantize_te": "quantize_te",
-        },
-        "save": {"save_every": "save_every_n_steps", "max_step_saves_to_keep": "save_last_n_steps"},
-    }
-    for section, fields in ordinary.items():
-        for native_key, authored_key in fields.items():
-            if authored_key in override:
-                raw_section = native.get(section) if isinstance(native, dict) else None
-                if isinstance(raw_section, dict) and native_key in raw_section:
-                    raise ValueError(
-                        f"AI-Toolkit backend.config.{authored_key} duplicates "
-                        f"backend.config.native_config.{section}.{native_key}"
-                    )
-                process.setdefault(section, {})[native_key] = deepcopy(override[authored_key])
-    if "model_edit" in override:
-        raw_model = native.get("model") if isinstance(native, dict) else None
-        raw_kwargs = raw_model.get("model_kwargs") if isinstance(raw_model, dict) else None
-        if isinstance(raw_kwargs, dict) and "edit" in raw_kwargs:
-            raise ValueError(
-                "AI-Toolkit backend.config.model_edit duplicates "
-                "backend.config.native_config.model.model_kwargs.edit"
-            )
-        process.setdefault("model", {}).setdefault("model_kwargs", {})["edit"] = deepcopy(
-            override["model_edit"]
-        )
+    for section, values in _ai_toolkit_authored_sections(override).items():
+        if section in process and isinstance(process[section], dict) and isinstance(values, dict):
+            process[section].update(values)
+        else:
+            process[section] = values
     _apply_ai_toolkit_baseline(run, process)
     if override.get("resolution") is not None:
         for dataset in process.get("datasets", []):
@@ -1603,3 +1647,9 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     if env.get("MODELS_PATH", model_cache) != model_cache:
         raise ValueError("AI-Toolkit MODELS_PATH must use Kura's managed model cache")
     return {"cwd": cwd, "argv": argv, "env": {**env, "MODELS_PATH": model_cache}, "write_roots": write_roots}
+
+
+def ai_toolkit_model_facts() -> dict[str, Any]:
+    """What `kura run capabilities ai-toolkit` shows about models: the pinned upstream UI baseline
+    of every model_arch value, and how native_config merges with it."""
+    return {"baseline": baseline_facts(AI_TOOLKIT_MODEL_ARCH_VALUES), "native_config": AI_TOOLKIT_NATIVE_CONFIG_MERGE}

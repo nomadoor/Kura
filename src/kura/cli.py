@@ -451,6 +451,8 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
                     constraints.append(f">{contract['exclusive_minimum']}")
                 if "maximum" in contract:
                     constraints.append(f"max={contract['maximum']}")
+                if "required" in contract:
+                    constraints.append(f"required: {contract['required']}")
                 print(f"    {field} (" + ", ".join(constraints) + ")")
     if payload["config_value_choices"]:
         print("backend.config selector values (spelled exactly as listed; not every one has been run end to end):")
@@ -474,7 +476,52 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
         for field, reason in payload["unsupported_fields"].items():
             print(f"  {field}: {reason}")
     print("escape hatches (inner values are not validated): " + ", ".join(payload["escape_hatches"]))
+    pinned = payload["pinned_trainer"]
+    print(f"pinned trainer: image {pinned['image']}, built from " + ", ".join(f"{key}={value}" for key, value in pinned["source"].items()))
+    _print_model_facts(payload["model_facts"])
     return 0
+
+
+def _print_model_facts(facts: dict[str, Any]) -> None:
+    def compact(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    baseline = facts.get("baseline")
+    if isinstance(baseline, dict):
+        print(
+            f"model_arch {baseline['label']} (AI-Toolkit commit {baseline['commit']}): what the upstream UI "
+            "builds for each value, not a choice Kura made; compile fills only the keys a run leaves unset"
+        )
+        for value, entry in baseline["model_arch"].items():
+            if entry is None:
+                print(f"  {value}: no baseline entry; compile names the values to author")
+            elif "error" in entry:
+                print(f"  {value}: {entry['error']}")
+            else:
+                print(
+                    f"  {value} (entry {entry['entry']}): name_or_path {entry['name_or_path']}; "
+                    + "; ".join(f"{section} {compact(entry[section])}" for section in ("train", "model", "dataset"))
+                )
+    if "native_config" in facts:
+        print("native_config: " + facts["native_config"])
+    roles = facts.get("model_roles")
+    if isinstance(roles, dict):
+        print("model roles, each named in backend.config.model_paths or model_downloads:")
+        for selector, contract in roles.items():
+            if "required" in contract:
+                print(f"  {selector}: required {', '.join(contract['required'])}; optional {', '.join(contract['optional']) or 'none'}")
+            else:
+                print(f"  {selector}: " + ", ".join(f"{role} ({kind})" for role, kind in contract["formats"].items()))
+        if any("formats" in contract for contract in roles.values()):
+            print("  (role (format Kura checks); which roles a run needs depends on its task and options, and compile names a missing one)")
+    sources = facts.get("model_sources")
+    if isinstance(sources, dict):
+        print("model entry shapes:")
+        for key, shape in sources.items():
+            if isinstance(shape, dict):
+                print(f"  {key}: keys {', '.join(shape['keys'])} (required: {', '.join(shape['required'])}); filename: {shape['filename']}")
+            else:
+                print(f"  {key}: {shape}")
 
 
 def cmd_render_new(args: argparse.Namespace) -> int:
@@ -1647,7 +1694,7 @@ def main() -> None:
     resume.add_argument("--executor", choices=("docker", "runpod"), help="Change only the execution location for the derived run")
     resume.add_argument("--gpu", help="Select a compatible GPU for the new execution environment")
     resume.set_defaults(func=cmd_run_resume)
-    capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface")
+    capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface, its pinned trainer, and the model facts Kura owns")
     capabilities.add_argument("backend", choices=backend_names())
     capabilities.add_argument("--json", action="store_true", help="Print the surface contract as JSON")
     capabilities.set_defaults(func=cmd_run_capabilities)

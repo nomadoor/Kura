@@ -8,6 +8,90 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-show-facts-2026-10-17
+    backend: ai-toolkit
+    reason: 'kura run capabilities shows each model_arch value''s pinned upstream UI baseline entry, how native_config merges, the shared model entry shapes, and the pinned trainer, and the plan display lists each effective train and model setting marked authored or baseline in place of the filled-baseline mapping. Compile now builds the authored sections in one function the display also reads, and the typed-field baseline keys are derived from the one typed-field table; both produce the same process keys in the same order, so every configuration builds the same native YAML and command.'
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-docker-2026-10-17
+    - ai-toolkit-0.13.30-class-import-2026-10-17
+    - ai-toolkit-conformance-docker-2026-10-11
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 53ddcb147bacff045f73ac85c3c00e6350ff3ae6bbcecde05e999810bb7ed43d
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: e246ff13d8bfffdc642923cbae99771bae6f39dafb430c6df714b02e78a7af04
+  - id: musubi-tuner-show-facts-2026-10-17
+    backend: musubi-tuner
+    reason: 'kura run capabilities shows the model roles each architecture reads with the format Kura checks, and the model_downloads and model_paths entry shapes; the role-format table moved into its own function, which _musubi_model_expectations calls with the same values. model_downloads still requires repo and filename, now named in one constant. Every configuration builds the same files and command.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-tuner-release-conformance-docker-2026-10-17
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 3d21d3928a92a417e07d6aeee5d54e0e79125e228879ac0f3287cdbf2c0fd99c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f95a67d3b05ecf52857de4cb55eef077e7c0ce2f14265c32027a11956f9cf454
+  - id: sd-scripts-show-facts-2026-10-17
+    backend: sd-scripts
+    reason: 'kura run capabilities shows each entrypoint''s required and optional model roles and the entry shapes; the optional roles now come from one table that the command builder reads, with the same flags in the same argv order. A subset''s num_repeats may now be inherited from its dataset block or general, as sd-scripts itself reads it, where before only the subset''s own was accepted; and the authored-settings check reports the dataset_config, selector, and model-role problems together in one refusal. Inputs that compiled before compile to the same dataset TOML, projection, and command; only inputs that were refused before (an inherited num_repeats) now compile, so the evidence below still describes what its configurations run.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-release-conformance-docker-2026-10-17
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 109335f0359de17b709c2c6700eb10a0bc9d0641d9fdf8d46939207511983c9f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 01f6140241b50c1b3a2143a381545875eb8750312f94c0eb39e6a6127bb9725f
   - id: ai-toolkit-0.13.30-comment-2026-10-17
     backend: ai-toolkit
     reason: 'A comment in the AI-Toolkit adapter now cites the exact trainer lines behind the one-reference FLUX.3 projection. No code changed, so every configuration and command is the same.'
