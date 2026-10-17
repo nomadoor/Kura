@@ -83,7 +83,7 @@ declared in `docs/adapter-source-identity-migrations.yaml`.
 **6. Verified by someone without your context.** Reviews and acceptance checks
 are done by an agent (or person) that has not seen your reasoning: give a
 reviewer the diff and the relevant ADRs, not your explanation. Before a
-milestone or release, a context-free agent installs Kura and does a user task
+milestone, a context-free agent installs Kura and does a user task
 from the shipped docs alone, and reports where it stumbled.
 
 **7. Promises are the checklist.** Kura's promises to its users are listed once,

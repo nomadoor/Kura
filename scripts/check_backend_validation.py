@@ -55,7 +55,7 @@ def _contract_status(contract: dict[str, Any], evidence: dict[str, Any]) -> str:
     execution = contract.get("execution") if isinstance(contract.get("execution"), dict) else {}
     runtime_verified = bool(contract.get("covered_by")) or isinstance(optimizer, list) and bool(optimizer)
     lifecycle_verified = execution.get("lifecycle_changed") is not True or isinstance(lifecycle, list) and bool(lifecycle)
-    return "✅ runtime verified" if runtime_verified and lifecycle_verified else "🧪 compile/image verified"
+    return "✅ runtime verified" if runtime_verified and lifecycle_verified else "🧪 untested (compile/image only)"
 
 
 def render_backend_validation_markdown(plan: dict[str, Any], source: str) -> str:
@@ -77,8 +77,8 @@ def render_backend_validation_markdown(plan: dict[str, Any], source: str) -> str
         f"{len(contracts)} contracts: {counts['support']} support, "
         f"{counts['unsupported']} unsupported, {counts['not_applicable']} not applicable.",
         "",
-        "Legend: ✅ real runtime verified · 🧪 supported by upstream and compile/image verified; "
-        "real optimizer not yet observed · "
+        "Legend: ✅ real runtime verified · 🧪 untested: compile/image verified, "
+        "no training run observed · "
         "⛔ unsupported · ➖ not applicable",
         "",
         "Evidence: 🧩 compile · 📦 pinned-image entrypoint · 🔥 real optimizer · ♻️ lifecycle",

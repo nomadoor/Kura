@@ -134,7 +134,7 @@ class BackendValidationCheckTests(unittest.TestCase):
 
         rendered = render_backend_validation_markdown(plan, "example.yaml")
 
-        self.assertIn("🧪 compile/image verified", rendered)
+        self.assertIn("🧪 untested (compile/image only)", rendered)
         self.assertIn("Real optimizer execution is not yet observed.", rendered)
 
     def test_complete_supported_contract_accepts_compile_and_image_evidence_with_visible_runtime_note(self) -> None:
