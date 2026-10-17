@@ -684,6 +684,30 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertIn("cache/huggingface", {item.get("target") for item in payload["actions"]})
             self.assertIn("docker system", {item.get("target") for item in payload["actions"]})
 
+    def test_cleanup_cache_offers_the_legacy_ai_toolkit_models_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            legacy = root / "cache" / "ai-toolkit" / "models"
+            legacy.mkdir(parents=True)
+            (legacy / "old.safetensors").write_bytes(b"old")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}):
+                    for yes in (False, True):
+                        with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                            self.assertEqual(cmd_cleanup(argparse.Namespace(target="cache", keep_last=30, delete_final_artifacts=False, yes=yes)), 0)
+                        item = next(action for action in json.loads(stdout.getvalue())["actions"] if action.get("target") == "cache/ai-toolkit")
+                        self.assertEqual(item["classification"], "legacy-ai-toolkit-models")
+                        self.assertIn("Legacy", item["note"])
+                        self.assertTrue(item["exists"])
+                        if not yes:
+                            self.assertTrue((legacy / "old.safetensors").is_file())
+            finally:
+                os.chdir(previous)
+            self.assertFalse((root / "cache" / "ai-toolkit").exists())
+
     def test_cleanup_image_uses_the_workspace_image_when_it_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1933,8 +1957,9 @@ class RunPlanTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Preflight", output)
         self.assertIn("[info] model-acquisition", output)
-        self.assertIn("the trainer downloads example itself before the first step", output)
-        self.assertIn("unless the Hugging Face cache local runs mount already holds it", output)
+        self.assertIn("the trainer downloads example itself before the first step into the Hugging Face cache at ", output)
+        self.assertIn(str((root / "cache" / "huggingface").resolve() / "ai-toolkit-models"), output)
+        self.assertIn("may write tens of GB there", output)
         self.assertNotIn("estimated model downloads write 0 B", output)
         self.assertIn("[info] disk", output)
         self.assertNotIn("Disk warnings", output)
@@ -4177,7 +4202,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
         self.assertEqual(command["env"], {
             "SEED": "42",
-            "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
+            "MODELS_PATH": "/workspace/cache/huggingface/ai-toolkit-models",
             "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
         })
 
@@ -5825,8 +5850,8 @@ class DockerLifecycleTests(unittest.TestCase):
             _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, estimate, executor="docker")
 
         _model_download_safety_preflight({"safety": {}}, estimate, executor="runpod")
-        local_records = _model_download_preflight_report({}, estimate, executor="docker")
-        remote_records = _model_download_preflight_report({}, estimate, executor="runpod")
+        local_records = _model_download_preflight_report({}, estimate, executor="docker", local_cache=Path("cache"))
+        remote_records = _model_download_preflight_report({}, estimate, executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in local_records})
         self.assertIn(("model-metadata-connectivity", "warning"), {(item["check"], item["severity"]) for item in remote_records})
         self.assertTrue(any("known portion" in item["fact"] for item in remote_records if item["check"] == "model-downloads"))
@@ -5838,7 +5863,7 @@ class DockerLifecycleTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "auth_error"):
             _model_download_safety_preflight({}, auth_estimate, executor="runpod")
-        auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod")
+        auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
 
     def test_missing_hf_artifact_is_not_collapsed_into_unknown_size(self) -> None:
@@ -5857,7 +5882,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
         self.assertEqual(estimate["unknown"], [])
         self.assertEqual(estimate["probe_failures"][0]["status"], "not_found")
-        records = _model_download_preflight_report(run, estimate, executor="runpod")
+        records = _model_download_preflight_report(run, estimate, executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in records})
 
     @posix_only(POSIX_PATHS)
@@ -7639,6 +7664,28 @@ class RunPodLifecycleTests(unittest.TestCase):
                 script = request.call_args.args[3]["dockerStartCmd"][2]
                 # A Pod whose controller never reaches it is still bounded.
                 self._assert_arms_lease_first(script, max_lease_sec=3 * 3600, log_path=log_path)
+
+    def test_container_disk_ai_toolkit_run_says_its_model_files_are_not_recorded(self) -> None:
+        from kura.executors.runpod import AI_TOOLKIT_MODELS_NOT_RECORDED
+        from kura.paths import AI_TOOLKIT_MODELS_PATH
+
+        models = {"MODELS_PATH": AI_TOOLKIT_MODELS_PATH}
+        roots = [{"role": "model-cache", "path": AI_TOOLKIT_MODELS_PATH, "env": "MODELS_PATH"}]
+        for name, spec_extra, expected in (
+            ("ai-toolkit", {"env": models, "write_roots": roots}, AI_TOOLKIT_MODELS_NOT_RECORDED),
+            ("no-models-path", {"env": {}}, None),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                run_dir = self._run_dir(Path(directory))
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                    with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
+                         patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
+                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], **spec_extra},
+                                      image="registry/image:tag", config=self._container_disk_config(), yes=True, max_lease_sec=3600)
+                status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+                self.assertEqual(status.get("ai_toolkit_models"), expected)
+                self.assertEqual(realization.get("ai_toolkit_models"), expected)
 
     def test_launch_runpod_can_pin_availability_filters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -22,6 +22,7 @@ from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
+from kura.paths import AI_TOOLKIT_MODELS_PATH
 from kura.provenance import artifact_pinning
 from kura.training_artifacts import require_constant_scheduler_for_resume, resume_steps, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
@@ -1194,19 +1195,25 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     override = _ai_toolkit_backend_override(run)
 
-    # The pinned ModelConfig takes no revision: the trainer loads the repository's default branch.
+    # The pinned ModelConfig takes no revision. The trainer resolves a selector
+    # itself: many families map it to other repositories' files (and pick among
+    # local candidates), so the record names the selector, not a repository.
+    # Settings that steer the resolution, such as qtype, are frozen in
+    # resolved/ai-toolkit.yaml; locks written before this keep huggingface-repository.
     def requirement(role: str, reference: Any) -> dict[str, Any] | None:
         if not isinstance(reference, str) or not reference:
             return None
+        extra: dict[str, Any] = {}
         if reference.startswith(("/", "./", "../", "~")):
             acquisition = "local-path"
             identity: dict[str, Any] = {"kind": "path", "path": reference}
             expected_format, observable = "backend-native-path", True
         else:
             acquisition = "backend"
-            identity = {"kind": "huggingface-repository", "repo_id": reference}
+            identity = {"kind": "backend-resolved-selector", "value": reference}
             expected_format, observable = "backend-native-repository", False
-        return {"role": role, "acquisition": acquisition, "identity": identity, "runtime_reference": reference, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable)}
+            extra = {"settings": "resolved/ai-toolkit.yaml"}
+        return {"role": role, "acquisition": acquisition, "identity": identity, "runtime_reference": reference, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable), **extra}
 
     requirements = []
     base = requirement("base_model", model.get("base"))
@@ -1568,7 +1575,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     override = _ai_toolkit_backend_override(run)
     command = override.get("command")
     recipe = validated_recipe(run, required=command is None)
-    model_cache = "/workspace/cache/ai-toolkit/models"
+    model_cache = AI_TOOLKIT_MODELS_PATH
     write_roots = [{"role": "model-cache", "path": model_cache, "env": "MODELS_PATH"}]
     if command is None:
         runner_env = {

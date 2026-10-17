@@ -57,7 +57,8 @@ from kura.executors.common import (
 )
 from kura.fsio import file_lock
 from kura.records import record as as_record
-from kura.paths import workspace_mount_mappings
+from kura.paths import to_host_path, workspace_mount_mappings
+from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX, models_root, write_models_record
 from kura.runtime_io import validated_write_roots
 
 
@@ -84,6 +85,31 @@ def _read_realization_record(
     ):
         return None, "record is malformed"
     return value, None
+
+
+def _record_ai_toolkit_models(run_dir: Path, realization: dict[str, Any]) -> None:
+    """List the files AI-Toolkit resolved into MODELS_PATH, on the host, once the container ended.
+
+    The same function the RunPod job runs on the Pod reads the host directory
+    the container's MODELS_PATH is mounted from. A lost listing costs a record,
+    never the run, so a failure here is left unrecorded.
+    """
+    try:
+        command = json.loads((run_dir / "resolved" / "backend-command.lock.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    root = models_root(command.get("write_roots") if isinstance(command, dict) else None)
+    if root is None:
+        return
+    mounts = realization.get("mounts") if isinstance(realization.get("mounts"), list) else []
+    host = to_host_path(root, workspace=run_dir.parent.parent, mounts=mounts, container_root=CONTAINER_WORKSPACE)
+    if host is None:
+        return
+    record = run_dir / "realizations" / f"{realization['id']}{AI_TOOLKIT_MODELS_RECORD_SUFFIX}"
+    try:
+        write_models_record(str(host), str(record), models_path=root, realization_id=realization["id"])
+    except OSError:
+        return
 
 
 def _finalize_dataset_handoff(
@@ -780,6 +806,9 @@ def reconcile_docker(
 
         status = _mutate_run_status(run_dir, mutate, blocking=blocking)
         if state in TERMINAL_STATES:
+            if state != "unknown":
+                # Before the status says completed, so a reader that sees it finds the listing.
+                _record_ai_toolkit_models(run_dir, realization)
             published: list[dict[str, Any]] = []
             state_error: str | None = None
             try:

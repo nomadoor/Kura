@@ -884,6 +884,26 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             self.assertFalse((run_dir / "realizations" / "real-1.transfer-manifest.json").exists())
             self.assertTrue((run_dir / "realizations" / "real-1.runpod-input.json").is_file())
 
+    def test_the_pod_s_ai_toolkit_models_record_comes_home(self) -> None:
+        from kura.executors.runpod import bring_home_ai_toolkit_models
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "matched")
+            listed = {"kind": "ai_toolkit_models", "realization_id": "real-1", "files": []}
+            (downloaded / "realizations" / "real-1.ai-toolkit-models.json").write_text(json.dumps(listed), encoding="utf-8")
+            (downloaded / "realizations" / "other.ai-toolkit-models.json").write_text(json.dumps(listed), encoding="utf-8")
+
+            bring_home_ai_toolkit_models(run_dir, downloaded, "real-1")
+
+            target = run_dir / "realizations" / "real-1.ai-toolkit-models.json"
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), listed)
+            # Only this realization's record is the Pod's own.
+            self.assertFalse((run_dir / "realizations" / "other.ai-toolkit-models.json").exists())
+            # A record already home is kept.
+            (downloaded / "realizations" / "real-1.ai-toolkit-models.json").write_text("{}", encoding="utf-8")
+            bring_home_ai_toolkit_models(run_dir, downloaded, "real-1")
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), listed)
+
     def test_local_or_remote_drift_projects_a_warning_and_never_overwrites_records(self) -> None:
         from kura.executors.runpod import project_runpod_dataset_handoff as finalize_runpod_dataset_handoff
 

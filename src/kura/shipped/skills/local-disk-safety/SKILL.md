@@ -92,7 +92,8 @@ Before applying, say what those commands mean:
 - `cleanup docker-cache`: remove Docker build scratch data; it does not remove
   Docker images.
 - `cleanup cache`: remove Kura-managed model/cache data; models may need to be
-  downloaded again.
+  downloaded again. It also lists `cache/ai-toolkit` as legacy: AI-Toolkit
+  model files from runs compiled before they moved into the Hugging Face cache.
 - `cleanup runs`: remove only transient run cache/tmp by default; it keeps
   outputs, downloads, and final artifacts. For kept runs it also offers a
   leftover `cache/dataset-view` as `safe-run-dataset-view-remnant` when

@@ -43,7 +43,7 @@ from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
-from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
+from kura.paths import LEGACY_AI_TOOLKIT_CACHE, inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_step_request, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys, SettingsRefused, gpu_choice_problem
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
@@ -1059,9 +1059,15 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         hf_item = _cleanup_path_item(workspace, hf_cache, classification="safe-cache" if hf_cache_inside else "outside-workspace")
         if not hf_cache_inside:
             hf_item["note"] = "docker.hf_cache is outside the workspace; Kura leaves it to you."
+        legacy_item = _cleanup_path_item(workspace, workspace / LEGACY_AI_TOOLKIT_CACHE, classification="legacy-ai-toolkit-models")
+        legacy_item["note"] = (
+            "Legacy: AI-Toolkit model files from runs compiled before they moved to the Hugging Face cache; "
+            "runs compiled since then do not read them."
+        )
         actions.extend([
             hf_item,
             _cleanup_path_item(workspace, workspace / "cache" / "models", classification="safe-cache-index-or-symlink-tree"),
+            legacy_item,
         ])
     if target in ("runs", "all"):
         actions.append(_cleanup_path_item(workspace, workspace / "runs", classification="maybe-run-artifacts"))
@@ -1094,6 +1100,9 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
                     if path.exists():
                         _remove_tree(workspace, path)
                     path.mkdir(parents=True, exist_ok=True)
+                legacy = workspace / LEGACY_AI_TOOLKIT_CACHE
+                if legacy.exists():
+                    _remove_tree(workspace, legacy)
             if target in ("runs", "all"):
                 for item in _run_cleanup_candidates(workspace, keep_last=args.keep_last, delete_final_artifacts=args.delete_final_artifacts):
                     for target_item in item["targets"]:

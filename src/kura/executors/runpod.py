@@ -25,6 +25,7 @@ from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, p
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
+from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX, models_root
 from kura.secrets import MissingSecret, declared_secret
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
@@ -91,6 +92,8 @@ def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, time
 # The container disk a Pod gets when `runpod.container_disk_gb` is unset; the plan's RunPod
 # disk preflight reads the same value.
 DEFAULT_CONTAINER_DISK_GB = 150
+# What a container-disk AI-Toolkit run records instead of its model-file listing.
+AI_TOOLKIT_MODELS_NOT_RECORDED = "not-recorded: runpod.storage_mode container_disk runs only the trainer, so no model-file listing is written"
 
 
 def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1024,6 +1027,25 @@ def finalize_runpod_dataset_handoff(
     return postflight_ref, postflight
 
 
+def bring_home_ai_toolkit_models(run_dir: Path, downloaded_run: Path, realization_id: str) -> None:
+    """Copy the Pod's AI-Toolkit model listing into ``realizations/``; never raises.
+
+    Any AI-Toolkit command that declares MODELS_PATH gets one, with or without
+    a frozen dataset handoff, so this is apart from the handoff records. Only
+    this realization's name comes home, and a record already present is kept.
+    A lost listing costs a record, never the download.
+    """
+    name = f"{realization_id}{AI_TOOLKIT_MODELS_RECORD_SUFFIX}"
+    remote = downloaded_run / "realizations" / name
+    target = run_dir / "realizations" / name
+    try:
+        if remote.is_file() and not target.exists():
+            target.parent.mkdir(exist_ok=True)
+            shutil.copyfile(remote, target)
+    except OSError:
+        return
+
+
 def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
     """Project post-training input drift for a download; never raises.
 
@@ -1472,10 +1494,17 @@ sleep infinity
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
         "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"}, **kura_provenance(),
     }
+    if settings["storage_mode"] != "upload" and models_root(spec.get("write_roots")) is not None:
+        # The container-disk start runs only the trainer, so nothing lists the model files afterwards.
+        realization["ai_toolkit_models"] = AI_TOOLKIT_MODELS_NOT_RECORDED
     _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
+    if "ai_toolkit_models" in realization:
+        status["ai_toolkit_models"] = realization["ai_toolkit_models"]
+    else:
+        status.pop("ai_toolkit_models", None)
     status.pop("last_observation", None)
     status.pop("capacity_wait", None)
     # A new realization starts its own progress; an earlier one's step is not its.

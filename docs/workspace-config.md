@@ -87,7 +87,11 @@ docker:
 Kura mounts that directory at `/workspace/cache/huggingface` in every local
 container, measures free space on its drive before launch, and counts the models
 already in it. `kura cleanup cache` reports a cache outside the workspace but
-never deletes it, since other workspaces may share it.
+never deletes it, since other workspaces may share it. AI-Toolkit's own model
+downloads go to `ai-toolkit-models/` inside this cache. Two local runs that
+fetch the same AI-Toolkit model at the same time can collide in the trainer's
+partial-download directories, which a shared cache widens to every workspace
+using it; with the default `runner.local_slots: 1` runs do not overlap.
 
 Local Docker training always requests the GPU (`--gpus all`) and sees the
 workspace paths it uses under `/workspace` (only the selected ones for a
