@@ -120,8 +120,8 @@ author's responsibility.
 | --- | --- |
 | ✅ | All execution scopes claimed in Verified scope, output materialization, and executor cleanup are verified |
 | 🔥 | At least one listed execution contract passed a real optimizer step; other listed contracts keep their own evidence level |
-| 🧪 | Upstream support, Kura validation/compile projection, and the pinned-image entrypoint are verified; a real optimizer step is additional confidence, not the support boundary |
-| 🔧 | Adapter compilation is covered, but current pinned-image entrypoint evidence is incomplete or historical |
+| 🧪 | Untested: Kura validates and compiles it and the pinned image imports it, but no training run has gone through it; it may fail at its first step |
+| 🔧 | A training run passed on an earlier image or Kura version; it has not been run again on the current one |
 | 🧩 | Native configuration can be expressed; no real smoke claim |
 | 📋 | Upstream lists the family; Kura support is not established |
 | ⚠️ | Only the stated subset is covered |
