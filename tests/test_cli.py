@@ -571,53 +571,73 @@ class ImageCommandTests(unittest.TestCase):
 
             self.assertIn("AI_TOOLKIT_IMAGE=ostris/aitoolkit:custom", commands[0])
 
+    def _build_with(self, *, root: Path, config: dict | None, location, status=None, daemon_problem=None):
+        from types import SimpleNamespace
+
+        if config is not None:
+            (root / "workspace.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        previous = Path.cwd()
+        os.chdir(root)
+        try:
+            with (
+                patch("kura.cli.development_checkout", return_value=REPOSITORY),
+                patch("kura.cli.docker_daemon_problem", return_value=daemon_problem),
+                patch("kura.cli.docker_data_location", return_value=location),
+                patch("kura.cli.probe_storage", return_value=status or SimpleNamespace(effective_free_bytes=0, backing_id="?", confidence="exact")) as probe,
+                patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")) as docker_run,
+                patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
+            ):
+                code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None))
+        finally:
+            os.chdir(previous)
+        return code, stderr.getvalue(), probe, docker_run
+
     def test_image_build_checks_free_space_where_docker_keeps_its_data(self) -> None:
         from types import SimpleNamespace
 
-        # The floor is the one a local launch keeps; the build cache size decides nothing.
-        big_cache = [{"Type": "Build Cache", "size_bytes": 300 * 1024**3, "reclaimable_bytes": 0}]
-        for free_gib, expected in ((50, 1), (200, 0)):
-            with self.subTest(free_gib=free_gib), tempfile.TemporaryDirectory() as directory:
+        # The floor is the one a local launch keeps, through the same owner; build cache size decides nothing.
+        for free_gib, confidence, expected, message in (
+            (50, "exact", 1, "has only 50 GiB effective free on D:; an image build requires at least 100 GiB"),
+            (200, "exact", 0, ""),
+            (900, "unknown", 1, "unknown physical backing free space; an image build requires at least 100 GiB"),
+        ):
+            with self.subTest(free_gib=free_gib, confidence=confidence), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"min_free_gb": 100}}), encoding="utf-8")
-                previous = Path.cwd()
-                os.chdir(root)
-                try:
-                    with (
-                        patch("kura.cli.development_checkout", return_value=REPOSITORY),
-                        patch("kura.cli._docker_storage_summary", return_value={"root_dir": str(root), "usage": big_cache}),
-                        patch("kura.cli.probe_storage", return_value=SimpleNamespace(effective_free_bytes=free_gib * 1024**3, backing_id="D:")) as probe,
-                        patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")) as docker_run,
-                        patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
-                    ):
-                        code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None))
-                finally:
-                    os.chdir(previous)
-                self.assertEqual(code, expected, stderr.getvalue())
+                status = SimpleNamespace(effective_free_bytes=free_gib * 1024**3, backing_id="D:", confidence=confidence)
+                code, stderr, probe, docker_run = self._build_with(root=root, config={"docker": {"min_free_gb": 100}}, location=(root, ""), status=status)
+                self.assertEqual(code, expected, stderr)
                 self.assertEqual(probe.call_args.args[0], root)
                 if expected:
-                    self.assertIn("50 GiB effective free, below the 100 GiB docker.min_free_gb floor", stderr.getvalue())
+                    self.assertIn(message, stderr)
                     docker_run.assert_not_called()
 
-    def test_image_build_says_when_it_cannot_see_dockers_data(self) -> None:
-        # Docker Desktop keeps its data inside its own VM; the build goes on and says it was not checked.
+    def test_image_build_says_when_it_cannot_see_dockers_data_and_stops_without_a_daemon(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            previous = Path.cwd()
-            os.chdir(directory)
-            try:
-                with (
-                    patch("kura.cli.development_checkout", return_value=REPOSITORY),
-                    patch("kura.cli._docker_storage_summary", return_value={"root_dir": "/var/lib/docker-not-here"}),
-                    patch("kura.cli.probe_storage") as probe,
-                    patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
+            # Docker Desktop keeps its data inside its own VM; the build goes on and says it was not checked.
+            code, stderr, probe, _ = self._build_with(root=Path(directory), config=None, location=(None, "Docker Desktop keeps /var/lib/docker inside its own VM"))
+            self.assertEqual(code, 0)
+            probe.assert_not_called()
+            self.assertIn("Docker's data disk is not checked: Docker Desktop keeps", stderr)
+            code, stderr, _, docker_run = self._build_with(root=Path(directory), config=None, location=(None, ""), daemon_problem="the docker command was not found on PATH")
+            self.assertEqual(code, 1)
+            self.assertIn("cannot build image: the docker command was not found on PATH", stderr)
+            docker_run.assert_not_called()
+
+    def test_docker_data_is_measured_only_on_a_local_engine_this_host_can_see(self) -> None:
+        from kura.executors.docker import docker_data_location
+
+        with tempfile.TemporaryDirectory() as directory:
+            for info, host, expected in (
+                (f"{directory}\tUbuntu 24.04", "unix:///var/run/docker.sock", Path(directory)),
+                (f"{directory}\tDocker Desktop", "unix:///var/run/docker.sock", None),
+                (f"{directory}\tUbuntu 24.04", "ssh://builder", None),
+                ("/var/lib/docker-not-here\tUbuntu 24.04", "unix:///var/run/docker.sock", None),
+            ):
+                with self.subTest(info=info, host=host), patch(
+                    "kura.executors.docker.subprocess.run",
+                    side_effect=[subprocess.CompletedProcess([], 0, info + "\n", ""), subprocess.CompletedProcess([], 0, host + "\n", "")],
                 ):
-                    code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None))
-            finally:
-                os.chdir(previous)
-        self.assertEqual(code, 0)
-        probe.assert_not_called()
-        self.assertIn("its free space is not checked", stderr.getvalue())
+                    self.assertEqual(docker_data_location()[0], expected)
 
 
 class DoctorDockerTests(unittest.TestCase):
@@ -891,7 +911,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
             self.assertIn("warning", {issue["severity"] for issue in payload["issues"]})
             # Only the build cache cleanup can free is reported, as advice rather than a warning.
-            self.assertIn("12GiB of Docker build cache can be freed with `kura cleanup docker-cache --yes`", payload["advisories"])
+            self.assertIn("Docker reports 12GiB of build cache that no image uses; `kura cleanup docker-cache` shows what it frees", payload["advisories"])
             self.assertFalse(any("build cache" in item for item in payload["warnings"]))
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
             self.assertEqual(list(payload)[:4], ["diagnosis", "warnings", "advisories", "issues"])
@@ -6060,7 +6080,7 @@ class DockerLifecycleTests(unittest.TestCase):
             root = Path(directory)
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(500)), \
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, build_cache + "\n")):
-                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"build_cache_limit_gb": 30}})
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {})
         self.assertEqual(payload["docker_storage"], [{"Type": "Build Cache", "Size": "120GB"}])
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:

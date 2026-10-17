@@ -296,6 +296,32 @@ def docker_daemon_problem() -> str | None:
     return _redact_secret_text(info.stderr.strip() or info.stdout.strip() or f"`docker info` exited with {info.returncode}")
 
 
+def docker_data_location() -> tuple[Path | None, str]:
+    """Where the local Docker engine keeps its data, as a path this host can measure, or None and why.
+
+    Docker Desktop keeps it inside its own VM and a remote engine on another machine, so a
+    directory of the same name here would be another disk; ask only after the daemon answers."""
+    try:
+        info = subprocess.run(["docker", "info", "--format", "{{.DockerRootDir}}\t{{.OperatingSystem}}"], text=True, capture_output=True,
+                              check=False, timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir())
+        context = subprocess.run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], text=True, capture_output=True,
+                                 check=False, timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"`docker info` did not report it ({_redact_secret_text(str(exc))})"
+    root, _, system = info.stdout.strip().partition("\t")
+    # The active context's endpoint (the docker CLI fills the default context from DOCKER_HOST).
+    host = context.stdout.strip() if context.returncode == 0 else ""
+    if info.returncode or not root:
+        return None, "`docker info` did not report it"
+    if "docker desktop" in system.lower():
+        return None, f"Docker Desktop keeps {root} inside its own VM"
+    if host and not host.startswith(("unix://", "npipe://")):
+        return None, f"the Docker engine is at {host}, not on this host"
+    if not Path(root).is_dir():
+        return None, f"{root} is not visible from here"
+    return Path(root), ""
+
+
 def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str, Any]:
     """Reject only unsafe launches; retain advisory host signals for realization truth."""
     if problem := docker_daemon_problem():

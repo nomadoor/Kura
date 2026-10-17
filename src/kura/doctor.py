@@ -321,7 +321,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             issues.append(_disk_issue(
                 code="docker_build_cache_reclaimable",
                 severity="advisory",
-                message=f"{(item.get('reclaimable_bytes') or 0) // gib}GiB of Docker build cache can be freed with `kura cleanup docker-cache --yes`",
+                message=f"Docker reports {(item.get('reclaimable_bytes') or 0) // gib}GiB of build cache that no image uses; `kura cleanup docker-cache` shows what it frees",
                 size_bytes=item.get("size_bytes"),
                 reclaimable_bytes=item.get("reclaimable_bytes"),
                 threshold_bytes=10 * gib,

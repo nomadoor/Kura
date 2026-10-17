@@ -34,7 +34,7 @@ from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, kura_docker_volumes, stopped_kura_containers, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
-from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
+from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
 from kura.fsio import atomic_write_yaml as _dump_yaml
@@ -56,7 +56,7 @@ from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
-from kura.run_commands.plan import local_min_free_gib
+from kura.run_commands.plan import local_min_free_gib, storage_floor_problem
 from kura.storage import probe_storage
 from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_render_launch
@@ -1449,20 +1449,21 @@ def cmd_image_build(args: argparse.Namespace) -> int:
     except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    root_dir = _docker_storage_summary().get("root_dir")
-    if isinstance(root_dir, str) and root_dir and Path(root_dir).is_dir():
-        docker_storage = probe_storage(Path(root_dir), config)
-        if docker_storage.effective_free_bytes < floor_gib * 1024**3:
-            print(
-                f"cannot build image: Docker keeps its data on {docker_storage.backing_id} ({root_dir}), which has "
-                f"{docker_storage.effective_free_bytes // 1024**3} GiB effective free, below the {floor_gib} GiB "
-                "docker.min_free_gb floor; free space there first (`kura doctor disk` lists what can be freed)",
-                file=sys.stderr,
-            )
-            return 1
+    daemon_problem = docker_daemon_problem()
+    if daemon_problem:
+        print(f"cannot build image: {daemon_problem}", file=sys.stderr)
+        return 1
+    root_dir, unseen = docker_data_location()
+    if root_dir is None:
+        print(f"note: Docker's data disk is not checked: {unseen}", file=sys.stderr)
     else:
-        # Docker Desktop keeps its data inside its own VM, which this host cannot measure.
-        print(f"note: Docker keeps its data at {root_dir or 'an unknown place'}, which this host cannot see, so its free space is not checked", file=sys.stderr)
+        problem = storage_floor_problem(
+            probe_storage(root_dir, config), root_dir, floor_gib * 1024**3,
+            action="an image build", minimum=f"the docker.min_free_gb floor, where Docker keeps its data",
+        )
+        if problem:
+            print(f"cannot build image: {problem}; `kura doctor disk` lists what can be freed", file=sys.stderr)
+            return 1
     ref_arg, default_ref = BUILD_SOURCES[args.name]
     dockerfile = checkout / "docker" / args.name / "Dockerfile"
     command = ["docker", "build", "--tag", tag, "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(checkout)]
