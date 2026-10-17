@@ -1270,6 +1270,43 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(managed["remove_stopped"], "ask the user to run: docker container prune --filter label=io.kura.managed=true")
             self.assertEqual(payload["huggingface_cache"]["path"], str(root.resolve() / "cache" / "huggingface"))
             self.assertNotIn("docker.mounts", payload["huggingface_cache"].get("note", ""))
+            self.assertEqual(payload["local_images"], {name: "present" for name in PINNED_IMAGES})
+
+    def test_doctor_docker_reports_every_pinned_image_and_probes_the_gpu_with_one_present(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            runs: list[list[str]] = []
+
+            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["docker", "image", "inspect"]:
+                    found = command[3] in (PINNED_IMAGES["musubi-tuner"], PINNED_IMAGES["sd-scripts"])
+                    return subprocess.CompletedProcess(command, 0 if found else 1, "[]\n" if found else "", "" if found else "No such image")
+                if command[:2] == ["docker", "run"]:
+                    runs.append(command)
+                if command[:3] == ["docker", "system", "df"] or command[:2] == ["docker", "ps"] or command[:3] == ["docker", "volume", "ls"]:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(
+                payload["local_images"],
+                {"ai-toolkit": "will be pulled", "musubi-tuner": "present", "sd-scripts": "present", "comfyui": "will be pulled"},
+            )
+            self.assertTrue(payload["gpu_available"])
+            # One probe, on the first present image, through python whatever the image's entrypoint is;
+            # only the AI-Toolkit image carries /opt/kura-runtime.json, and it is not here.
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0][:7], ["docker", "run", "--rm", "--gpus", "all", "--entrypoint", "python"])
+            self.assertEqual(runs[0][7], PINNED_IMAGES["musubi-tuner"])
+            self.assertEqual(payload["runtime"], {})
 
     def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1291,7 +1328,7 @@ class DoctorDockerTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
-            self.assertEqual(payload["local_image"], "will be pulled")
+            self.assertEqual(payload["local_images"], {name: "will be pulled" for name in PINNED_IMAGES})
             self.assertIsNone(payload["gpu_available"])
             self.assertIn("docker pull nomadoor/kura-ai-toolkit@sha256:", payload["diagnosis"])
             self.assertEqual(list(payload)[0], "diagnosis")

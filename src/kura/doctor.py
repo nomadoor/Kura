@@ -415,13 +415,13 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
         config = _workspace_config()
-        image = _image_reference("ai-toolkit")
+        images = {name: effective_image(config, name)["reference"] for name in image_names()}
     except (OSError, ValueError, YAMLError) as exc:
         print(f"docker: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     docker_path = shutil.which("docker")
     docker_exe_path = shutil.which("docker.exe")
-    checks: dict[str, Any] = {"docker_command": bool(docker_path), "daemon_reachable": False, "local_image": False, "gpu_available": False}
+    checks: dict[str, Any] = {"docker_command": bool(docker_path), "daemon_reachable": False, "local_images": False, "gpu_available": False}
     runtime: dict[str, Any] = {}
     docker_storage: dict[str, Any] = {}
     diagnostics: dict[str, Any] = {"docker_path": docker_path, "docker_exe_path": docker_exe_path, "wsl": _is_wsl()}
@@ -449,25 +449,30 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             if usage.returncode == 0:
                 docker_storage["usage"] = [json.loads(line) for line in usage.stdout.splitlines() if line.strip()]
             docker_storage["kura_managed"] = _docker_managed_resources()
-            present = _docker_run(["docker", "image", "inspect", image], capture=True).returncode == 0
+            present = [name for name, image in images.items() if _docker_run(["docker", "image", "inspect", image], capture=True).returncode == 0]
             # A pinned image that is not here yet is pulled by the first run that needs it.
-            checks["local_image"] = "present" if present else "will be pulled"
+            checks["local_images"] = {name: "present" if name in present else "will be pulled" for name in images}
             if not present:
                 checks["gpu_available"] = None
-                diagnostics["image"] = image
-                diagnosis = f"Docker is ready. The training image is not pulled yet; the first local run pulls it, or run: docker pull {image}"
+                diagnostics["images"] = images
+                diagnosis = f"Docker is ready. No Kura image is pulled yet, so the GPU was not probed; the first local run pulls the image it needs, or run, for example: docker pull {images['ai-toolkit']}"
             if present:
-                gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", image, "python", "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True)
+                # Every Kura image has python with torch; the entrypoint differs, so name python.
+                probe_image = images[present[0]]
+                diagnostics["gpu_probe_image"] = probe_image
+                gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", "--entrypoint", "python", probe_image, "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True)
                 checks["gpu_available"] = gpu_probe.returncode == 0
                 if gpu_probe.returncode:
                     # What the probe said is the only evidence of why; a later probe may pass.
                     diagnostics["gpu_probe_error"] = _redact_secret_text((gpu_probe.stderr or gpu_probe.stdout).strip())[-2000:]
-                runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", image, "/opt/kura-runtime.json"], capture=True)
-                if runtime_result.returncode == 0:
-                    try:
-                        runtime = json.loads(runtime_result.stdout)
-                    except json.JSONDecodeError:
-                        runtime = {"runtime_metadata": "invalid"}
+                if "ai-toolkit" in present:
+                    # Only the AI-Toolkit image records its runtime here.
+                    runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", images["ai-toolkit"], "/opt/kura-runtime.json"], capture=True)
+                    if runtime_result.returncode == 0:
+                        try:
+                            runtime = json.loads(runtime_result.stdout)
+                        except json.JSONDecodeError:
+                            runtime = {"runtime_metadata": "invalid"}
                 if not checks["gpu_available"]:
                     diagnosis = "The local image cannot access a GPU. In WSL, confirm Docker Desktop WSL integration and NVIDIA Container Toolkit support."
     cache_path = local_hf_cache(workspace_root, config)
