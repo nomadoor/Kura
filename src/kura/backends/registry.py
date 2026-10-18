@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_OPTIMIZER_DECIDED, AI_TOOLKIT_PINNED_MODEL_ARCHS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS, AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_OPTIMIZER_DECIDED, AI_TOOLKIT_PINNED_MODEL_ARCHS, AI_TOOLKIT_PROFILE_REQUIREMENTS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, musubi_disk_cache, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
@@ -164,6 +164,19 @@ def _ai_toolkit_arch_values(arch: str) -> tuple[str, ...]:
     return (arch, *(name for name in ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS) if trained_arch(name) == arch))
 
 
+def _ai_toolkit_required_field_conditions() -> tuple[FieldCondition, ...]:
+    """A field an architecture's requirements name applies to that architecture only: every
+    model_arch value that trains an arch in AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS, or in a profile
+    of AI_TOOLKIT_PROFILE_REQUIREMENTS, that names the field."""
+    archs: dict[str, list[str]] = {}
+    requirements = [*AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS.items(), *((arch, fields) for (arch, _profile), fields in AI_TOOLKIT_PROFILE_REQUIREMENTS.items())]
+    for arch, fields in requirements:
+        for field in fields:
+            if arch not in archs.setdefault(field, []):
+                archs[field].append(arch)
+    return tuple(_when(field, model_arch=tuple(value for arch in names for value in _ai_toolkit_arch_values(arch))) for field, names in archs.items())
+
+
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
         "batch_size", "dataset_config", "dataset_options", "flatten_groups", "gradient_accumulation_steps", "gradient_checkpointing",
@@ -171,11 +184,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         "network_alpha", "network_dim", "optimizer_type", "quantize", "quantize_te", "resolution",
         "save_every_n_steps", "save_last_n_steps",
     }),
-    conditions=(
-        _when("bypass_guidance_embedding", model_arch=_ai_toolkit_arch_values("flex2")),
-        _when("extras_name_or_path", model_arch=_ai_toolkit_arch_values("zimage_l2p")),
-        _when("model_edit", model_arch=(*_ai_toolkit_arch_values("krea2"), *_ai_toolkit_arch_values("moss_image"))),
-    ),
+    conditions=_ai_toolkit_required_field_conditions(),
     escape_hatches=frozenset({"command", "native_config"}),
     boolean_fields=frozenset({
         "bypass_guidance_embedding", "flatten_groups", "gradient_checkpointing", "low_vram", "model_edit", "quantize", "quantize_te",
