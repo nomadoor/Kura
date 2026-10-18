@@ -18,7 +18,7 @@ from kura.run_commands.runpod_ssh import DOWNLOAD_NEEDS_PERSON
 from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import reconcile_docker
 from kura.executors import docker as docker_executor
-from kura.cli import _run_cleanup_candidates
+from kura.reclaim import reclaim_inventory
 from kura.run_commands.runpod_ssh import cmd_run_download
 from kura.run_commands.experiment import format_run_completion
 from tests.platform_support import POSIX_PATHS, posix_only
@@ -176,11 +176,9 @@ class LocalOutputPublicationTests(unittest.TestCase):
             self.assertEqual(blocked["dataset_input_postflight"]["view_cleanup"], "deferred")
 
             def remnants() -> list[str]:
-                return [
-                    item["id"]
-                    for item in _run_cleanup_candidates(workspace, keep_last=30, delete_final_artifacts=False)
-                    if item["classification"] == "safe-run-dataset-view-remnant"
-                ]
+                with patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": False}):
+                    items = reclaim_inventory(workspace, {})["items"]
+                return [item["id"] for item in items if item["kind"] == "dataset-view"]
 
             self.assertEqual(remnants(), [])
 

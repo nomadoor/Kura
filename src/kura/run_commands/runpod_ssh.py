@@ -42,7 +42,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
-from kura.run_commands.plan import _configured_download_min_free_bytes
+from kura.run_commands.plan import local_reserve_gib
 from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
@@ -87,6 +87,19 @@ def _link_or_copy_snapshot_file(
             config=config,
         )
         shutil.copy2(source, target)
+
+
+def _local_reserve_bytes(run_dir: Path, config: dict[str, Any]) -> int:
+    """The reserve a RunPod download or pull keeps on the local disk: the one a local run keeps
+    (`local_reserve_gib`), read from the run's frozen manifest; docs/adr/reclaimable-data.md retired
+    the separate `runpod.download_min_free_gb`."""
+    try:
+        run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+    except (OSError, ValueError, YAMLError):
+        run = {}
+    docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    reserve_gib, _ = local_reserve_gib(run if isinstance(run, dict) else {}, docker)
+    return int(reserve_gib * 1024**3)
 
 
 def _validated_snapshot_manifest(items: Any) -> list[dict[str, Any]]:
@@ -653,7 +666,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         if not shutil.which("runpodctl"):
             raise ValueError("runpodctl is not installed locally; install it before downloading")
         config = _workspace_config()
-        min_download_free = _configured_download_min_free_bytes(config)
+        reserve = _local_reserve_bytes(run_dir, config)
         details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
         _start_ssh_master(details)
         _mark_runpod_outputs_collecting(details, run_id)
@@ -681,7 +694,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             "transferred_files": len(pending),
             "transferred_bytes": pending_size,
         }
-        required_free_bytes = max(min_download_free, pending_size * 2 + 5 * 1024**3)
+        required_free_bytes = reserve + pending_size * 2
         ensure_free_bytes(
             destination,
             required_free_bytes,
@@ -1007,7 +1020,8 @@ def _pull_remote_training_state_items(
             published.append(existing)
             continue
         total_size = sum(entry.get("size") for entry in files if isinstance(entry, dict) and isinstance(entry.get("size"), int))
-        ensure_free_bytes(pending_root, total_size + 1024**3, context="RunPod training-state pull", config=_workspace_config())
+        config = _workspace_config()
+        ensure_free_bytes(pending_root, _local_reserve_bytes(run_dir, config) + total_size, context="RunPod training-state pull", config=config)
         partial = pending_root / f".{name}.partial"
         if partial.exists():
             shutil.rmtree(partial)
@@ -1067,7 +1081,7 @@ def _pull_remote_output_items(
     if not items:
         return []
     config = _workspace_config()
-    min_download_free = _configured_download_min_free_bytes(config)
+    reserve = _local_reserve_bytes(run_dir, config)
     destination = run_dir / "outputs"
     destination.mkdir(parents=True, exist_ok=True)
     try:
@@ -1097,7 +1111,7 @@ def _pull_remote_output_items(
         pending.append(item)
     pending_size = sum(item.get("size") for item in pending if isinstance(item.get("size"), int))
     if pending:
-        ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), pending_size + 5 * 1024**3), context="RunPod output pull", config=config)
+        ensure_free_bytes(destination, reserve + pending_size, context="RunPod output pull", config=config)
     for item in pending:
         name = item.get("name")
         remote_path = item.get("path")

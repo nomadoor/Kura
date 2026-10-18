@@ -105,7 +105,6 @@ _RUNPOD_FIELDS: dict[str, Any] = {
     "data_center_priority": _value("string", choices=("availability", "custom")),
     "interruptible": _BOOLEAN,
     "support_public_ip": _BOOLEAN,
-    "download_min_free_gb": _INTEGER,
 }
 
 WORKSPACE_SCHEMA_VERSION = 2
@@ -132,7 +131,7 @@ WORKSPACE_SCHEMA = _mapping({
         "runpod": _mapping({
             name: schema
             for name, schema in _RUNPOD_FIELDS.items()
-            if name not in {"storage_mode", "object_store", "download_min_free_gb"}
+            if name not in {"storage_mode", "object_store"}
         }),
     }),
     "runpod": _mapping(_RUNPOD_FIELDS),
@@ -161,6 +160,7 @@ WORKSPACE_OBSOLETE_KEYS = {
     "runpod.template_id": "Kura starts every Pod from its own start script so the maximum lease is armed at start",
     "runpod.cloud_type": _CLOUD_TYPES,
     "comfyui.runpod.cloud_type": _CLOUD_TYPES,
+    "runpod.download_min_free_gb": "RunPod downloads and pulls keep the local reserve, docker.min_free_gb (a run raises its own with safety.max_run_disk_gb)",
     "docker.build_cache_limit_gb": "image builds check the free space where Docker keeps its data against docker.min_free_gb, and `kura doctor disk` reports build cache that can be freed",
 }
 

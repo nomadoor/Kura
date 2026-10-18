@@ -33,7 +33,7 @@ from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SU
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import _musubi_model_lock, musubi_model_download_specs, requirements_musubi
 from kura.backends.registry import validate_backend_config
-from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_launch, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_status
+from kura.cli import build_parser, _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_launch, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_status
 from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
@@ -519,7 +519,7 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="musubi-tuner", ref=None)), 0)
             finally:
                 os.chdir(previous)
@@ -541,7 +541,7 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(nested)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None)), 0)
             finally:
                 os.chdir(previous)
@@ -571,7 +571,7 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref="ostris/aitoolkit:custom")), 0)
             finally:
                 os.chdir(previous)
@@ -652,39 +652,13 @@ class DoctorDockerTests(unittest.TestCase):
     def test_doctor_output_leads_with_its_conclusion_and_keeps_every_key(self) -> None:
         from kura.doctor import conclusion_first
 
-        payload = {"workspace_root": "/w", "sizes": {"a": 1}, "issues": [{"code": "x"}], "warnings": ["w"], "advisories": [], "checks": {"ok": True}, "configuration_error": None, "diagnosis": "done"}
+        payload = {"workspace_root": "/w", "sizes": {"a": 1}, "issues": [{"code": "x"}], "warnings": ["w"], "reclaimable": {}, "checks": {"ok": True}, "configuration_error": None, "diagnosis": "done"}
         ordered = conclusion_first(payload)
-        self.assertEqual(list(ordered), ["diagnosis", "checks", "configuration_error", "warnings", "advisories", "issues", "workspace_root", "sizes"])
+        self.assertEqual(list(ordered), ["diagnosis", "checks", "configuration_error", "warnings", "reclaimable", "issues", "workspace_root", "sizes"])
         self.assertEqual(ordered, payload)
         self.assertEqual(list(conclusion_first({"secrets": {}, "user_secrets_file": "f"})), ["secrets", "user_secrets_file"])
 
-    def test_cleanup_all_is_dry_run_inventory(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "cache" / "huggingface").mkdir(parents=True)
-            (root / "cache" / "models").mkdir(parents=True, exist_ok=True)
-            (root / "runs" / "example").mkdir(parents=True)
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with (
-                    patch("kura.cli._path_size_bytes", return_value=123),
-                    patch("kura.cli._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
-                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
-                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                ):
-                    code = cmd_cleanup(argparse.Namespace(target="all", keep_last=30, delete_final_artifacts=False, yes=False))
-            finally:
-                os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 0)
-            self.assertTrue(payload["dry_run"])
-            self.assertEqual(payload["workspace_root"], str(root))
-            self.assertIn("cache/huggingface", {item.get("target") for item in payload["actions"]})
-            self.assertIn("docker system", {item.get("target") for item in payload["actions"]})
-
-    def test_cleanup_cache_offers_the_legacy_ai_toolkit_models_directory(self) -> None:
+    def test_cleanup_lists_the_legacy_ai_toolkit_models_directory_as_a_download(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
@@ -694,16 +668,16 @@ class DoctorDockerTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}):
-                    for yes in (False, True):
-                        with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                            self.assertEqual(cmd_cleanup(argparse.Namespace(target="cache", keep_last=30, delete_final_artifacts=False, yes=yes)), 0)
-                        item = next(action for action in json.loads(stdout.getvalue())["actions"] if action.get("target") == "cache/ai-toolkit")
-                        self.assertEqual(item["classification"], "legacy-ai-toolkit-models")
-                        self.assertIn("Legacy", item["note"])
-                        self.assertTrue(item["exists"])
-                        if not yes:
-                            self.assertTrue((legacy / "old.safetensors").is_file())
+                with patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": False}):
+                    with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                        self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "plan", "--json"])), 0)
+                    item = next(item for item in json.loads(stdout.getvalue())["items"] if item["id"] == "cache/ai-toolkit")
+                    self.assertEqual((item["class"], item["kind"]), ("download", "legacy-ai-toolkit-models"))
+                    with patch("sys.stdout", new_callable=__import__("io").StringIO):
+                        self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "--yes"])), 0)
+                    self.assertTrue((legacy / "old.safetensors").is_file())
+                    with patch("sys.stdout", new_callable=__import__("io").StringIO):
+                        self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "--models", "cache/ai-toolkit", "--yes"])), 0)
             finally:
                 os.chdir(previous)
             self.assertFalse((root / "cache" / "ai-toolkit").exists())
@@ -725,33 +699,7 @@ class DoctorDockerTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-    def test_cleanup_runs_keeps_outputs_without_explicit_final_delete(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run = root / "runs" / "old"
-            (run / "cache").mkdir(parents=True)
-            (run / "outputs").mkdir()
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
-            (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with (
-                    patch("kura.cli._path_size_bytes", return_value=1),
-                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
-                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                ):
-                    code = cmd_cleanup(argparse.Namespace(target="runs", keep_last=0, delete_final_artifacts=False, yes=True))
-            finally:
-                os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 0)
-            self.assertFalse((run / "cache").exists())
-            self.assertTrue((run / "outputs").exists())
-            self.assertFalse(payload["dry_run"])
-
-    def test_cleanup_runs_offers_only_disposable_dataset_view_remnants(self) -> None:
+    def test_cleanup_offers_a_dataset_view_of_an_unfinished_run_only_after_its_container_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
@@ -766,24 +714,18 @@ class DoctorDockerTests(unittest.TestCase):
                 "last_observation": "realizations/launch.observed.json",
             }
             observations = {"gone": missing, "deferred-then-gone": missing, "unclear": unclear}
+            # (status, offered as a dataset-view remnant, offered as a finished run's scratch)
             runs = {
-                "gone": (observed, True),
+                "gone": (observed, True, False),
                 "deferred-then-gone": ({
                     **observed, "state": "recovery_required", "recovery_required": True,
                     "dataset_input_postflight": {"view_cleanup": "deferred"},
-                }, True),
-                "unclear": (observed, False),
-                "failed-cleanup": ({
-                    "state": "completed", "ended": "2026-01-03T00:00:00+00:00",
-                    "dataset_input_postflight": {"view_cleanup": "failed"},
-                }, True),
-                "deferred": ({
-                    "state": "completed", "ended": "2026-01-02T00:00:00+00:00",
-                    "dataset_input_postflight": {"view_cleanup": "deferred"},
-                }, False),
-                "running": ({"state": "running", "started": "2026-01-01T00:00:00+00:00"}, False),
+                }, True, False),
+                "unclear": (observed, False, False),
+                "finished": ({"state": "completed", "ended": "2026-01-03T00:00:00+00:00"}, False, True),
+                "running": ({"state": "running", "started": "2026-01-01T00:00:00+00:00"}, False, False),
             }
-            for run_id, (status, _) in runs.items():
+            for run_id, (status, _, _) in runs.items():
                 view = root / "runs" / run_id / "cache" / "dataset-view" / "ai-toolkit" / "tiny"
                 view.mkdir(parents=True)
                 (view / "a.png").symlink_to(dataset_file)
@@ -796,51 +738,64 @@ class DoctorDockerTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with (
-                    patch("kura.cli._path_size_bytes", return_value=1),
-                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": False}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                 ):
-                    code = cmd_cleanup(argparse.Namespace(target="runs", keep_last=30, delete_final_artifacts=False, yes=False))
-                payload = json.loads(stdout.getvalue())
-                run_actions = next(item for item in payload["actions"] if item.get("target") == "runs/*")["run_actions"]
-                offered = {item["id"] for item in run_actions if item["classification"] == "safe-run-dataset-view-remnant"}
+                    code = cmd_cleanup(build_parser().parse_args(["cleanup", "plan", "--json"]))
+                items = json.loads(stdout.getvalue())["items"]
                 self.assertEqual(code, 0)
-                self.assertEqual(offered, {run_id for run_id, (_, expected) in runs.items() if expected})
+                self.assertEqual({item["id"] for item in items if item["kind"] == "dataset-view"}, {run_id for run_id, (_, view, _) in runs.items() if view})
+                self.assertEqual({item["id"] for item in items if item["kind"] == "run-scratch"}, {run_id for run_id, (_, _, scratch) in runs.items() if scratch})
                 for run_id in runs:
                     self.assertTrue((root / "runs" / run_id / "cache" / "dataset-view").is_dir())
-
                 with (
-                    patch("kura.cli._path_size_bytes", return_value=1),
-                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": False}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO),
                 ):
-                    self.assertEqual(cmd_cleanup(argparse.Namespace(target="runs", keep_last=30, delete_final_artifacts=False, yes=True)), 0)
+                    self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "--yes"])), 0)
             finally:
                 os.chdir(previous)
             self.assertFalse((root / "runs" / "gone" / "cache" / "dataset-view").exists())
-            self.assertTrue((root / "runs" / "deferred" / "cache" / "dataset-view").is_dir())
+            self.assertFalse((root / "runs" / "finished" / "cache").exists())
+            self.assertTrue((root / "runs" / "unclear" / "cache" / "dataset-view").is_dir())
+            self.assertTrue((root / "runs" / "running" / "cache" / "dataset-view").is_dir())
             self.assertTrue(dataset_file.is_file())
 
-    def test_cleanup_runs_requires_explicit_final_delete_for_whole_run(self) -> None:
+    def test_cleanup_frees_stopped_kura_containers_and_reports_a_failed_delete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            run = root / "runs" / "old"
-            (run / "outputs").mkdir(parents=True)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
-            (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 1 if command[:2] == ["docker", "rm"] else 0, "", "permission denied")
+
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
-                    patch("kura.cli._path_size_bytes", return_value=1),
-                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
-                    patch("sys.stdout", new_callable=__import__("io").StringIO),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
+                    patch("kura.doctor.kura_docker_containers", return_value=[
+                        {"ID": "abc", "Names": "kura-old", "State": "exited"}, {"ID": "def", "Names": "kura-live", "State": "running"},
+                    ]),
+                    patch("kura.doctor.kura_docker_volumes", return_value=[]),
+                    patch("kura.doctor._docker_json_lines", return_value=[]),
+                    patch("kura.cli.subprocess.run", side_effect=fake_run),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
                 ):
-                    self.assertEqual(cmd_cleanup(argparse.Namespace(target="runs", keep_last=0, delete_final_artifacts=True, yes=True)), 0)
+                    self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup"])), 0)
+                    preview = json.loads(stdout.getvalue())
+                    self.assertEqual(calls, [])
+                    stdout.truncate(0)
+                    stdout.seek(0)
+                    self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "--yes"])), 1)
             finally:
                 os.chdir(previous)
-            self.assertFalse(run.exists())
+            self.assertEqual([item["kind"] for item in preview["actions"]], ["docker-containers"])
+            self.assertIn(["docker", "rm", "abc"], calls)
+            self.assertIn("cannot cleanup docker-containers: permission denied", stderr.getvalue())
 
     @posix_only(POSIX_PATHS)
     def test_fix_permissions_dry_run_reports_root_owned_targets(self) -> None:
@@ -942,11 +897,12 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["workspace_root"], str(root))
             self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
             self.assertIn("warning", {issue["severity"] for issue in payload["issues"]})
-            # Only the build cache cleanup can free is reported, as advice rather than a warning.
-            self.assertIn("Docker reports 12GiB of build cache that no image uses; `kura cleanup docker-cache` shows what it frees", payload["advisories"])
+            # Build cache that cleanup can free is part of the free class's total, not a warning.
+            self.assertEqual(payload["reclaimable"]["free"]["size_bytes"], 12 * 1024**3)
+            self.assertEqual(payload["reclaimable"]["list"], "kura cleanup plan")
             self.assertFalse(any("build cache" in item for item in payload["warnings"]))
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
-            self.assertEqual(list(payload)[:4], ["diagnosis", "warnings", "advisories", "issues"])
+            self.assertEqual(list(payload)[:4], ["diagnosis", "warnings", "reclaimable", "issues"])
             # Concise: one storage entry per backing store, docker usage by type, no per-path filesystem copies.
             self.assertNotIn("filesystems", payload)
             backing = next(item for item in payload["storage"].values() if "workspace" in item["paths"])
@@ -956,83 +912,6 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["docker_storage"]["usage"], {"Build Cache": {"size_bytes": 31 * 1024**3, "reclaimable_bytes": 12 * 1024**3}})
             self.assertEqual(payload["sizes"]["runs"], {"path": str(root / "runs"), "size_bytes": 20})
             self.assertEqual(payload["root_owned"], {"count": 2, "samples": ["cache/root-owned"], "scan_stopped_at_limit": False})
-
-    def test_doctor_disk_advises_on_build_cache_only_above_10_gib(self) -> None:
-        gib = 1024**3
-        for reclaimable, advised in ((10 * gib, False), (10 * gib + 1, True)):
-            with self.subTest(reclaimable=reclaimable), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory).resolve()
-                (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {}}), encoding="utf-8")
-                (root / "cache" / "huggingface").mkdir(parents=True)
-                (root / "runs").mkdir()
-                previous = Path.cwd()
-                os.chdir(root)
-                try:
-                    with (
-                        patch("kura.doctor._path_size_bytes", return_value=20),
-                        patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [
-                            {"Type": "Build Cache", "size_bytes": 31 * gib, "reclaimable_bytes": reclaimable}], "kura_managed": {}}),
-                        patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
-                        patch("sys.stdout", new_callable=io.StringIO) as stdout,
-                    ):
-                        cmd_doctor_disk(argparse.Namespace())
-                finally:
-                    os.chdir(previous)
-                codes = [issue["code"] for issue in json.loads(stdout.getvalue())["issues"]]
-                self.assertEqual("docker_build_cache_reclaimable" in codes, advised)
-
-    def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
-            (root / "cache").mkdir()
-            (root / "runs").mkdir()
-            sizes = {
-                str(root / "cache"): 31 * 1024**3,
-                str(root / "runs"): 1 * 1024**3,
-            }
-
-            def fake_size(path: Path) -> int:
-                return sizes.get(str(path), 0)
-
-
-            def fake_probe(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
-                return {
-                    name: StorageStatus(
-                        path=str(path),
-                        probe=str(path),
-                        backing_id="test-disk",
-                        backing_kind="filesystem",
-                        linux_free_bytes=400 * 1024**3,
-                        linux_total_bytes=500 * 1024**3,
-                        host_free_bytes=None,
-                        effective_free_bytes=400 * 1024**3,
-                        confidence="exact",
-                        mount={"available": True},
-                    )
-                    for name, path in paths.items()
-                }
-
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with (
-                    patch("kura.doctor._path_size_bytes", side_effect=fake_size),
-                    patch("kura.doctor.probe_storages", side_effect=fake_probe),
-                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
-                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
-                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                ):
-                    code = cmd_doctor_disk(argparse.Namespace())
-            finally:
-                os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 0)
-            self.assertEqual(payload["warnings"], [])
-            self.assertIn("workspace cache+runs exceed 30GiB", payload["advisories"])
-            issue = next(item for item in payload["issues"] if item["code"] == "workspace_cache_runs_large")
-            self.assertEqual(issue["severity"], "advisory")
-            self.assertEqual(issue["size_bytes"], 32 * 1024**3)
 
     @posix_only(POSIX_PATHS)
     def test_doctor_disk_warns_about_container_private_symlinks(self) -> None:
@@ -1178,7 +1057,7 @@ class DoctorDockerTests(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
             self.assertEqual(payload["storage"]["F:"]["effective_free_bytes"], 15 * 1024**3)
-            self.assertIn(f"{root} has only 15 GiB effective free on F:; a local Docker launch requires at least 20 GiB (docker.min_free_gb)", payload["warnings"])
+            self.assertIn(f"{root} has only 15 GiB effective free on F:; a local Docker launch requires at least 20 GiB (docker.min_free_gb). `kura cleanup plan` lists what can be freed and what each item costs to recover", payload["warnings"])
 
     def test_doctor_disk_and_local_launch_share_one_free_space_floor(self) -> None:
         for min_free_gb, short in ((40, False), (60, True)):
@@ -1199,7 +1078,7 @@ class DoctorDockerTests(unittest.TestCase):
                         patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     ):
                         code = cmd_doctor_disk(argparse.Namespace())
-                        launch = contextlib.nullcontext() if not short else self.assertRaisesRegex(ValueError, f"requires at least {min_free_gb} GiB")
+                        launch = contextlib.nullcontext() if not short else self.assertRaisesRegex(ValueError, f"requires at least {min_free_gb} GiB.*`kura cleanup plan` lists what can be freed and what each item costs to recover$")
                         with launch:
                             _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": min_free_gb}})
                 finally:
@@ -1231,9 +1110,12 @@ class DoctorDockerTests(unittest.TestCase):
                     cmd_doctor_disk(argparse.Namespace())
                 with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                     launch = _local_launch_disk_preflight(root, {"type": "train", "safety": {"allow_storage_risk": True}}, config)
-                with patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}), \
+                with patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": False}), \
                         patch("sys.stdout", new_callable=__import__("io").StringIO) as cleanup_out:
-                    code = cmd_cleanup(argparse.Namespace(target="cache", keep_last=30, delete_final_artifacts=False, yes=True))
+                    code = cmd_cleanup(build_parser().parse_args(["cleanup", "plan", "--json"]))
+                with patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": False}), \
+                        patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "--yes"])), 0)
             finally:
                 os.chdir(previous)
             doctor = json.loads(doctor_out.getvalue())
@@ -1243,9 +1125,8 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(launch["paths"]["hf_cache"]["path"], str(outside))
             self.assertEqual([name for name, item in launch["paths"].items() if item["path"] == str(outside)], ["hf_cache"])
             self.assertEqual(code, 0)
-            # A cache outside the workspace may be shared: cleanup reports it and leaves it.
-            item = next(action for action in cleanup["actions"] if action.get("path") == str(outside))
-            self.assertEqual(item["classification"], "outside-workspace")
+            # A cache outside the workspace may be shared: cleanup lists it and removes nothing in it unasked.
+            self.assertEqual((cleanup["hf_cache"], cleanup["hf_cache_inside_workspace"]), (str(outside), False))
             self.assertTrue((outside / "hub" / "weights.safetensors").is_file())
 
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
@@ -1287,9 +1168,8 @@ class DoctorDockerTests(unittest.TestCase):
             managed = payload["docker_storage"]["kura_managed"]
             # Counts, and a command that removes only Kura's stopped containers.
             self.assertEqual((managed["containers"], managed["stopped_containers"], managed["volumes"]), (1, 1, 1))
-            # Not `kura run prune`: with --yes it also removes old runs.
-            # The workspace AGENTS.md keeps state-changing Docker commands with the user.
-            self.assertEqual(managed["remove_stopped"], "ask the user to run: docker container prune --filter label=io.kura.managed=true")
+            # The free class removes them through Kura after the user's yes; no agent runs a Docker command itself.
+            self.assertEqual(managed["remove_stopped"], "`kura cleanup plan` lists them as free; `kura cleanup --yes` removes them after the user's yes")
             self.assertEqual(payload["docker_storage"]["root_dir"], str(Path("/var/lib/docker")))
             self.assertEqual(payload["huggingface_cache"]["path"], str(root.resolve() / "cache" / "huggingface"))
             self.assertNotIn("docker.mounts", payload["huggingface_cache"].get("note", ""))
@@ -7040,7 +6920,7 @@ class RunDiscardTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertTrue(run_dir.exists())
             self.assertIn("run has execution history (state=running, 1 realizations", stderr.getvalue())
-            self.assertIn("use kura run prune for old runs", stderr.getvalue())
+            self.assertIn("`kura run prune running` deletes a finished run with its outputs", stderr.getvalue())
 
     def test_run_discard_rejects_outputs(self) -> None:
         previous = Path.cwd()
@@ -7086,156 +6966,23 @@ class RunPruneTests(unittest.TestCase):
     def _make_run(self, root: Path, run_id: str, *, state: str, created: str) -> Path:
         run_dir = root / "runs" / run_id
         (run_dir / "outputs").mkdir(parents=True)
-        (run_dir / "downloads").mkdir()
         (run_dir / "outputs" / "artifact.bin").write_text("artifact", encoding="utf-8")
-        (run_dir / "downloads" / "remote.bin").write_text("download", encoding="utf-8")
         (run_dir / "run.yaml").write_text(f"id: {run_id}\ncreated: {created}\n", encoding="utf-8")
         (run_dir / "status.json").write_text(json.dumps({"state": state, "ended": created}), encoding="utf-8")
         return run_dir
-
-    def test_run_prune_defaults_to_dry_run(self) -> None:
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "runs").mkdir()
-            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
-            os.chdir(root)
-            try:
-                status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, yes=False))
-                self.assertTrue(old.exists())
-            finally:
-                os.chdir(previous)
-        self.assertEqual(status, 0)
-
-    def test_run_prune_outputs_only_with_yes_preserves_run(self) -> None:
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "runs").mkdir()
-            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
-            os.chdir(root)
-            try:
-                status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=True, yes=True))
-            finally:
-                os.chdir(previous)
-            self.assertEqual(status, 0)
-            self.assertTrue(old.exists())
-            self.assertTrue((old / "run.yaml").exists())
-            self.assertFalse((old / "outputs").exists())
-            self.assertFalse((old / "downloads").exists())
 
     def test_run_prune_requires_workspace_before_deleting(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
             os.chdir(root)
             try:
                 with self.assertRaisesRegex(ValueError, "workspace.yaml was not found"):
-                    cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, yes=True))
+                    cmd_run_prune(argparse.Namespace(run_ids=["old"], yes=True))
             finally:
                 os.chdir(previous)
-            self.assertTrue(old.exists())
             self.assertTrue((old / "run.yaml").exists())
-
-    def test_run_prune_can_preview_kura_managed_docker_containers(self) -> None:
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "runs").mkdir()
-            os.chdir(root)
-            try:
-                with patch(
-                    "kura.cli.subprocess.run",
-                    return_value=subprocess.CompletedProcess(
-                        [],
-                        0,
-                        '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n'
-                        '{"ID":"def","Names":"kura-live","State":"running","Status":"Up 1 minute"}\n',
-                        "",
-                    ),
-                ), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=True, docker_volumes=False, yes=False))
-            finally:
-                os.chdir(previous)
-        self.assertEqual(status, 0)
-        payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["docker_actions"]["containers"], [{"id": "abc", "name": "kura-old", "state": "exited", "status": "Exited (0)"}])
-
-    def test_run_prune_deletes_kura_managed_docker_containers_only_with_yes(self) -> None:
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "runs").mkdir()
-            calls: list[list[str]] = []
-
-            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-                calls.append(command)
-                if command[:2] == ["docker", "ps"]:
-                    return subprocess.CompletedProcess(command, 0, '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n', "")
-                if command[:2] == ["docker", "rm"]:
-                    return subprocess.CompletedProcess(command, 0, "abc\n", "")
-                return subprocess.CompletedProcess(command, 1, "", "unexpected")
-
-            os.chdir(root)
-            try:
-                with patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO):
-                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=True, docker_volumes=False, yes=True))
-            finally:
-                os.chdir(previous)
-        self.assertEqual(status, 0)
-        self.assertIn(["docker", "rm", "abc"], calls)
-
-    def test_run_prune_reports_docker_container_delete_failure(self) -> None:
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "runs").mkdir()
-
-            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-                if command[:2] == ["docker", "ps"]:
-                    return subprocess.CompletedProcess(command, 0, '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n', "")
-                if command[:2] == ["docker", "rm"]:
-                    return subprocess.CompletedProcess(command, 1, "", "permission denied")
-                return subprocess.CompletedProcess(command, 1, "", "unexpected")
-
-            os.chdir(root)
-            try:
-                with patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
-                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=True, docker_volumes=False, yes=True))
-            finally:
-                os.chdir(previous)
-        self.assertEqual(status, 1)
-        self.assertIn("cannot prune Docker containers: permission denied", stderr.getvalue())
-
-    def test_run_prune_reports_docker_volume_delete_failure(self) -> None:
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / "runs").mkdir()
-
-            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-                if command[:3] == ["docker", "volume", "ls"]:
-                    return subprocess.CompletedProcess(command, 0, '{"Name":"kura-cache","Driver":"local"}\n', "")
-                if command[:3] == ["docker", "volume", "rm"]:
-                    return subprocess.CompletedProcess(command, 1, "", "volume is in use")
-                return subprocess.CompletedProcess(command, 1, "", "unexpected")
-
-            os.chdir(root)
-            try:
-                with patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
-                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=False, docker_volumes=True, yes=True))
-            finally:
-                os.chdir(previous)
-        self.assertEqual(status, 1)
-        self.assertIn("cannot prune Docker volumes: volume is in use", stderr.getvalue())
 
     def test_run_prune_falls_back_to_docker_for_root_owned_artifacts(self) -> None:
         previous = Path.cwd()
@@ -7245,7 +6992,6 @@ class RunPruneTests(unittest.TestCase):
                 yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
                 encoding="utf-8",
             )
-            (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
             docker_calls: list[list[str]] = []
 
@@ -7261,7 +7007,7 @@ class RunPruneTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.cli.shutil.rmtree", side_effect=fake_rmtree), patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO):
-                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=False, docker_volumes=False, yes=True))
+                    status = cmd_run_prune(argparse.Namespace(run_ids=["old"], yes=True))
             finally:
                 os.chdir(previous)
         self.assertEqual(status, 0)
@@ -7277,7 +7023,6 @@ class RunPruneTests(unittest.TestCase):
                 yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
                 encoding="utf-8",
             )
-            (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
 
             def fake_rmtree(path: Path) -> None:
@@ -7293,11 +7038,11 @@ class RunPruneTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.cli.shutil.rmtree", side_effect=fake_rmtree), patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
-                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=False, docker_volumes=False, yes=True))
+                    status = cmd_run_prune(argparse.Namespace(run_ids=["old"], yes=True))
             finally:
                 os.chdir(previous)
         self.assertEqual(status, 1)
-        self.assertIn("cannot prune run artifacts: docker cleanup failed", stderr.getvalue())
+        self.assertIn("cannot prune run old: docker cleanup failed", stderr.getvalue())
 
 
 class RunPodLifecycleTests(unittest.TestCase):

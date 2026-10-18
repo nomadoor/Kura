@@ -34,7 +34,7 @@ from kura.images import image_cuda_version, launch_image, launch_image_warnings,
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements, requirement_source
 from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, hf_cached_file, local_docker_mounts, local_hf_cache
-from kura.storage import probe_storage, probe_storages, storage_floor_problem
+from kura.storage import RECLAIM_POINTER, probe_storage, probe_storages, storage_floor_problem
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -1019,7 +1019,7 @@ def _local_launch_disk_preflight(
         if problem:
             errors.append(problem)
     if errors:
-        raise ValueError("; ".join([*errors, own_write_text(estimate["own_writes"], executor="docker")]))
+        raise ValueError("; ".join([*errors, own_write_text(estimate["own_writes"], executor="docker")]) + f". {RECLAIM_POINTER}")
     try:
         # Bounded and outside the workspace, as the daemon probe is: the plan reads this too.
         docker_system_df = subprocess.run(
@@ -1050,12 +1050,6 @@ def _local_launch_disk_preflight(
         "paths": checked,
         "docker_storage": docker_storage,
     }
-
-
-def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
-    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
-    value = runpod.get("download_min_free_gb")
-    return _configured_gib(value, default=50) * 1024**3
 
 
 def _general_resolution(run: dict[str, Any]) -> Any:

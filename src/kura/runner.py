@@ -746,6 +746,7 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
     the watch tries again at its next check. `said` keeps a store whose backing could not be
     measured from being logged at every check."""
     from kura.run_commands.plan import local_reserve_problem
+    from kura.storage import RECLAIM_POINTER
     from kura.yamlio import YAMLError, load_yaml
 
     if _sibling(request, ".stop.json").exists():
@@ -764,9 +765,9 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
                  "the disk watch judges that store by Linux free space (set storage.host_drive in workspace.yaml)")
     if problem is None:
         return False
-    reason = (f"stopped by the disk watch: {problem}. Saves and training states written so far are kept; free space "
-              f"(`kura doctor disk` lists what can be freed), then, if the run kept training state, continue it with "
-              f"`kura run resume {run_dir.name} --additional-steps <steps>` (or `--to-step <step>`)")
+    reason = (f"stopped by the disk watch: {problem}. Saves and training states written so far are kept; free space, "
+              f"then, if the run kept training state, continue it with "
+              f"`kura run resume {run_dir.name} --additional-steps <steps>` (or `--to-step <step>`). {RECLAIM_POINTER}")
     write_stop_request(run_dir, reason=reason)
     _log(f"{run_dir.name}: {reason}")
     return True
