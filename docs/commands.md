@@ -209,7 +209,7 @@ situation-dependent decision, not a safe universal `recover` action.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura doctor docker` | Diagnose the local Docker/GPU execution environment |
+| `uv run kura doctor docker` | Diagnose the local Docker/GPU execution environment and which configured Kura images are pulled |
 | `uv run kura doctor runpod` | Diagnose RunPod API access and remaining resources |
 | `uv run kura run reconcile <run-id>` | Refresh observed Pod/container state without changing it |
 | `uv run kura run pull <run-id>` | Copy the latest completed intermediate checkpoint from a running RunPod run without stopping training |
