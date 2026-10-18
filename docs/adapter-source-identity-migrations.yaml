@@ -28,11 +28,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 7a50ae12e97b15411c80cf6f4231a04c27ec9b816ddadecb1df40077f1cf2bff
+      value: 945ae8efcdff95cd410f9e199215999c45a46cdd8bf6bf510de206132a032f6d
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 15ccf18ddb02fe10d2913b6419030798f0a50b7eceae1109a9b90637094f6664
+      value: f4898a4a9708a89a831abb8fdf7b56895419b654559fd41e1ad923adb35c1473
   - id: musubi-tuner-backlog-batch-2026-10-18
     backend: musubi-tuner
     reason: >-
@@ -56,11 +56,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
+      value: 7b58c15f3d2498965674fb6866dad50fbd344882397c254d1b64de4844b1bb09
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 5f27bcc8435c67412e5502fcb32171f47f6d4725b22570e35d5a5d2f4241c90c
+      value: d8ea1d81032d4164bf5cc93bf547043778a6c89fed192eeacfcbb1dd0a8262ef
   - id: backlog-batch-runpod-executor-2026-10-18
     executor: runpod
     reason: >-
@@ -105,11 +105,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 40aa392d44b3d06f2d4e94cb7a44f56f4ae6dd36501231a67e111906708f28a7
+      value: c0cfcb7d09031a41b0defdc705e6974ef7df5779fa9462c95096c79bfa890581
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: d4872739275d49b7aa8a912c5b6f1c3dad0aaf6f4ce48382cd3e88314529efda
+      value: dbe8529c4faf148779237825a041a2ab08f3d598c9dcaf7d48e8bb8efeb493b2
   - id: musubi-tuner-guidance-wording-2026-10-18
     backend: musubi-tuner
     reason: "The identity changes because two shared files change wording only: backends/registry.py adds to the refusal of a missing required backend.config value where a recommended value is read (REQUIRED_VALUE_SOURCES), and container_scripts/hf_download.py adds the user's two actions (accept the model license, set HF_TOKEN in their own terminal) to the text of an in-container Hugging Face authentication failure. Which runs are refused, compile output, generated argv, model downloads, and recorded smoke behavior are unchanged."
@@ -232,7 +232,7 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
+      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
@@ -264,7 +264,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
+      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
   - id: sd-scripts-family-card-hint-2026-10-18
     backend: sd-scripts
     reason: >-
