@@ -45,10 +45,10 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c"
-AI_TOOLKIT_PINNED_COMMIT = "dcebc7442df70e5239c68167919fd2909c615769"
+AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f"
+AI_TOOLKIT_PINNED_COMMIT = "9d408eb64d61e7b47e509e29f5da99bfab1afac0"
 
-# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.30,
+# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.32,
 # embedded commit AI_TOOLKIT_PINNED_COMMIT).
 # It is the union of
 # toolkit.util.get_model.LEGACY_ARCHS and the archs of get_model.get_all_models().
@@ -68,7 +68,7 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
 # Every model_arch value Kura accepts: a pinned arch, or a UI entry name the trainer reads as one.
 AI_TOOLKIT_MODEL_ARCH_VALUES = tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS)}))
 
-# Pinned AI-Toolkit dcebc744, toolkit/data_loader.py:40-42. These
+# Pinned AI-Toolkit 9d408eb6, toolkit/data_loader.py:40-42. These
 # are the folder loader's exact lowercase extension lists.
 AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
 AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
@@ -141,10 +141,11 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "control_selection": "generated-random-one-per-step",
     },
     "single-control-image": {
-        # flux3 reads one reference per sample: it keeps has_multiple_control_images unset, so the
-        # loader stacks the controls, and get_noise_prediction keeps lat[0] of each sample's one
-        # control (extensions_built_in/diffusion_models/flux3/flux3.py:513-531, pinned 0.13.30),
-        # though the upstream UI offers multi_control_paths for it.
+        # The pinned flux3 reads every reference of a sample: get_noise_prediction unpacks the
+        # loader's (B, N, C, H, W) stack into N references, and use_raw_control_images keeps each
+        # unresized for _fit_reference to size by area (extensions_built_in/diffusion_models/flux3/
+        # flux3.py:114-115 and 514-538, pinned 0.13.32). Kura projects one reference because no
+        # run has verified several.
         "architectures": ("flux3", "flux_kontext", "hidream_e1", "qwen_image_edit"),
         "shape": "image-control",
         "target_media": "image",
@@ -461,7 +462,7 @@ def _native_config_architecture(value: str) -> str:
     """The architecture the pinned trainer runs for a native_config.model.arch value.
 
     ModelConfig strips a display tag and maps flex1 to flux (toolkit/config_modules.py:774-778 at
-    dcebc744). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
+    9d408eb6). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
     """
     architecture = value.split(":", 1)[0]
     return "flux" if architecture == "flex1" else architecture

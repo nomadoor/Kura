@@ -1,0 +1,24 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-18'
+executor: runpod
+kura_commit: 01233e3
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit over
+  RunPod after the image moved from 0.13.30 to 0.13.32 (embedded commit 9d408eb64d61e7b47e509e29f5da99bfab1afac0)
+  with Kura's step-save patch and the MiniMax-H3 finite-gradient patch applied.
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --runpod --yes
+hardware:
+  gpu: RTX A5000 ($0.27/hr, the only one of the pass's small GPUs with a current price at launch)
+runtime_image_digest: sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f
+adapter_source: ddfec4da21ab68f7cc13f978a044b4213349273dfb445204526a6acf89f25613
+pod_minutes: about 25 across 8 Pods (about $0.11 GPU), every Pod stopped
+results:
+  P1: pass (including gradient accumulation 2)
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass (every Pod recorded pod_stopped_at)
+  P7: pass
+  P8: not measured on RunPod
+runs: [20261018-2217_conf-ai-one-control_4c20, 20261018-2222_conf-ai-one-control-2_1f42, 20261018-2228_conf-ai-one-split_9701, 20261018-2231_conf-ai-one-resume_55aa, 20261018-2234_conf-ai-multi-fresh_6fb7, 20261018-2237_conf-ai-multi-split_59d4, 20261018-2241_conf-ai-multi-resume_f464, 20261018-2243_conf-ai-multi-accum-2_e57f]

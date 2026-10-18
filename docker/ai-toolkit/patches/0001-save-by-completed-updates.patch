@@ -1,7 +1,7 @@
 Kura: decide, name, and record a step save by the optimizer updates it holds.
 
-Upstream jobs/process/BaseSDTrainProcess.py (ostris/aitoolkit:0.13.30, commit
-dcebc7442df70e5239c68167919fd2909c615769) runs the loop over the 0-based iteration index
+Upstream jobs/process/BaseSDTrainProcess.py (ostris/aitoolkit:0.13.32, commit
+9d408eb64d61e7b47e509e29f5da99bfab1afac0) runs the loop over the 0-based iteration index
 `step` and sets `self.step_num = step` (lines 2533-2543). It decides a save on that index
 (`is_save_step = ... self.step_num % save_every == 0`, ~2554), skips it on the first
 iteration (`if self.step_num != self.start_step`, ~2706), and saves after the iteration's

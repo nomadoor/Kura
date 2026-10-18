@@ -836,8 +836,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        base_pin = "ostris/aitoolkit:0.13.30@sha256:58cfb049ed8d3e2abc4770b48ba8bd7193072f8d553c647cf4fec6b44f7027d7"
-        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c"
+        base_pin = "ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0"
+        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f"
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
         self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
@@ -1257,7 +1257,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     self.assertEqual(process["model"]["assistant_lora_path"], authored["native_config"]["model"]["assistant_lora_path"])
                 if arch.startswith("moss_image"):
                     self.assertEqual(process["model"].get("model_kwargs", {}).get("edit", False), bool(controls))
-        # flux3 reads one reference per sample, so a second one is refused rather than ignored.
+        # Kura projects one flux3 reference (no run has verified several), so a second one is refused.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run = {"id": "new-flux3-two", "backend": {"name": "ai-toolkit", "config": {"model_arch": "flux3", "dataset_config": {}}},
@@ -1308,6 +1308,36 @@ class BackendSurfaceContractTests(unittest.TestCase):
         # model.base never chooses the entry: the Base model under moss_image names its own entry.
         with self.assertRaisesRegex(ValueError, "model.base 'OpenMOSS-Team/MOSS-Image-Base' is the model of UI entry moss_image:base, moss_image:base_edit, but model_arch 'moss_image' selects entry 'moss_image'"):
             compiled("moss_image", "OpenMOSS-Team/MOSS-Image-Base", ())
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_projects_the_0_13_32_moss_image_edit_entry(self) -> None:
+        def compiled(base: str, controls: tuple[str, ...], **authored):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = {
+                    "id": "moss-image-edit",
+                    "backend": {"name": "ai-toolkit", "config": {"model_arch": "moss_image:edit", "dataset_config": {}, **authored}},
+                    "model": {"base": base}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                }
+                self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=controls)
+                BACKENDS["ai-toolkit"].compile(run, root)
+                return yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+
+        # The SFT edit entry fills its UI's kv_cache and match_target_res; edit comes from model_edit.
+        process = compiled("OpenMOSS-Team/MOSS-Image-SFT", ("a.png", "b.png"), model_edit=True)
+        self.assertEqual(process["model"]["arch"], "moss_image:edit")
+        self.assertEqual(
+            process["model"]["model_kwargs"],
+            {"edit": True, "kv_cache": True, "match_target_res": True, "uncond_skip_layers": [22]},
+        )
+        self.assertEqual((process["model"]["qtype"], process["model"]["quantize"], process["model"]["low_vram"]), ("convrot8", True, True))
+        self.assertEqual(len(process["datasets"][0]["control_path"]), 2)
+        # The entry does not turn edit mode on by itself.
+        process = compiled("OpenMOSS-Team/MOSS-Image-SFT", ())
+        self.assertEqual(process["model"]["model_kwargs"], {"kv_cache": True, "match_target_res": True, "uncond_skip_layers": [22]})
+        # model.base never chooses the entry: the Base model names the Base entries.
+        with self.assertRaisesRegex(ValueError, "model.base 'OpenMOSS-Team/MOSS-Image-Base' is the model of UI entry moss_image:base, moss_image:base_edit, but model_arch 'moss_image:edit' selects entry 'moss_image:edit'"):
+            compiled("OpenMOSS-Team/MOSS-Image-Base", ())
 
     @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture(self) -> None:
