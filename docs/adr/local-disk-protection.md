@@ -35,7 +35,9 @@ the disk while the run trains.
 the job runner's follower for that run checks the effective free space
 (`kura.storage.probe_storage`, which reads the Windows drive behind a WSL
 virtual disk) of every store the run writes to: the workspace, the Hugging
-Face cache, and every writable mount, one check per backing store. It checks
+Face cache, every writable mount, and Docker's data root (where the
+container's writable layer grows) when this host can measure it, one check
+per backing store. It checks
 about every 30 seconds, not at every poll, because on WSL each check starts
 PowerShell. When a store is below the reserve, the follower records the stop
 and its reason (the store, its free bytes, the reserve) before it stops the

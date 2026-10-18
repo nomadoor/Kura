@@ -494,7 +494,10 @@ def launch_run(
         if executor == "docker":
             mounts = local_docker_mounts(_workspace(), config)
             if not dry_run:
-                _local_launch_disk_preflight(_workspace(), locked, config, enforce_model_download_safety=False)
+                disk = _local_launch_disk_preflight(_workspace(), locked, config, enforce_model_download_safety=False)
+                if check_only and disk["docker_data_unwatched"]:
+                    # The runner's follower says it again in its log when it starts watching.
+                    print(f"info: {disk['docker_data_unwatched']}", file=sys.stderr)
             if check_only:
                 return 0
             local_image = image or selected["reference"]

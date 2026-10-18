@@ -165,7 +165,10 @@ root-owned files; it changes ownership and deletes nothing.
   environment variables, and `reclaimable`: the totals per class that
   `kura cleanup plan` lists. Warnings are blocking-risk findings.
 - A local run keeps a reserve free on every store it writes to (the workspace,
-  the Hugging Face cache, writable mounts): `docker.min_free_gb`, default 20
+  the Hugging Face cache, writable mounts, and where Docker keeps its data,
+  which holds the container's writable layer, when this host can measure it;
+  otherwise the plan, the launch, and the runner log say it is not watched):
+  `docker.min_free_gb`, default 20
   GiB, or the run's own `safety.max_run_disk_gb` when that is larger. While it trains, the job runner checks those stores about every 30
   seconds; when one falls below the reserve it records why, stops the
   container, and ends the run as `interrupted` with `stop_reason` in

@@ -545,7 +545,7 @@ class ReclaimPointerTests(unittest.TestCase):
             request = runner.write_launch_request(run_dir, executor="docker")
             with patch("kura.run_commands.plan.local_reserve_problem", return_value=("C: is low", [])), \
                     patch("kura.runner.write_stop_request") as stop, patch("kura.runner._log"):
-                self.assertTrue(runner._disk_watch(root, run_dir, request, set()))
+                self.assertTrue(runner._disk_watch(root, run_dir, request, set(), {"root": None}))
         self.assertTrue(stop.call_args.kwargs["reason"].endswith(RECLAIM_POINTER))
 
     def test_runpod_pulls_keep_the_local_reserve(self) -> None:
