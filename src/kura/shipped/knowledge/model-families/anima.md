@@ -10,9 +10,11 @@ source: owner (2026-08-15)
 
 - Backend of the verified recipe: sd-scripts (backend version 0.11.1 at the
   time), `architecture: anima`, `mode: lora`, with AdamW8bit, a constant
-  schedule, bf16, `network_train_unet_only: true`, `timestep_sampling:
-  sigmoid`, and `discrete_flow_shift: 1.0`. The entries below come from that
-  run; they were not measured on AI-Toolkit's `anima`.
+  schedule, bf16, `network_train_unet_only: true`, and `timestep_sampling:
+  sigmoid`. The run also set `discrete_flow_shift: 1.0`, which sd-scripts
+  ignores with `sigmoid` (only `sigma` and `shift` read it), so it is left out
+  here. The entries below come from that run; they were not measured on
+  AI-Toolkit's `anima`.
   source: run 20260803-2140_vivi-anima-7e5-2000_d8d3
 - VRAM class: Anima character LoRA completed at 768, rank 16, batch 1, bf16,
   gradient checkpointing, and disk-backed latent/text caches on an RTX 4070 Ti

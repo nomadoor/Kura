@@ -165,13 +165,17 @@ replaces any delegation given earlier in a conversation or in memory.
    the gate, and the pull request's review.
 5. **Open one pull request**, ready for review. Its body states the design,
    `Owner:` (the function), `Copies removed:` (or none), `Behavior changed:`,
-   the promises touched, validation, and risks. CodeRabbit reviews it there.
-   The maintainer merges.
+   the promises touched, validation, and risks. The pull request runs CI on
+   every OS. The maintainer merges it when CI passes and the context-free
+   review (where step 4 requires one) left no Critical or Major finding.
 
-Each review, the context-free one and the pull request's, is one round:
-Critical and Major findings are fixed, and only the fixed part is checked
-again. Minor and Nit findings, and pre-existing issues a review happens to
-find, go to `docs/backlog.md` and are fixed later in one batch pull request.
+The context-free review is one round: Critical and Major findings are fixed
+on the branch, and only the fixed part is checked again. CodeRabbit reviews
+the pull request when its quota allows, and its findings follow the same
+rule, except that a Major is fixed in a follow-up design rather than holding
+the merge. Minor and Nit findings from either review, and pre-existing issues
+a review happens to find, go to `docs/backlog.md` and are fixed later in one
+batch pull request.
 
 A change with no design (step 2's exceptions) still goes on a branch and into a
 pull request; pushing it needs the maintainer's go-ahead. Findings from an

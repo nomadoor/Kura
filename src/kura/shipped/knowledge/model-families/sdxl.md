@@ -9,7 +9,12 @@
 ## character
 
 - rank: 16–32
-- lr: 1e-4 is a common SDXL option
+- lr: 1e-4 is a common SDXL option. On sd-scripts, `unet_lr` sets the
+  learning rate of the U-Net LoRA parameters and overrides `learning_rate` for
+  them; `learning_rate` is the fallback wherever `unet_lr` (or
+  `text_encoder_lr` for the text encoders) is unset.
+  source: upstream (sd-scripts at the pinned commit, `networks/lora.py`
+  `prepare_optimizer_params`)
 - batch: 2–4 (effective)
 - resolution: 1024 is common SDXL practice; lower it when hardware or the task
   calls for it.

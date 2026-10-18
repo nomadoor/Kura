@@ -233,7 +233,7 @@ def format_experiment_context(context: dict[str, Any] | None, *, max_runs: int =
         note = row.get("note") or "—"
         marker = "  <- this run" if row.get("current") else ""
         middle = f"  {facts}" if facts else ""
-        lines.append(f"  {short_ids.get(row['id'], row['id'])}  {row.get('state', 'unknown')}{middle}  | {note}{marker}")
+        lines.append(f"  {short_ids.get(row['id'], row['id'])}  {row.get('state', 'unknown')}{middle}  | notes: {note}{marker}")
     current = next((row for row in rows if row.get("current")), None)
     if current is not None:
         lines.append(f"  completed render runs for this run  {current.get('completed_render_runs', 0)}")

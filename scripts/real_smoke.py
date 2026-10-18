@@ -187,7 +187,7 @@ SMOKES: dict[str, Smoke] = {
             "dataset_config": _sd_scripts_dataset(IMAGE_DATASET),
             "learning_rate": 1e-4, "optimizer_type": "AdamW8bit", "mixed_precision": "bf16", "gradient_checkpointing": True,
             "network_dim": 8, "network_alpha": 1, "network_train_unet_only": True,
-            "timestep_sampling": "sigmoid", "discrete_flow_shift": 1.0, "qwen_image_vae_2d": True,
+            "timestep_sampling": "sigmoid", "qwen_image_vae_2d": True,
             "cache_latents_to_disk": True, "cache_text_encoder_outputs_to_disk": True,
         },
         executor="docker", gpu="gpu", expected_script="anima_train_network.py",
