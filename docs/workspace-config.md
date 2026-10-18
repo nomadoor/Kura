@@ -117,10 +117,15 @@ Executors set `HF_HOME=/workspace/cache/huggingface` and
 Musubi downloads, and remote ComfyUI preparation therefore reuse the same
 repository snapshot and blob namespace.
 
-For Musubi runs with automatic Hugging Face downloads, Kura tries to estimate
-the referenced file sizes before local launch. The estimate is added on top of
-`docker.min_free_gb`, so the configured value remains a safety margin instead
-of being consumed by the download.
+Before a local launch, Kura adds one bounded estimate of the run's writes to
+`docker.min_free_gb` on each store (`docs/adr/local-disk-protection.md`): the
+model files it downloads for sd-scripts and Musubi Tuner, sized from Hugging
+Face metadata (cached files count 0), on the Hugging Face cache's store, and
+the run's own weights-sized files on the workspace's store, each bounded by
+`rank × 64 MiB` (the most checkpoints at once, the trainer's training states,
+and Kura's copies of them, a state counting as three such files). The reserve
+therefore stays a margin instead of being consumed by the run, and the job
+runner's disk watch stops a run that reaches it anyway.
 
 Musubi automatic downloads store provenance in
 `resolved/musubi/model-bundle.lock.yaml`. The `cache/models/` tree is a
@@ -134,18 +139,14 @@ sd-scripts downloads and explicit paths are frozen in
 A run whose trainer writes a disk cache (Musubi Tuner always caches latents and
 text-encoder outputs; sd-scripts with `cache_latents_to_disk` or
 `cache_text_encoder_outputs_to_disk`; AI-Toolkit when its pinned baseline caches
-latents to disk or `train.cache_text_embeddings` is on, authored or from that baseline) counts
-`safety.disk_cache_estimate_gb` in both disk checks. Without it the plan says
-that the cache is not counted (image caches are a few MB per item; set the key
-for large or video datasets). Cache files stay below the individual run; the
-shared dataset remains unchanged.
+latents to disk or `train.cache_text_embeddings` is on, authored or from that baseline) gets a plan
+line that the cache is not counted (image caches are a few MB per item). Cache
+files stay below the individual run; the shared dataset remains unchanged.
 
-AI-Toolkit downloads its own models, so Kura cannot size them. The plan warns
-that the download is not counted (often 10–30 GB) until
-`safety.model_download_estimate_gb` declares it; then the local check counts it
-on the Hugging Face cache's drive and the RunPod check in the container disk.
-Until then, as for an undeclared disk cache, `docker.min_free_gb` is the buffer
-and nothing is refused.
+AI-Toolkit downloads its own models, so Kura does not size them. The plan warns
+that the download is not counted (often 10–30 GB); locally the disk watch
+covers it. `safety.checkpoint_estimate_gb`, `safety.disk_cache_estimate_gb`,
+and `safety.model_download_estimate_gb` are retired and refused.
 
 All registered training adapters reject unknown top-level `backend.config`
 keys. Use `uv run kura run capabilities <backend>` (or `--json`) to inspect the
@@ -256,8 +257,11 @@ uses the compiled capacity policy without asking again.
 Training RunPod Pods are disposable. In `upload` mode, local model caches are
 not uploaded with the run bundle, so `kura run plan` reports model downloads as
 remote writes for RunPod even when the same files are cached locally. Before
-launch, Kura compares estimated remote model downloads plus the configured
-checkpoint estimate against `runpod.container_disk_gb`.
+launch, Kura shows the same bounded estimate (remote model downloads, the input
+transfer, and the run's own weights-sized files) against
+`runpod.container_disk_gb`, and refuses only when the downloads and the
+transfer, which it measures, alone do not fit. A full Pod disk fails the run;
+the maximum lease bounds the bill.
 
 ## Useful checks
 

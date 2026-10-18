@@ -31,7 +31,7 @@ why, so it is not raised again.
 - 2026-10-18 | one owner | `_trainer_download_estimate` calls `adapter.requirements` directly instead of `model_requirements(run)`, and a plan computes the requirements twice | review of the unmeasured-download change | -
 - 2026-10-18 | one owner | A GiB setting is interpreted in three places: `_declared_gib`, `_configured_gib`, and the `*_gb` check in `validate_train_run_fields` | review of the unmeasured-download change | -
 - 2026-10-18 | plan JSON | `trainer_downloads` appears only inside the disk payloads' `estimates`, while the disk cache has its own top-level plan section | review of the unmeasured-download change | P11
-- 2026-10-18 | tests | No test covers: a declared `safety.model_download_estimate_gb` actually refusing on local Docker and on RunPod, AI-Toolkit with a local-path `model.base` giving no download warning, and the RunPod plan output showing the same warning and info lines as Docker | review of the unmeasured-download change | P8
+- 2026-10-18 | tests | No test covers: AI-Toolkit with a local-path `model.base` giving no download warning, and the RunPod plan output showing the same warning and info lines as Docker | review of the unmeasured-download change | P8
 
 ## Rejected
 

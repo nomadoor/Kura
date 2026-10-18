@@ -959,12 +959,17 @@ def managed_state_save_args(
     cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
     if not isinstance(cadence, int):
         cadence = None
-    if training_state_policy(run)["keep_generations"] == 2:
-        window = cadence if cadence is not None else validated_recipe(run, required=True)["steps"]
-    else:
-        window = 1
     every = [] if cadence is None else ["--save_every_n_steps", str(cadence)]
-    return [*every, "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(window)]
+    return [*every, "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_retention_window(run, cadence))]
+
+
+def state_retention_window(run: dict[str, Any], cadence: int | None) -> int:
+    """The steps an accelerate trainer keeps training states for (`--save_last_n_steps_state`): the
+    last cadence, or the recipe's steps when none is set (two generations), or 1 (only the newest).
+    The command builders and the disk estimate read it."""
+    if training_state_policy(run)["keep_generations"] == 2:
+        return cadence if cadence is not None else validated_recipe(run, required=True)["steps"]
+    return 1
 
 
 def run_output_name(run: dict[str, Any]) -> str:

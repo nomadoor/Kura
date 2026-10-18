@@ -8,6 +8,105 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: bounded-write-estimate-sd-scripts-2026-10-18
+    backend: sd-scripts
+    reason: 'The run envelope retires safety.checkpoint_estimate_gb, safety.disk_cache_estimate_gb, and safety.model_download_estimate_gb (refused when written, naming the bounded estimate and the disk watch that replace them; dropped by copies; ignored in a manifest an older Kura compiled), the retired sd-scripts backend.config.disk_cache_estimate_gb message names the same, and managed_state_save_args reads the state retention window from state_retention_window, which returns the same window as before. Kura never forwarded any of these keys to a trainer, so every recorded smoke compiles the same native configuration and command and collects the same outputs; the smoke harness no longer declares a disk cache estimate. The launch disk checks, which no trainer sees, now count one bounded estimate (docs/adr/local-disk-protection.md).'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-release-conformance-docker-2026-10-17
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: c3ef5ae9bb5b2a7257bf4ccc38ee5d8d48fd9cdfafd4dd615c664f31dc23d620
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 2c37e7c607630ffb8619b3c5662ee025025b89d50e7dced449f88554c7ef794f
+  - id: bounded-write-estimate-musubi-tuner-2026-10-18
+    backend: musubi-tuner
+    reason: 'The run envelope retires safety.checkpoint_estimate_gb, safety.disk_cache_estimate_gb, and safety.model_download_estimate_gb (refused when written, naming the bounded estimate and the disk watch that replace them; dropped by copies; ignored in a manifest an older Kura compiled), the retired sd-scripts backend.config.disk_cache_estimate_gb message names the same, and managed_state_save_args reads the state retention window from state_retention_window, which returns the same window as before. Kura never forwarded any of these keys to a trainer, so every recorded smoke compiles the same native configuration and command and collects the same outputs; the smoke harness no longer declares a disk cache estimate. The launch disk checks, which no trainer sees, now count one bounded estimate (docs/adr/local-disk-protection.md).'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-tuner-release-conformance-docker-2026-10-17
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8215a8596edd0ffbab5be1ef2b3f34ac0d67cb9ef4a08abf24f4f42542fc8306
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: b028f38e1e730c111e7d627cba1282d72aae6bac76b874208697e5f9c5876e0e
+  - id: bounded-write-estimate-runpod-executor-2026-10-18
+    executor: runpod
+    reason: 'The executor identity changes because run_envelope.py retires three safety keys (safety.checkpoint_estimate_gb, safety.disk_cache_estimate_gb, safety.model_download_estimate_gb). The RunPod container-disk check now shows one bounded estimate and refuses only when the measured downloads and input transfer alone exceed runpod.container_disk_gb; every recorded smoke fit its container disk, so each would stage, launch, run, and collect exactly as it did. The Pod, the transfer, the trainer command, output collection, and every record are unchanged.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 0a0e58b754455f6913e84f607045a7fa09d9e96846cbd9c6876026c294287249
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 40aa392d44b3d06f2d4e94cb7a44f56f4ae6dd36501231a67e111906708f28a7
   - id: disk-watch-stop-reason-runpod-executor-2026-10-18
     executor: runpod
     reason: 'The executor identity changes because executors/common.py''s write_stop_record takes an optional reason, which only the local Docker disk watch passes; a RunPod stop writes the same stop record as before, without it. The Pod, the transfer, the trainer command, output collection, the stop, and every RunPod record are unchanged, so each recorded smoke would run exactly as it did.'

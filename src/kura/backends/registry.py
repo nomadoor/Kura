@@ -131,8 +131,8 @@ class BackendAdapter:
     legacy_training_state: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     # Planning facts the adapter owns; plan renders them without backend tables.
     runtime_checks: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
-    # What run-scoped disk cache the trainer writes (a phrase), or None; its size is the
-    # author's `safety.disk_cache_estimate_gb`, which plan counts for every backend.
+    # What run-scoped disk cache the trainer writes (a phrase), or None; plan shows it for every
+    # backend and does not count it (the disk watch covers it).
     disk_cache: Callable[[dict[str, Any]], str | None] | None = None
     general_resolution: Callable[[dict[str, Any]], Any] | None = None
     # Model facts the adapter already owns (baselines, model roles, entry shapes), for capabilities.
@@ -460,7 +460,7 @@ _GENERAL_ML_ALIASES = {
 
 _GENERAL_UNAVAILABLE = {
     "epochs": "Kura training recipes are step-based; use recipe.steps",
-    "disk_cache_estimate_gb": "the disk cache size is safety.disk_cache_estimate_gb, one key for every backend",
+    "disk_cache_estimate_gb": "a disk cache is not sized by a declared estimate; the disk watch stops a local run before a store falls below docker.min_free_gb, so remove it",
 }
 
 

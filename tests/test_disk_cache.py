@@ -1,5 +1,5 @@
 """One rule for a run-scoped disk cache on every backend: the adapter says whether the trainer
-writes one, the author declares its size in safety.disk_cache_estimate_gb, and both disk checks count it."""
+writes one, and the plan shows it, not counted (docs/adr/local-disk-protection.md: the disk watch covers it)."""
 
 from __future__ import annotations
 
@@ -26,16 +26,13 @@ def _runs_that_write_a_cache() -> dict[str, dict]:
 
 
 class DiskCacheTests(unittest.TestCase):
-    def test_every_backend_that_writes_a_cache_says_it_is_not_counted_until_its_size_is_declared(self) -> None:
+    def test_every_backend_that_writes_a_cache_says_it_is_not_counted(self) -> None:
         for case, run in _runs_that_write_a_cache().items():
             with self.subTest(case=case):
                 report = plan._disk_cache_preflight_report(run)
                 self.assertEqual(report[0]["severity"], "info")
                 self.assertIn("not counted in the disk estimate", report[0]["fact"])
-                self.assertIn("set safety.disk_cache_estimate_gb for large or video datasets", report[0]["fact"])
-                run["safety"] = {"disk_cache_estimate_gb": 2.5}
-                estimate = plan._disk_cache_estimate(run)
-                self.assertEqual((estimate["status"], estimate["bytes"]), ("declared-estimate", int(2.5 * 1024**3)))
+                self.assertIn("image caches are a few MB per item", report[0]["fact"])
 
     def test_a_run_that_writes_no_cache_reports_none(self) -> None:
         for run in (
@@ -56,43 +53,29 @@ class DiskCacheTests(unittest.TestCase):
         run = {"backend": {"name": "ai-toolkit", "config": {"model_arch": "minimax_h3", "native_config": {"train": {"cache_text_embeddings": False}}}}}
         self.assertEqual(ai_toolkit_disk_cache(run), "AI-Toolkit writes an on-disk cache (cache_latents_to_disk)")
 
-    def test_local_and_runpod_disk_checks_count_the_declared_cache(self) -> None:
+    def test_neither_disk_check_counts_a_cache(self) -> None:
         run = _runs_that_write_a_cache()["musubi-tuner"]
-        run["safety"] = {"disk_cache_estimate_gb": 3, "allow_storage_risk": True}
-        cache = 3 * 1024**3
+        run["safety"] = {"allow_storage_risk": True}
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
-                    patch.object(plan, "_estimate_checkpoint_write_bytes", return_value={"bytes": 0}), \
-                    patch.object(plan, "_disk_cache_estimate", wraps=plan._disk_cache_estimate) as runpod_owner:
+            with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None):
                 runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 50}, {"bytes": 0})
-            with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
-                    patch.object(plan, "_estimate_checkpoint_write_bytes", return_value={"bytes": 0}), \
-                    patch.object(plan, "_disk_cache_estimate", wraps=plan._disk_cache_estimate) as local_owner:
+            with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 local = plan._local_launch_disk_preflight(
                     Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
                     enforce_model_download_safety=False, download_estimate={"bytes": 0},
                 )
-        runpod_owner.assert_called()
-        local_owner.assert_called()
-        self.assertEqual(runpod["estimated_write_bytes"], cache)
-        self.assertEqual(local["paths"]["workspace"]["estimated_write_bytes"], cache)
+        self.assertEqual(runpod["estimated_write_bytes"], 0)
+        self.assertEqual(local["paths"]["workspace"]["estimated_write_bytes"], 0)
 
-    def test_the_size_is_one_safety_key_and_the_sd_scripts_key_is_retired(self) -> None:
-        validate_train_run_fields({"safety": {"disk_cache_estimate_gb": 1.5}})
-        with self.assertRaisesRegex(ValueError, "safety.disk_cache_estimate_gb must be a positive number"):
-            validate_train_run_fields({"safety": {"disk_cache_estimate_gb": "1"}})
+    def test_the_declared_size_is_retired_on_every_surface(self) -> None:
+        with self.assertRaisesRegex(ValueError, "safety.disk_cache_estimate_gb is retired"):
+            validate_train_run_fields({"safety": {"disk_cache_estimate_gb": 1.5}})
         retired = {"backend": {"name": "sd-scripts", "config": {"architecture": "sd15", "disk_cache_estimate_gb": 1}}}
-        with self.assertRaisesRegex(ValueError, "the disk cache size is safety.disk_cache_estimate_gb"):
+        with self.assertRaisesRegex(ValueError, "disk watch"):
             validate_backend_config(retired)
-        copied = without_retired_train_run_keys(retired)
+        copied = without_retired_train_run_keys({**retired, "safety": {"disk_cache_estimate_gb": 4}})
         self.assertNotIn("disk_cache_estimate_gb", copied["backend"]["config"])
-        # A copy keeps counting the estimate under its new key, unless the run already sets it.
-        self.assertEqual(copied["safety"], {"disk_cache_estimate_gb": 1})
-        both = {**retired, "safety": {"disk_cache_estimate_gb": 4}}
-        self.assertEqual(without_retired_train_run_keys(both)["safety"], {"disk_cache_estimate_gb": 4})
-        # A run an older Kura compiled keeps its estimate where it wrote it.
-        retired["backend"]["config"]["cache_latents_to_disk"] = True
-        self.assertEqual(plan._disk_cache_estimate(retired)["bytes"], 1024**3)
+        self.assertEqual(copied["safety"], {})
 
     def test_a_compiled_run_holding_a_retired_backend_key_is_still_read(self) -> None:
         for name, config in (

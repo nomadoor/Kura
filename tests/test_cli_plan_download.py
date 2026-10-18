@@ -27,7 +27,8 @@ class BackendResolvedModelTests(unittest.TestCase):
         self.assertIn(f"into the Hugging Face cache at {cache} (diffusers repositories in hub/, single files in ai-toolkit-models/)", local)
         self.assertIn(f"into the Pod's Hugging Face cache at {HF_CACHE_CONTAINER_PATH} (diffusers repositories in hub/", remote)
         for fact in (local, remote):
-            self.assertIn("not counted in the disk estimate (often 10–30 GB)", fact)
+            self.assertIn("estimate (often 10–30 GB)", fact)
+            self.assertIn("not counted", fact)
 
 
 if __name__ == "__main__":
