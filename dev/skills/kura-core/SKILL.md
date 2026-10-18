@@ -78,5 +78,8 @@ A full local disk is guarded at run time: the job runner's local follower
 checks every store a run writes to against the reserve and stops the run, with
 its reason recorded first, when one falls below it. The launch checks one
 bounded write estimate. `kura.storage.storage_floor_problem` decides "below the
-reserve" for every gate (`docs/adr/local-disk-protection.md`). Usage guidance
-stays in the shipped `local-disk-safety` skill.
+reserve" for every gate (`docs/adr/local-disk-protection.md`). What a user
+can free is one inventory in four classes by what deleting costs (free,
+download, resume, outputs); outputs are never reclaimable by default
+(`docs/adr/reclaimable-data.md`). Usage guidance stays in the shipped
+`local-disk-safety` skill.
