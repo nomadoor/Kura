@@ -34,7 +34,7 @@ from kura.images import image_cuda_version, launch_image, launch_image_warnings,
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements, requirement_source
 from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, hf_cached_file, local_docker_mounts, local_hf_cache
-from kura.storage import probe_storages, storage_floor_problem
+from kura.storage import probe_storage, probe_storages, storage_floor_problem
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -877,8 +877,43 @@ def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | Non
 
 
 def local_min_free_gib(docker_config: dict[str, Any]) -> int:
-    """The free space a local Docker run keeps on every backing store; `kura doctor disk` warns below it."""
-    return _configured_gib(docker_config.get("min_free_gb"), default=100)
+    """The reserve a local Docker run keeps on every backing store (docs/adr/local-disk-protection.md):
+    the launch, the runner's disk watch, and image builds keep it; `kura doctor disk` warns below it."""
+    return _configured_gib(docker_config.get("min_free_gb"), default=20)
+
+
+def local_write_paths(workspace: Path, config: dict[str, Any]) -> dict[str, Path]:
+    """Every store a local Docker run writes to: the workspace, the Hugging Face cache, and each writable mount."""
+    paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
+    for mount in local_docker_mounts(workspace, config):
+        if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
+            source = _resolve_local_path(workspace, mount["source"])
+            if source not in paths.values():
+                paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    return paths
+
+
+def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str, Any]) -> str | None:
+    """The runner's disk watch: the first store a running local run writes to that is below the reserve,
+    checked once per backing store; None when every store keeps it."""
+    docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    reserve_gib = local_min_free_gib(docker_config)
+    checked: set[tuple[str, str]] = set()
+    for name, path in local_write_paths(workspace, config).items():
+        status = probe_storage(path, config, role=name)
+        backing = (status.backing_kind, status.backing_id)
+        if backing in checked:
+            continue
+        checked.add(backing)
+        problem = storage_floor_problem(
+            status, path, reserve_gib * 1024**3, action="a running local Docker run",
+            minimum="docker.min_free_gb" + ("" if "min_free_gb" in docker_config else " default"),
+            risk_setting="safety.allow_storage_risk: true", risk_accepted=safety.get("allow_storage_risk") is True,
+        )
+        if problem:
+            return problem
+    return None
 
 
 def _local_launch_disk_preflight(
@@ -899,12 +934,7 @@ def _local_launch_disk_preflight(
             required_gib, required_setting = run_floor_gib, "safety.max_run_disk_gb in run.yaml"
     minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
-    paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
-    for mount in local_docker_mounts(workspace, config):
-        if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
-            source = _resolve_local_path(workspace, mount["source"])
-            if source not in paths.values():
-                paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    paths = local_write_paths(workspace, config)
     if download_estimate is None:
         download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"), config=config)
     if enforce_model_download_safety:

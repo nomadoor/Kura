@@ -1496,7 +1496,7 @@ def cmd_image_build(args: argparse.Namespace) -> int:
         )
         return 1
     # A build writes its layers where Docker keeps its data. The accident is that disk filling up,
-    # so the build stops below the free-space floor a local launch keeps (docker.min_free_gb). A
+    # so the build stops below the reserve a local launch keeps (docker.min_free_gb). A
     # development checkout may build outside any workspace; there the default floor applies.
     try:
         config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
@@ -1515,7 +1515,7 @@ def cmd_image_build(args: argparse.Namespace) -> int:
     else:
         problem = storage_floor_problem(
             probe_storage(root_dir, config), root_dir, floor_gib * 1024**3,
-            action="an image build", minimum=f"the docker.min_free_gb floor, where Docker keeps its data",
+            action="an image build", minimum="the docker.min_free_gb reserve, where Docker keeps its data",
         )
         if problem:
             print(f"cannot build image: {problem}; `kura doctor disk` lists what can be freed", file=sys.stderr)

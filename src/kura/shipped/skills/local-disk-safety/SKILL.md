@@ -123,15 +123,22 @@ or WSL/VHDX/Windows-side operations.
   so the count is a lower bound), and cache-related
   environment variables. Warnings are blocking-risk findings; advisories are cleanup
   hygiene that does not by itself make the operation unsafe.
+- A local run keeps a reserve free on every store it writes to (the workspace,
+  the Hugging Face cache, writable mounts): `docker.min_free_gb`, default 20
+  GiB. While it trains, the job runner checks those stores about every 30
+  seconds; when one falls below the reserve it records why, stops the
+  container, and ends the run as `interrupted` with `stop_reason` in
+  `kura run status <run-id>`. Saves and training states already written stay:
+  free space (`kura doctor disk`), then continue with `kura run resume` from
+  the kept training state, with the user's approval.
 - Local Docker launch and RunPod stage/download/pull checks use configurable
-  disk gates, and `kura doctor disk` warns against the same local floor.
+  disk gates, and `kura doctor disk` warns against the same local reserve.
   `kura image build` checks the disk where Docker keeps its data against that
-  floor when this host can see it (Docker Desktop keeps it in its own VM, so
+  reserve when this host can see it (Docker Desktop keeps it in its own VM, so
   there it only says so), and `kura doctor disk` reports build cache that
   cleanup can free. `kura doctor workspace` lists the settings and their
   accepted values.
-- Local Docker launch adds known write estimates to the configured free-space
-  floor, and the RunPod check compares them with `runpod.container_disk_gb`.
+- Local Docker launch adds known write estimates to the reserve, and the RunPod check compares them with `runpod.container_disk_gb`.
   Musubi Hugging Face downloads use HEAD metadata when available, and every
   training run adds a conservative checkpoint budget of
   `safety.checkpoint_estimate_gb` (default 1) GiB per checkpoint. The budget counts the
@@ -150,7 +157,8 @@ or WSL/VHDX/Windows-side operations.
 - On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch
-  fails safe unless the run explicitly sets `safety.allow_storage_risk: true`;
+  and the disk watch fail safe (refuse, or stop the run) unless the run
+  explicitly sets `safety.allow_storage_risk: true`;
   RunPod stage, download, and pull fall back to Linux free space. Effective
   free space is the smaller of the two, so the WSL virtual disk can be the
   limit while the Windows drive has room; a refusal then says so and names
@@ -171,7 +179,7 @@ or WSL/VHDX/Windows-side operations.
   checkpoint retention (`kura run capabilities <backend>` lists it:
   `save_last_n_steps` for sd-scripts and AI-Toolkit,
   `prune_checkpoints_before_step` for Musubi Tuner).
-- Writes Kura cannot measure are covered locally by the free-space floor until
+- Writes Kura cannot measure are covered locally by the disk watch until
   their size is declared; then both disk checks (local launch and the RunPod
   container disk) count them. None is refused. The RunPod container-disk check
   has no floor, so on RunPod an undeclared write is not covered: declare it, or
@@ -193,8 +201,8 @@ Think in terms of what can write bytes and where:
 - model downloads write to the Hugging Face cache (`docker.hf_cache`, default
   `cache/huggingface`), which may sit on another drive; local Docker runs write
   to the workspace
-- the configured local free-space floor is a margin after estimated writes, not
-  a budget to spend
+- the local reserve is a margin after estimated writes, not a budget to spend;
+  the disk watch stops a run that reaches it
 - Docker builds write to Docker build cache
 - checkpoints and samples write to run artifacts
 - RunPod downloads/pulls write back to local downloads or run directories

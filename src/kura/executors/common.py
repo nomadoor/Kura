@@ -317,18 +317,20 @@ def end_run(run_dir: Path, state: str, *, reason: str, error: str | None = None,
 
 def write_stop_record(
     run_dir: Path, realization_id: str, *, executor: str, targets: list[dict[str, Any]],
-    requested_at: str, stopped_at: str | None, outcome: str, error: str | None = None,
+    requested_at: str, stopped_at: str | None, outcome: str, error: str | None = None, reason: str | None = None,
 ) -> Path:
     """Record what a stop did, before status reflects it.
 
     `targets` names every Pod or container the stop acted on and what happened
-    to it; `outcome` is `stopped` or `failed`.
+    to it; `outcome` is `stopped` or `failed`. `reason` says why when Kura
+    itself stopped the run (the disk watch); a user's stop has none.
     """
     path = run_dir / "realizations" / f"{realization_id}.stop-{_realization_id()}.json"
     path.parent.mkdir(exist_ok=True)
     _write_json(path, record("stop", {
         "realization_id": realization_id, "executor": executor, "requested_at": requested_at,
         "stopped_at": stopped_at, "outcome": outcome, "targets": targets, **({"error": error} if error else {}),
+        **({"reason": reason} if reason else {}),
     }))
     return path
 

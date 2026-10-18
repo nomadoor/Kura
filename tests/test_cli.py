@@ -1130,8 +1130,8 @@ class DoctorDockerTests(unittest.TestCase):
                         backing_kind="wsl2_vhdx",
                         linux_free_bytes=900 * 1024**3,
                         linux_total_bytes=1000 * 1024**3,
-                        host_free_bytes=90 * 1024**3,
-                        effective_free_bytes=90 * 1024**3,
+                        host_free_bytes=15 * 1024**3,
+                        effective_free_bytes=15 * 1024**3,
                         confidence="estimated",
                         mount={"available": True},
                     )
@@ -1153,8 +1153,8 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
-            self.assertEqual(payload["storage"]["F:"]["effective_free_bytes"], 90 * 1024**3)
-            self.assertIn(f"{root} has only 90 GiB effective free on F:; a local Docker launch requires at least 100 GiB (docker.min_free_gb)", payload["warnings"])
+            self.assertEqual(payload["storage"]["F:"]["effective_free_bytes"], 15 * 1024**3)
+            self.assertIn(f"{root} has only 15 GiB effective free on F:; a local Docker launch requires at least 20 GiB (docker.min_free_gb)", payload["warnings"])
 
     def test_doctor_disk_and_local_launch_share_one_free_space_floor(self) -> None:
         for min_free_gb, short in ((40, False), (60, True)):
@@ -6016,26 +6016,26 @@ class DockerLifecycleTests(unittest.TestCase):
         run = {"id": "r", "type": "train", "backend": {"name": "ai-toolkit"}, "compute": {"executor": "docker"}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)), \
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(10)), \
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 short = _local_disk_preflight_report(run, root, {}, {})
-                enough = _local_disk_preflight_report(run, root, {"docker": {"min_free_gb": 50}}, {})
+                enough = _local_disk_preflight_report(run, root, {"docker": {"min_free_gb": 5}}, {})
                 # The launch's own preflight (dry runs included) does not run the disk check twice.
                 shared = [item for item in collect_run_preflight(run, root, config={}, executor="docker") if item["check"] == "disk"]
         self.assertEqual(shared, [])
         self.assertEqual([item["severity"] for item in short], ["error"])
-        self.assertIn("requires at least 100 GiB", short[0]["fact"])
+        self.assertIn("requires at least 20 GiB", short[0]["fact"])
         self.assertEqual([item["severity"] for item in enough], ["info"])
         self.assertIn("passes", enough[0]["fact"])
 
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
-                with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(10)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                with self.assertRaisesRegex(ValueError, "requires at least 20 GiB"):
                     _local_launch_disk_preflight(root, {"type": "train"}, {})
-                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": 50}})
-        self.assertEqual(payload["required_gib"], 50)
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": 5}})
+        self.assertEqual(payload["required_gib"], 5)
 
     def test_local_launch_disk_preflight_counts_estimated_hf_downloads(self) -> None:
         run = {

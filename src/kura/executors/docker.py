@@ -765,10 +765,13 @@ def reconcile_docker(
                 state = "unknown"
             detail = _redact_secret_text(str(docker_state.get("Error"))) if docker_state.get("Error") else None
         container_exit_code = None
-        if state in ("completed", "failed") and _stopped_on_request(run_dir, realization["id"], finished_at=ended):
+        stop_reason = None
+        stop = _stop_that_ended(run_dir, realization["id"], finished_at=ended) if state in ("completed", "failed") else None
+        if stop is not None:
             # `kura run stop` ends a run as interrupted on every executor; the exit code the
             # stop signal caused is kept for the record, not taken as the trainer's result.
             state, container_exit_code, exit_code = "interrupted", exit_code, None
+            stop_reason = stop.get("reason") if isinstance(stop.get("reason"), str) else None
         observation = {
             "realization_id": realization["id"],
             "observed_at": observed_at,
@@ -783,6 +786,7 @@ def reconcile_docker(
             # later reconcile can finish this realization's handoff cleanup.
             "container_missing": container_missing,
             **({"container_exit_code": container_exit_code} if container_exit_code is not None else {}),
+            **({"stop_reason": stop_reason} if stop_reason else {}),
         }
         recorded = False
 
@@ -798,6 +802,8 @@ def reconcile_docker(
             if latest.get("state") not in TERMINAL_STATES:
                 visible_state = "publishing" if state == "completed" else state
                 latest.update({"state": visible_state, "exit_code": exit_code, "ended": ended})
+                if stop_reason:
+                    latest["stop_reason"] = stop_reason
                 if state in TERMINAL_STATES:
                     latest["execution_state"] = state
                     latest["publication_state"] = "pending"
@@ -904,11 +910,11 @@ def reconcile_docker(
         return status
 
 
-def _stopped_on_request(run_dir: Path, realization_id: str, *, finished_at: Any = None) -> bool:
-    """Whether a stop of this realization ended it: a `stop` record with outcome stopped, requested
+def _stop_that_ended(run_dir: Path, realization_id: str, *, finished_at: Any = None) -> dict[str, Any] | None:
+    """The stop that ended this realization, if one did: a `stop` record with outcome stopped, requested
     before the container finished. A trainer that had already finished keeps its own result."""
     finished = _parse_time(finished_at)
-    for path in (run_dir / "realizations").glob(f"{realization_id}.stop-*.json"):
+    for path in sorted((run_dir / "realizations").glob(f"{realization_id}.stop-*.json")):
         try:
             record_ = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -917,8 +923,8 @@ def _stopped_on_request(run_dir: Path, realization_id: str, *, finished_at: Any 
             continue
         requested = _parse_time(record_.get("requested_at"))
         if finished is None or requested is None or requested <= finished:
-            return True
-    return False
+            return record_
+    return None
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -931,7 +937,8 @@ def _parse_time(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.astimezone()
 
 
-def stop_docker(run_dir: Path) -> dict[str, Any]:
+def stop_docker(run_dir: Path, *, reason: str | None = None) -> dict[str, Any]:
+    """Stop the run's container and record the stop, with the reason when Kura itself asked for it (the disk watch)."""
     status = _load_status(run_dir)
     name = status.get("container_id") or status.get("container_name")
     if not isinstance(name, str):
@@ -947,8 +954,8 @@ def stop_docker(run_dir: Path) -> dict[str, Any]:
     if result.returncode:
         error = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker stop failed")
         write_stop_record(run_dir, realization_id, executor="docker", targets=[{"container": name, "result": "failed"}],
-                          requested_at=requested_at, stopped_at=None, outcome="failed", error=error)
+                          requested_at=requested_at, stopped_at=None, outcome="failed", error=error, reason=reason)
         raise ValueError(error)
     write_stop_record(run_dir, realization_id, executor="docker", targets=[{"container": name, "result": "stopped"}],
-                      requested_at=requested_at, stopped_at=_now(), outcome="stopped")
+                      requested_at=requested_at, stopped_at=_now(), outcome="stopped", reason=reason)
     return reconcile_docker(run_dir)
