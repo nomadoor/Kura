@@ -25,6 +25,10 @@ why, so it is not raised again.
 - 2026-10-17 | HF cache check | `hf_cached_file` strips a ref file's trailing whitespace and huggingface_hub does not, so a hand-edited ref could read as cached on the host and not in the container | review of the sd-scripts acceptance fixes pull request | -
 - 2026-10-17 | tests | No test covers a CLI writer without `KURA_RUNNER_EPOCH` rewriting an old `epoch` to `runner_epoch`, or a host-side parity test of `hf_cached_file` against `try_to_load_from_cache` where huggingface_hub is installed | review of the sd-scripts acceptance fixes pull request | -
 - 2026-10-17 | RunPod recovery | RunPod collection does not bring back `recovery/` (only outputs, checkpoints, samples, metrics), so an Anima native recovery copy made on a failed RunPod run stays on the Pod | review of the sd-scripts acceptance fixes pull request | P7
+- 2026-10-18 | one owner | `_trainer_download_estimate` calls `adapter.requirements` directly instead of `model_requirements(run)`, and a plan computes the requirements twice | review of the unmeasured-download change | -
+- 2026-10-18 | one owner | A GiB setting is interpreted in three places: `_declared_gib`, `_configured_gib`, and the `*_gb` check in `validate_train_run_fields` | review of the unmeasured-download change | -
+- 2026-10-18 | plan JSON | `trainer_downloads` appears only inside the disk payloads' `estimates`, while the disk cache has its own top-level plan section | review of the unmeasured-download change | P11
+- 2026-10-18 | tests | No test covers: a declared `safety.model_download_estimate_gb` actually refusing on local Docker and on RunPod, AI-Toolkit with a local-path `model.base` giving no download warning, and the RunPod plan output showing the same warning and info lines as Docker | review of the unmeasured-download change | P8
 
 ## Rejected
 

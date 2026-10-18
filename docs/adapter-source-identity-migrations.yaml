@@ -10,7 +10,7 @@ description: >-
 records:
   - id: declared-model-download-runpod-executor-2026-10-18
     executor: runpod
-    reason: 'The RunPod container-disk check counts the model files AI-Toolkit downloads itself at safety.model_download_estimate_gb when the run declares it, through the one helper that also sizes a declared disk cache; an undeclared download adds nothing, as before, and is shown in the plan as not counted. No recorded smoke declares the key, so each would stage, launch, run, and collect exactly as it did; the Pod, the transfer, the trainer command, output collection, and every record are unchanged.'
+    reason: 'The executor identity changes because run_envelope.py''s TRAIN_RUN_SCHEMA gains one safety key, safety.model_download_estimate_gb. The RunPod container-disk check counts the model files AI-Toolkit downloads itself at safety.model_download_estimate_gb when the run declares it, through the one helper that also sizes a declared disk cache; an undeclared download adds nothing, as before, and is shown in the plan as not counted. No recorded smoke declares the key, so each would stage, launch, run, and collect exactly as it did; the Pod, the transfer, the trainer command, output collection, and every record are unchanged.'
     behavior_changed: false
     evidence_ids:
     - sd-scripts-conformance-runpod-2026-10-11

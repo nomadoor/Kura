@@ -25,7 +25,7 @@ class BackendResolvedModelTests(unittest.TestCase):
         local = _model_download_preflight_report(run, {}, executor="docker", local_cache=cache)[0]["fact"]
         remote = _model_download_preflight_report(run, {}, executor="runpod", local_cache=cache)[0]["fact"]
         self.assertIn(f"into the Hugging Face cache at {cache} (diffusers repositories in hub/, single files in ai-toolkit-models/)", local)
-        self.assertIn(f"into the Pod's Hugging Face cache ({HF_CACHE_CONTAINER_PATH}) (diffusers repositories in hub/", remote)
+        self.assertIn(f"into the Pod's Hugging Face cache at {HF_CACHE_CONTAINER_PATH} (diffusers repositories in hub/", remote)
         for fact in (local, remote):
             self.assertIn("not counted in the disk estimate (often 10–30 GB)", fact)
 

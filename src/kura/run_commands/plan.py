@@ -555,7 +555,7 @@ def _trainer_download_estimate(run: dict[str, Any], *, executor: str, local_cach
         sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
         # The trainer's MODELS_PATH sits at the same place inside the cache on every executor.
         inside_cache = PurePosixPath(AI_TOOLKIT_MODELS_PATH).relative_to(HF_CACHE_CONTAINER_PATH)
-        cache = f"the Pod's Hugging Face cache ({HF_CACHE_CONTAINER_PATH})" if executor == "runpod" else f"the Hugging Face cache at {local_cache}"
+        cache = f"the Pod's Hugging Face cache at {HF_CACHE_CONTAINER_PATH}" if executor == "runpod" else f"the Hugging Face cache at {local_cache}"
         written = (
             f"the trainer downloads {sources} itself before the first step into {cache} "
             f"(diffusers repositories in hub/, single files in {inside_cache}/), "

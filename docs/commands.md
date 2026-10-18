@@ -129,12 +129,13 @@ Backend-native output validators remain responsible for adapter-specific tensor
 keys and compatibility; this structural publication check does not judge LoRA
 quality or prove that the model is useful.
 
-AI-Toolkit still acquires its own base and companion models. Many families
-resolve `model.base` to files of other repositories and download them into the
-trainer's `MODELS_PATH`, which Kura sets to `ai-toolkit-models/` inside the
-Hugging Face cache (`/workspace/cache/huggingface/ai-toolkit-models` in the
-container, under `docker.hf_cache` on the host), checked writable before the
-training command starts. Those files land on the drive the Hugging Face cache
+AI-Toolkit still acquires its own base and companion models, into the Hugging
+Face cache (`/workspace/cache/huggingface` in the container, `docker.hf_cache`
+on the host): diffusers repositories go to `hub/`, and the single files many
+families resolve `model.base` to (files of other repositories) go to the
+trainer's `MODELS_PATH`, which Kura sets to `ai-toolkit-models/` inside that
+cache (`/workspace/cache/huggingface/ai-toolkit-models` in the container),
+checked writable before the training command starts. Those files land on the drive the Hugging Face cache
 uses and are shared by every workspace using that cache; runs compiled earlier
 keep their frozen `cache/ai-toolkit/models` path, which `kura cleanup cache`
 lists as legacy. The model requirement records `model.base` as a
