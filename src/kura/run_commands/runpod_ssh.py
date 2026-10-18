@@ -1021,7 +1021,8 @@ def _pull_remote_training_state_items(
             continue
         total_size = sum(entry.get("size") for entry in files if isinstance(entry, dict) and isinstance(entry.get("size"), int))
         config = _workspace_config()
-        ensure_free_bytes(pending_root, _local_reserve_bytes(run_dir, config) + total_size, context="RunPod training-state pull", config=config)
+        # Twice the state: the pulled `.partial` copy stays on disk while publish_training_state copies it into the store.
+        ensure_free_bytes(pending_root, _local_reserve_bytes(run_dir, config) + 2 * total_size, context="RunPod training-state pull", config=config)
         partial = pending_root / f".{name}.partial"
         if partial.exists():
             shutil.rmtree(partial)

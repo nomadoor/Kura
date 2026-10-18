@@ -230,7 +230,8 @@ class StatePublicationParityTests(unittest.TestCase):
             with patch.object(runpod_ssh, "_workspace_config", return_value={"docker": {"min_free_gb": 3}}), \
                     patch.object(runpod_ssh, "ensure_free_bytes", side_effect=Gate) as ensure_free, self.assertRaises(Gate):
                 _pull_remote_training_state_items(run_dir, {"ip": "example", "port": 22, "key": root / "key"}, workspace="/workspace", items=[item])
-        self.assertEqual(ensure_free.call_args.args[1], 3 * 1024**3 + 5)
+        # The pulled copy and the store's copy are on disk at once.
+        self.assertEqual(ensure_free.call_args.args[1], 3 * 1024**3 + 2 * 5)
         self.assertEqual(ensure_free.call_args.kwargs["context"], "RunPod training-state pull")
 
     @unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("python"), "a Pod runs this under Linux bash and python")

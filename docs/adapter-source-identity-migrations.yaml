@@ -10,7 +10,7 @@ description: >-
 records:
   - id: runpod-pulls-keep-local-reserve-2026-10-18
     executor: runpod
-    reason: "The executor identity changes because run_commands/runpod_ssh.py retires runpod.download_min_free_gb (docs/adr/reclaimable-data.md): the local free-space gates of a RunPod download and of the training-state and output pulls now require the local reserve (local_reserve_gib: docker.min_free_gb, raised by the run's safety.max_run_disk_gb) plus what they write, instead of the retired 50 GiB setting and fixed 1, 5, and 10 GiB margins. Only the host's refusal threshold before a transfer changes; the Pod, the input transfer, Pod-side verification, the trainer command, the bytes collected, the stop, and every record are unchanged, so each recorded smoke would run exactly as it did."
+    reason: "The executor identity changes because run_commands/runpod_ssh.py retires runpod.download_min_free_gb (docs/adr/reclaimable-data.md): the local free-space gates of a RunPod download and of the training-state and output pulls now require the local reserve (local_reserve_gib: docker.min_free_gb, raised by the run's safety.max_run_disk_gb) plus what they write (twice the size for a training-state pull, whose pulled copy stays on disk while the store copies it), instead of the retired 50 GiB setting and fixed 1, 5, and 10 GiB margins. Only the host's refusal threshold before a transfer changes; the Pod, the input transfer, Pod-side verification, the trainer command, the bytes collected, the stop, and every record are unchanged, so each recorded smoke would run exactly as it did."
     behavior_changed: false
     evidence_ids:
     - sd-scripts-conformance-runpod-2026-10-11
@@ -55,7 +55,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: a6778ab79f6a3d1ed6d88ff8f8d1636df1b027516976ceb1888c26f9cf869edd
+      value: 58e2a35d353c9a7e90fb52a2a6c8fcb054a9e05ee1a85747d81e7ceb39964fe3
   - id: sd-scripts-backlog-batch-2026-10-18
     backend: sd-scripts
     reason: >-
