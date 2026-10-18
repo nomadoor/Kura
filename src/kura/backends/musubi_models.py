@@ -8,7 +8,7 @@ from typing import Any
 
 from kura.container_scripts import script_source
 from kura.backends.common import MUSUBI_ARCHITECTURES, _musubi_architecture, _musubi_backend_override
-from kura.backends.shared import _truthy, download_specs_for, explicit_model_paths, model_downloads, model_source_facts, recorded_model_source
+from kura.backends.shared import _truthy, download_specs_for, explicit_model_paths, family_card_hint, model_downloads, model_source_facts, recorded_model_source
 from kura.provenance import artifact_pinning
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
@@ -85,7 +85,7 @@ def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
     clean = _musubi_explicit_model_paths(override)
     clean.update(musubi_model_download_specs(run)[1])
     if not clean:
-        raise ValueError("Musubi Tuner requires model_paths, model_downloads, or model_bundle")
+        raise ValueError(f"Musubi Tuner requires model_paths, model_downloads, or model_bundle; {family_card_hint(_musubi_architecture(run))}")
     return clean
 
 

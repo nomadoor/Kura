@@ -175,7 +175,8 @@ not a list of what Kura can train: which models a backend accepts comes from
 musubi-tuner and sd-scripts). Card names are not selector values (ai-toolkit
 `sd1` is the `sd15` card); `training-parameter-planning` maps them and says how
 to write `model.base`, which ai-toolkit trains from (sd-scripts and
-musubi-tuner take their weights from `backend.config`). A family without a card can still be trained: say
+musubi-tuner take their weights from `backend.config`; a card's `Model files`
+section lists the `model_downloads` a recorded run trained from). A family without a card can still be trained: say
 once that there is no card, then work from upstream primary sources and the
 user's card, and record what you learn in the run's `notes.md`.
 

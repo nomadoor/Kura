@@ -22,6 +22,38 @@ source: owner (2026-08-15)
   initialization.
   source: run 20260803-2140_vivi-anima-7e5-2000_d8d3
 
+## Model files
+
+- sd-scripts `architecture: anima` (both `mode: lora` and `mode:
+  controlnet_lllite`) trained from these Base files, pinned to one revision.
+  Write them in the run's `backend.config` next to your other settings:
+
+  ```yaml
+  backend:
+    name: sd-scripts
+    config:
+      architecture: anima
+      model_downloads:
+        dit:
+          repo: circlestone-labs/Anima
+          filename: split_files/diffusion_models/anima-base-v1.0.safetensors
+          revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+        qwen3:
+          repo: circlestone-labs/Anima
+          filename: split_files/text_encoders/qwen_3_06b_base.safetensors
+          revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+        vae:
+          repo: circlestone-labs/Anima
+          filename: split_files/vae/qwen_image_vae.safetensors
+          revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+  ```
+
+  These are the files of Kura's real smokes `sd-scripts-anima-lora` and
+  `sd-scripts-anima-lllite`, each of which completed a local Docker optimizer
+  step with a published output.
+  source: real smoke sd-scripts-anima-lora (evidence sd-scripts-anima-lora-2026-09-29)
+  source: real smoke sd-scripts-anima-lllite (evidence sd-scripts-anima-lllite-2026-09-29)
+
 ## character
 
 - learning rate: start from 7e-5 with a constant scheduler for a small

@@ -64,7 +64,10 @@ Where the weights come from depends on the backend:
   never combined with `model_downloads`. `model.base` is optional and only a
   label. For musubi-tuner `architecture: flux2`, `model_version` alone picks the
   variant; a bundle or a Klein name in `model.base` for another variant is
-  refused. `backend.config.architecture` says what the weights are.
+  refused. `backend.config.architecture` says what the weights are. Kura keeps
+  no list of default weights: a card's `Model files` section, when it has one,
+  gives the `model_downloads` entries a recorded run trained from, and a
+  refusal for a missing model role points there.
 
 The family cards are named after the family, not the selector. The selector
 values each shipped card covers:
@@ -79,6 +82,7 @@ values each shipped card covers:
 | `krea2` | `krea2` | — | `krea2` |
 | `iris3b` | `iris3b` | — | — |
 | `moss_image` | `moss_image:base` | — | — |
+| `zimage` | `zimage` | — | `zimage` |
 
 Every other selector value `kura run capabilities <backend>` lists has no
 shipped card; a user card in `knowledge/model-families/` may cover it. For a

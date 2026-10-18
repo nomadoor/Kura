@@ -6,7 +6,66 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.check_evaluation_blocks import _is_immutable_run_artifact, candidate_paths, evaluation_errors
-from scripts.check_evaluation_knowledge import card_errors
+from scripts.check_evaluation_knowledge import KNOWLEDGE_DIR, card_errors, card_model_file_blocks, card_model_file_errors, real_smoke_recipes
+
+
+CARD_BLOCK = """# fam
+
+## Model files
+
+```yaml
+backend:
+  name: musubi-tuner
+  config:
+    architecture: zimage
+    model_downloads:
+      dit:
+        repo: Comfy-Org/z_image
+        filename: split_files/diffusion_models/z_image_bf16.safetensors
+```
+source: real smoke musubi-zimage
+"""
+
+
+class CardModelFilesTests(unittest.TestCase):
+    """A card's model_downloads block and scripts/real_smoke.py's recipe cannot drift apart."""
+
+    RECIPES = [("musubi-tuner", {"architecture": "zimage", "fp8_base": True, "model_downloads": {
+        "dit": {"repo": "Comfy-Org/z_image", "filename": "split_files/diffusion_models/z_image_bf16.safetensors"},
+    }})]
+
+    def _errors(self, text: str, recipes: list) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fam.md"
+            path.write_text(text, encoding="utf-8")
+            return card_model_file_errors(path, recipes)
+
+    def test_a_block_equal_to_a_recipe_passes(self) -> None:
+        self.assertEqual(self._errors(CARD_BLOCK, self.RECIPES), [])
+
+    def test_a_block_that_drifted_from_the_recipe_is_refused(self) -> None:
+        drifted = [("musubi-tuner", {"architecture": "zimage", "model_downloads": {
+            "dit": {"repo": "Comfy-Org/z_image", "filename": "split_files/diffusion_models/z_image_fp8.safetensors"},
+        }})]
+        errors = self._errors(CARD_BLOCK, drifted)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("fam.md", errors[0])
+        self.assertIn("scripts/real_smoke.py", errors[0])
+        self.assertEqual(self._errors(CARD_BLOCK.replace("musubi-tuner", "sd-scripts"), self.RECIPES)[0][:6], errors[0][:6])
+
+    def test_a_block_must_name_the_backend_and_model_downloads(self) -> None:
+        errors = self._errors(CARD_BLOCK.replace("  name: musubi-tuner\n", ""), self.RECIPES)
+        self.assertTrue(errors)
+
+    def test_the_shipped_cards_match_the_real_smoke_recipes(self) -> None:
+        recipes = real_smoke_recipes()
+        checked = {}
+        for card in sorted(KNOWLEDGE_DIR.glob("*.md")):
+            with self.subTest(card=card.name):
+                self.assertEqual(card_model_file_errors(card, recipes), [])
+                checked[card.stem] = len(card_model_file_blocks(card))
+        self.assertGreaterEqual(checked["anima"], 1)
+        self.assertGreaterEqual(checked["zimage"], 1)
 
 
 class EvaluationCheckTests(unittest.TestCase):
