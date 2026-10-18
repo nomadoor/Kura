@@ -41,7 +41,7 @@ from kura.workspace import run_path as _run_path
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
+from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, runpod_launch_settings
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, frozen_training_state_contract, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
@@ -120,22 +120,10 @@ def _adapter_display(run: dict[str, Any]) -> dict[str, Any]:
     return get_backend(backend_name).display(run)
 
 
-def _runpod_requested_gpus(compute: dict[str, Any], config: dict[str, Any]) -> Any:
-    requested = requested_gpu_types(compute)
-    if requested is not None:
-        return requested
-    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
-    configured = runpod.get("gpu_type_ids") if isinstance(runpod, dict) else None
+def _runpod_requested_gpus(run: dict[str, Any], config: dict[str, Any]) -> Any:
+    """The GPU types a RunPod launch of this run will try, in order."""
+    configured = runpod_launch_settings(run, config).get("gpu_type_ids")
     return configured if isinstance(configured, list) else NOT_SET
-
-
-def _runpod_planning_gpus(compute: dict[str, Any], config: dict[str, Any]) -> tuple[list[str], list[str]]:
-    selected = _runpod_requested_gpus(compute, config)
-    selected_ids = selected if isinstance(selected, list) else []
-    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
-    configured = runpod.get("gpu_type_ids") if isinstance(runpod.get("gpu_type_ids"), list) else []
-    candidates = list(dict.fromkeys([*selected_ids, *(item for item in configured if isinstance(item, str) and item)]))
-    return selected_ids, candidates
 
 
 def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_dir: Path | None = None) -> dict[str, Any] | None:
@@ -147,10 +135,14 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
         min_cuda_version = runpod_min_cuda_version(_plan_launch_image(run, config, run_dir)["reference"])
     except ValueError:
         min_cuda_version = runpod_min_cuda_version("")
-    selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
+    runpod_config = runpod_launch_settings(run, config)
+    selected = runpod_config.get("gpu_type_ids")
+    selected_gpu_type_ids = selected if isinstance(selected, list) else []
+    # The workspace list is measured too, as alternatives to the run's choice.
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    configured = runpod.get("gpu_type_ids") if isinstance(runpod.get("gpu_type_ids"), list) else []
+    gpu_type_ids = list(dict.fromkeys([*selected_gpu_type_ids, *(item for item in configured if isinstance(item, str) and item)]))
     policy = capacity_policy({"compute": compute})
-    runpod_config = dict(config.get("runpod", {})) if isinstance(config.get("runpod"), dict) else {}
-    runpod_config.setdefault("gpu_type_ids", gpu_type_ids)
     if gpu_type_ids:
         try:
             measurement = runpod_gpu_availability(runpod_config, gpu_type_ids, min_cuda_version=min_cuda_version)
@@ -212,7 +204,7 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], re
         "hardware": {"local_gpu": _local_gpu_payload()},
         "executor": {
             "name": _plan_value(executor),
-            "runpod_gpu_type_ids": _runpod_requested_gpus(compute, workspace_config) if executor == "runpod" else NOT_SET,
+            "runpod_gpu_type_ids": _runpod_requested_gpus(run, workspace_config) if executor == "runpod" else NOT_SET,
         },
         "model": {
             "backend": _plan_value(backend_name),
@@ -829,8 +821,7 @@ def collect_run_preflight(
     run_id = run.get("id")
     records.extend(_image_preflight_report(run, workspace_config, workspace / "runs" / run_id if isinstance(run_id, str) and run_id else None))
     if resolved_executor == "runpod":
-        runpod_config = workspace_config.get("runpod") if isinstance(workspace_config.get("runpod"), dict) else {}
-        records.extend(_runpod_disk_preflight_report(run, runpod_config, estimate))
+        records.extend(_runpod_disk_preflight_report(run, runpod_launch_settings(run, workspace_config), estimate))
     return records
 
 

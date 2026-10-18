@@ -22,23 +22,9 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.images import image_cuda_version, runpod_min_cuda_version
-from kura.run_commands.common import _effective_image, _safe_error, requested_gpu_types
+from kura.run_commands.common import _effective_image, _safe_error, runpod_launch_settings
 from kura.run_commands.runpod_ssh import record_pod_lease_deadline
 from kura.run_commands.runpod_ssh import _free_local_port, _runpod_secret_env_payload, _runpod_ssh_details, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
-
-
-def _render_runpod_config(config: dict[str, Any]) -> dict[str, Any]:
-    source_runpod_config = config.get("runpod", {})
-    runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
-    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
-    comfy_runpod = comfyui.get("runpod") if isinstance(comfyui.get("runpod"), dict) else {}
-    runpod_config.update(comfy_runpod)
-    backend_ports = runpod_config.get("backend_ports")
-    if isinstance(backend_ports, dict) and isinstance(backend_ports.get("comfyui"), list):
-        runpod_config["ports"] = backend_ports["comfyui"]
-    else:
-        runpod_config["ports"] = runpod_config.get("ports") if isinstance(runpod_config.get("ports"), list) else ["22/tcp"]
-    return runpod_config
 
 
 def _format_duration(seconds: int) -> str:
@@ -258,15 +244,10 @@ def launch_render_runpod(
         if current_status.get("state") != "compiled":
             raise ValueError("render must be compiled before launch")
         config = _workspace_config()
-        runpod_config = _render_runpod_config(config)
+        runpod_config = runpod_launch_settings(frozen, config)
         remote_image = _effective_image("comfyui")["reference"]
         if image:
             remote_image = image
-        compute = frozen.get("compute") if isinstance(frozen.get("compute"), dict) else {}
-        requested = requested_gpu_types(compute)
-        if requested is not None:
-            runpod_config["gpu_type_ids"] = requested
-            runpod_config["gpu_type_priority"] = "custom"
         # The models compile resolved (comfyui_models.resolve_model_specs); the Pod links exactly these.
         model_specs = frozen.get("comfyui_models")
         if not isinstance(model_specs, list):

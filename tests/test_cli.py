@@ -1833,6 +1833,7 @@ class RunPlanTests(unittest.TestCase):
 
     def test_runpod_capacity_plan_survives_invalid_runpod_settings(self) -> None:
         run = {
+            "backend": {"name": "musubi-tuner"},
             "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
         }
         with patch(
@@ -9920,6 +9921,19 @@ class RunPodLifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "runpod.storage_mode must be 'upload'"):
                     stage_runpod(workspace=root, run_dir=run_dir, dataset_id="missing-dataset", config={"runpod": {**self._config(), "storage_mode": mode}})
                 self.assertFalse(run_dir.exists())
+
+    def test_stage_runpod_leaves_the_gpu_choice_to_the_launch(self) -> None:
+        # A run's compute.gpu may name the GPUs the workspace leaves out; the launch decides them.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("compute: {executor: runpod, gpu: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "datasets" / "tiny" / "images").mkdir(parents=True)
+            (root / "datasets" / "tiny" / "images" / "one.txt").write_text("caption\n", encoding="utf-8")
+            record = stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config={"runpod": {}})
+            self.assertIsInstance(record, dict)
 
     def test_stop_runpod_terminates_disposable_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

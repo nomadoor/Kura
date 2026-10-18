@@ -188,7 +188,7 @@ workspace mount table.
 | `comfyui.input_stage_mode` | How render runs expose a case image to ComfyUI; ComfyUI rejects symlinked `LoadImage` inputs, so this defaults to copying | `copy` |
 | `comfyui.input_stage_cleanup` | Whether temporary staged images are removed after render | `remove_after_render` |
 | `comfyui.model_registry` | Explicit ComfyUI model name to Hugging Face repo/file mappings for RunPod render | `{}` |
-| `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods | created by `kura init` |
+| `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods: any `runpod` key except `storage_mode`, laid over `runpod` when a render launches | created by `kura init` |
 
 The local executor treats `comfyui.endpoint` as an external, user-managed
 service. Kura submits HTTP requests to that exact endpoint; it does not start or
@@ -228,6 +228,8 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.data_center_ids` | Ordered RunPod data-center candidates; Kura tries each configured data center in order | unset |
 | `runpod.data_center_priority` | Data-center ordering: `custom` uses the listed order; `availability` is accepted only for one data center because the GraphQL control plane cannot preserve availability ordering across fallback attempts | unset |
 | `runpod.country_codes` | Ordered RunPod country candidates; Kura tries each configured country within each data-center attempt | unset |
+| `runpod.ports` | Ports the Pod opens, each `<port>/http` or `<port>/tcp`. Kura reaches every Pod over SSH, so keep `22/tcp` | the image's own: `8675/http` and `22/tcp` for AI-Toolkit, `22/tcp` for the other trainers and ComfyUI |
+| `runpod.backend_ports` | Ports for one image, by image name (`ai-toolkit`, `musubi-tuner`, `sd-scripts`, `comfyui`); they replace `runpod.ports` for that image | unset |
 | `runpod.interruptible` | Whether to allow interruptible Pods | `false` |
 
 `--max-lease` and `--unattended-wait` are not `workspace.yaml` keys. They are

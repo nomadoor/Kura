@@ -787,7 +787,7 @@ def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, A
         return {}
     allowed = ["lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup", "input_dir", "input_stage_subdir", "input_stage_mode", "input_stage_cleanup"]
     if include_remote:
-        allowed.extend(("model_registry", "runpod"))
+        allowed.append("model_registry")
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
 
 

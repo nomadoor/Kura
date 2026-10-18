@@ -38,17 +38,39 @@ def requested_gpu_types(compute: Any) -> list[str] | None:
     return None
 
 
-def runpod_settings_for_adapter(source: Any, adapter: Any, image_name: str) -> dict[str, Any]:
-    """The workspace's RunPod settings as a launch of this adapter uses them.
+# The ports a ComfyUI render Pod opens when the workspace names none: SSH, which Kura reaches it through.
+RENDER_DEFAULT_PORTS = ("22/tcp",)
 
-    The adapter's ports apply unless `runpod.backend_ports` names this image.
+
+def runpod_launch_settings(run: dict[str, Any], workspace_config: dict[str, Any]) -> dict[str, Any]:
+    """The RunPod settings a launch of this run uses, before `_runpod_settings` checks them.
+
+    The plan, the training and render launches, and the runner's launch request all take them
+    from here. A render reads `runpod` with `comfyui.runpod` laid over it; a training run reads
+    `runpod`. The Pod opens `runpod.backend_ports.<image>` when it names the run's image, else the
+    section's `ports`, else the image's own (the adapter's for training, SSH for ComfyUI). A run's
+    `compute.gpu` replaces the GPU list, and Kura tries it in the order the run gives.
     """
+    source = workspace_config.get("runpod") if isinstance(workspace_config, dict) else None
     settings = dict(source) if isinstance(source, dict) else {}
+    if run.get("type") == "render":
+        comfyui = workspace_config.get("comfyui") if isinstance(workspace_config.get("comfyui"), dict) else {}
+        if isinstance(comfyui.get("runpod"), dict):
+            settings.update(comfyui["runpod"])
+        image_name, default_ports = "comfyui", RENDER_DEFAULT_PORTS
+    else:
+        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+        adapter = get_backend(backend.get("name"))
+        image_name, default_ports = adapter.image_name, adapter.default_ports
     backend_ports = settings.get("backend_ports")
     if isinstance(backend_ports, dict) and isinstance(backend_ports.get(image_name), list):
-        settings["ports"] = backend_ports[image_name]
-    else:
-        settings["ports"] = list(adapter.default_ports)
+        settings["ports"] = list(backend_ports[image_name])
+    elif not isinstance(settings.get("ports"), list):
+        settings["ports"] = list(default_ports)
+    requested = requested_gpu_types(run.get("compute"))
+    if requested is not None:
+        settings["gpu_type_ids"] = requested
+        settings["gpu_type_priority"] = "custom"
     return settings
 
 
