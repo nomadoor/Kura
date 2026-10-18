@@ -15,6 +15,9 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-18 | conformance | real_smoke `conformance --run multi-accum-2` without `--backend` exits early because Musubi Tuner has no such run; with `--backend` omitted, select the backends the run applies to | CodeRabbit on PR #250/#251 | -
+- 2026-10-18 | AI-Toolkit legacy lock | For an old AI-Toolkit lock without `training_state_managed` and accumulation 2, the plan's capability and warning still come from the current contract while managed comes from the lock's; derive all three from the lock's contract | CodeRabbit on PR #250/#251 | P11
+- 2026-10-18 | storage floor | `storage_floor_problem` rounds a fractional `docker.min_free_gb` in its message (1.5 shows as 2.0 GiB) | CodeRabbit on PR #250/#251 | -
 - 2026-10-18 | one owner | The save cadence is computed twice with different arguments: `own_write_bound` asks `checkpoint_save_cadence` with the display's value, `managed_state_save_args` with the validated config value and the backend contract | review of the disk watch / bounded estimate change | P8
 - 2026-10-18 | conformance | real_smoke `_weights_bytes` counts every `.safetensors`/`.bin`/`.pt` under outputs, so a trainer cache written there would count against the bound | review of the disk watch / bounded estimate change | P8
 - 2026-10-18 | tests | No test covers: a frozen manifest holding the retired estimate keys planning and launching, an AI-Toolkit rank (`network.linear` in native_config) reaching `own_write_bound`, or the RunPod plan text matching Docker's | review of the disk watch / bounded estimate change | P8
