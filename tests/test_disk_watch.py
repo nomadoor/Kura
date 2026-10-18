@@ -48,6 +48,13 @@ def _launched_run(*, safety: dict | None = None, workspace_config: dict | None =
         yield root, run_dir, request
 
 
+def _observed(value):
+    """A scripted observation: an exception in the script is what `reconcile_docker` raises."""
+    if isinstance(value, Exception):
+        raise value
+    return value
+
+
 class DiskWatchTests(unittest.TestCase):
     def _work(self, root: Path, request: Path, free_gib: float, *, confidence: str = "exact", states=None, clock=None, sleep=None,
               docker_data=(None, "not measured in tests"), probe=None):
@@ -65,7 +72,7 @@ class DiskWatchTests(unittest.TestCase):
         with patch.dict(os.environ), patch("kura.run_commands.plan.probe_storage", **probe_kwargs) as probe, \
                 patch("kura.executors.docker.docker_data_location", return_value=docker_data) as self.located, \
                 patch("kura.executors.docker.stop_docker", side_effect=stop) as stopped, \
-                patch("kura.executors.docker.reconcile_docker", side_effect=lambda *_a, **_k: next(states)):
+                patch("kura.executors.docker.reconcile_docker", side_effect=lambda *_a, **_k: _observed(next(states))):
             code = runner.work(root, "example", request.name, sleep=sleep or (lambda _: None), **({"clock": clock} if clock else {}))
         return code, stopped, seen_at_stop, probe
 
@@ -152,6 +159,42 @@ class DiskWatchTests(unittest.TestCase):
             _, stopped, seen, _ = self._work(root, request, 25)
         stopped.assert_called_once()
         self.assertIn("requires at least 30 GiB", seen[0]["reason"])
+
+    def test_the_watch_runs_while_docker_cannot_be_asked_about_the_container(self) -> None:
+        # A daemon that stops answering is common exactly when the disk fills: the watch goes on from the
+        # run's recorded state, and its backoff never waits longer than one watch interval.
+        failing = [OSError("docker inspect timed out")] * 3
+        states = iter([*failing, {"state": "interrupted", "publication_state": "not-required"}])
+        slept: list[float] = []
+
+        def observe(*_args, **_kwargs):
+            value = next(states)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        with _launched_run() as (root, _run_dir, request), \
+                patch("kura.executors.docker.reconcile_docker", side_effect=observe):
+            with patch.dict(os.environ), patch("kura.run_commands.plan.probe_storage", return_value=_status_of(5)), \
+                    patch("kura.executors.docker.docker_data_location", return_value=(None, "not measured in tests")), \
+                    patch("kura.executors.docker.stop_docker", return_value={}) as stopped:
+                runner.work(root, "example", request.name, sleep=slept.append)
+            reason = json.loads(runner._sibling(request, ".stop.json").read_text(encoding="utf-8"))["reason"]
+        stopped.assert_called_once()
+        self.assertIn("stopped by the disk watch", reason)
+        self.assertTrue(all(seconds <= runner.DISK_WATCH_SEC for seconds in slept))
+
+    def test_docker_data_root_is_asked_only_once_docker_answers(self) -> None:
+        # A follower that starts while Docker does not answer must not keep "not reported" for its whole life.
+        now = [0.0]
+        with _launched_run() as (root, _run_dir, request):
+            self._work(root, request, 25, states=[OSError("docker inspect timed out"), {"state": "completed", "publication_state": "completed"}],
+                       clock=lambda: now[0], sleep=lambda _: now.__setitem__(0, now[0] + 30))
+            self.assertEqual(self.located.call_count, 0)
+            self._work(root, request, 25, states=[OSError("docker inspect timed out"), {"state": "running"},
+                                                  {"state": "completed", "publication_state": "completed"}],
+                       clock=lambda: now[0], sleep=lambda _: now.__setitem__(0, now[0] + 30))
+            self.assertEqual(self.located.call_count, 1)
 
     def test_the_watch_probes_about_every_30_seconds_not_at_every_poll(self) -> None:
         now = [0.0]

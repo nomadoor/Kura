@@ -732,20 +732,23 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
         except (OSError, ValueError) as exc:
             failures += 1
             _log(f"{run_dir.name}: could not observe the container ({exc}); retrying")
-            sleep(min(poll_sec * 2 ** min(failures, 6), 300))
-            continue
-        if run_finished(status):
+            # The run's recorded state stands in: Docker often stops answering exactly when the disk fills,
+            # so the watch goes on, and the backoff never outlasts one watch interval.
+            status = None
+        if status is not None and run_finished(status):
             _log(f"{run_dir.name}: finished as {status.get('state')}")
             _notify_finished(run_dir, request, status)
             return 0
-        if status.get("state") == "running" and clock() >= next_disk_check:
+        state = (status if status is not None else _status(run_dir)).get("state")
+        if state == "running" and clock() >= next_disk_check:
             next_disk_check = clock() + DISK_WATCH_SEC
-            if _disk_watch(workspace, run_dir, request, unmeasured_said, docker_data):
+            if _disk_watch(workspace, run_dir, request, unmeasured_said, docker_data, docker_answered=status is not None):
                 continue  # the stop it asked for is carried out at once
-        sleep(poll_sec)
+        sleep(poll_sec if status is not None else min(poll_sec * 2 ** min(failures, 6), DISK_WATCH_SEC))
 
 
-def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str], docker_data: dict[str, Path | None]) -> bool:
+def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str], docker_data: dict[str, Path | None],
+                *, docker_answered: bool = True) -> bool:
     """Ask for the run's stop, with the reason, when a store it writes to is below the reserve.
 
     The stop request holds the reason before `docker stop` runs (run-records ADR, decision 1);
@@ -754,7 +757,8 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str], d
     the watch tries again at its next check. `said` keeps a store whose backing could not be
     measured, or the same reason it could not check, from being logged at every check. `docker_data`
     keeps where Docker keeps its data, asked once per follower: `docker_data_location` runs
-    `docker info`, too slow for every check."""
+    `docker info`, too slow for every check. It is asked only once Docker has answered
+    (`docker_answered`); until then the other stores are watched without it."""
     from kura.executors.docker import docker_data_location
     from kura.run_commands.plan import docker_data_unwatched_text, local_reserve_problem
     from kura.storage import RECLAIM_POINTER
@@ -764,13 +768,13 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str], d
     if _sibling(request, ".stop.json").exists():
         return False
     try:
-        if "root" not in docker_data:
+        if "root" not in docker_data and docker_answered:
             docker_data["root"], unseen = docker_data_location()
             if docker_data["root"] is None:
                 _log(f"{run_dir.name}: {docker_data_unwatched_text(unseen)}")
         config = workspace_config(workspace)
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml") or {}
-        problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config, docker_data["root"])
+        problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config, docker_data.get("root"))
     except (OSError, ValueError, YAMLError) as exc:
         message = f"{run_dir.name}: the disk watch could not check free space ({exc}); trying again"
         if message not in said:
