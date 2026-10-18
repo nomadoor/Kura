@@ -162,8 +162,11 @@ start it. Before a run that may download multi-GB models, run
 or the plan warns about checkpoints, address that before launching
 (`local-disk-safety`).
 
-Cleanup is guarded. Show `kura cleanup ...` dry-runs before deleting, and never
-delete datasets, outputs, downloads, or final artifacts unless the user asks.
+Cleanup is guarded. `kura cleanup plan` lists what can be freed and what each
+item costs to recover; present it by effect, get one yes, and apply it in one
+`kura cleanup` invocation (`local-disk-safety`). Never delete datasets or a
+run's outputs (checkpoints, LoRAs, samples, downloads) unless the user names
+the run and asks.
 
 ## Model-family knowledge
 

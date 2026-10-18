@@ -14,8 +14,13 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura init` | Create a workspace in the current directory (folders, `workspace.yaml`, your `knowledge/`), refusing inside another workspace, and list what this machine still needs |
 | `uv run kura secrets set <NAME>` | Store one secret (such as `RUNPOD_API_KEY` or `HF_TOKEN`) in the user-level secrets file, reading it with hidden input in your own terminal; `--workspace` stores it in this workspace's `.env.local` instead, which overrides the user file here; `--stdin` reads it from a pipe |
 | `uv run kura doctor secrets` | Show which secrets are set and where (environment, `.env.local`, or the user file), never their values |
-| `uv run kura cleanup all` | Preview local cache, run, and Docker cleanup targets |
-| `uv run kura cleanup cache --yes` | Delete Kura-managed local model/cache data after previewing it |
+| `uv run kura cleanup plan` | List what can be freed, by what deleting costs: free (nothing), download (downloaded again when needed), resume data (that run can no longer be resumed; its LoRAs stay); each item with its size, the runs that use it, and when it was last used. `--outputs` also lists each finished run's outputs and checkpoints (never counted as reclaimable); `--json` prints the inventory as data. The Hugging Face cache is listed even outside the workspace |
+| `uv run kura cleanup --yes` | Free the free class: finished runs' scratch data, leftover dataset views, model links, Docker build cache, stopped Kura containers and volumes. Every apply frees it; without `--yes` it only shows what it would do |
+| `uv run kura cleanup --models <id>... --yes` | Also remove these models from the Hugging Face cache (`--models unreferenced`: every model no run record names); a model an unfinished run uses is refused |
+| `uv run kura cleanup --images old --yes` | Also remove Kura images that are not the current pin, an `images.<name>` override, or frozen in an unfinished run |
+| `uv run kura cleanup --resume-data <run>... --yes` | Also remove these finished runs' training states (`finished`: every finished run's); states a continuation references stay, and every LoRA stays |
+| `uv run kura cleanup --archive-outputs <run> --to <dir> --yes` | Move a finished run's `outputs/` and `downloads/` to `<dir>/<run>`; its records stay and a record in `realizations/` says where they went |
+| `uv run kura cleanup --checkpoints <run> --keep <file>... --yes` | Remove that finished run's checkpoints except the ones named (a path under `outputs/` or a file name); samples and state folders stay |
 | `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
 | `uv run kura fix-links` | Preview repair for Kura symlinks with container-private targets |
 | `uv run kura --version` | Print the installed Kura version |
@@ -49,8 +54,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run resume <source-run> --to-step <T> [--artifact <id>]` | Create a derived draft toward absolute logical step `T`, optionally selecting an older valid state |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
-| `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
-| `uv run kura run prune --docker-containers --docker-volumes` | Also clean up Kura-managed stopped containers/volumes (add `--yes` to delete) |
+| `uv run kura run prune <run-id>...` | Preview deleting whole finished runs, outputs and records included (add `--yes` to delete); Kura's one whole-run delete |
 
 Compile after editing `run.yaml`, review `run plan`, and obtain the single
 launch approval. After that explicit approval, a non-interactive agent uses
@@ -137,8 +141,8 @@ trainer's `MODELS_PATH`, which Kura sets to `ai-toolkit-models/` inside that
 cache (`/workspace/cache/huggingface/ai-toolkit-models` in the container),
 checked writable before the training command starts. Those files land on the drive the Hugging Face cache
 uses and are shared by every workspace using that cache; runs compiled earlier
-keep their frozen `cache/ai-toolkit/models` path, which `kura cleanup cache`
-lists as legacy. The model requirement records `model.base` as a
+keep their frozen `cache/ai-toolkit/models` path, which `kura cleanup plan`
+lists as a download (`cache/ai-toolkit`). The model requirement records `model.base` as a
 `backend-resolved-selector` (older locks say `huggingface-repository`), and the
 settings that steer resolution stay in `resolved/ai-toolkit.yaml`. After the
 trainer ends, Kura lists every file under `MODELS_PATH` (path, size, and mtime,

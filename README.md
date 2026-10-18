@@ -125,12 +125,11 @@ uv run kura run watch <run-id>  # one run in detail
 None of these go into Git. If disk space is a concern, you can look first without changing anything:
 
 ```sh
-uv run kura doctor disk   # what uses how much space (read-only)
-uv run kura cleanup all   # what can be removed (add --yes to delete)
-uv run kura run prune     # older training runs (add --yes to delete)
+uv run kura doctor disk    # what uses how much space (read-only)
+uv run kura cleanup plan   # what can be freed, and what each item costs to get back (read-only)
 ```
 
-To free the model cache, delete `cache/huggingface/` (or the directory `docker.hf_cache` names). Models are downloaded again when needed.
+`kura cleanup plan` groups what can be freed by what deleting it costs: temporary data (nothing), models and old images (downloaded again when needed), and resume data (that run can no longer be continued; its LoRAs stay). `kura cleanup` frees the temporary data and only the items you name, and only shows what it would do until you add `--yes`. Your trained LoRAs, samples, and datasets are never removed unless you name the run (see the [command reference](docs/commands.md)). An agent does this for you: it shows the list, asks once, and applies it.
 
 ## Supported models
 
