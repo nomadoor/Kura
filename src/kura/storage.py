@@ -277,12 +277,43 @@ def probe_storages(paths: dict[str, Path], config: dict[str, Any] | None = None)
     return {name: probe_storage(path, config, role=name) for name, path in paths.items()}
 
 
-def ensure_free_bytes(path: Path, required_bytes: int, *, context: str, config: dict[str, Any] | None) -> None:
-    """The one host free-space gate: measures the physical backing store, not only Linux's view of it."""
-    path.mkdir(parents=True, exist_ok=True)
-    status = probe_storage(path, config)
-    if status.effective_free_bytes < required_bytes:
-        raise ValueError(
-            f"{context} needs about {-(-required_bytes // 1024**3)} GiB free at {path}, "
-            f"but only {status.effective_free_bytes // 1024**3} GiB is available on {status.backing_id}"
+def storage_floor_problem(
+    status: StorageStatus, path: Path | str, required_bytes: int, *, action: str, minimum: str | None = None,
+    risk_setting: str | None = None, risk_accepted: bool = False,
+) -> str | None:
+    """Whether a store holds `required_bytes`, for every local disk gate (a launch, an image build,
+    a RunPod stage or pull, and `kura doctor disk`).
+
+    On WSL2 a store whose Windows backing drive is unknown cannot be measured, so it is refused
+    unless the caller's risk setting accepts it. When the WSL virtual disk is full while the
+    Windows drive behind it has room, the problem says so: Linux seeing less free space than the
+    drive is normal on WSL, so this is said only when it is what stops the gate."""
+    gib = 1024**3
+    required_display_gib = (required_bytes + gib - 1) // gib
+    needed = f"{action} requires at least {required_display_gib} GiB" + (f" ({minimum})" if minimum else "")
+    if status.confidence == "unknown" and not risk_accepted:
+        return (
+            f"{path} is on storage with unknown physical backing free space; {needed}. "
+            "Set storage.host_drive in workspace.yaml" + (f" or set {risk_setting} if this is intentional" if risk_setting else "")
         )
+    if status.effective_free_bytes >= required_bytes:
+        return None
+    problem = f"{path} has only {status.effective_free_bytes // gib} GiB effective free on {status.backing_id}; {needed}"
+    host_free = status.host_free_bytes
+    if host_free is not None and status.linux_free_bytes < required_bytes <= host_free:
+        distro = os.environ.get("WSL_DISTRO_NAME") or "<distro>"
+        problem += (
+            f"; the WSL virtual disk is the limit (Linux sees {status.linux_free_bytes // gib} GiB free, "
+            f"{status.backing_id} has {host_free // gib} GiB): enlarge it from Windows with "
+            f"`wsl --manage {distro} --resize <size>` (recent WSL) or free space inside Linux"
+        )
+    return problem
+
+
+def ensure_free_bytes(path: Path, required_bytes: int, *, context: str, config: dict[str, Any] | None) -> None:
+    """The RunPod stage, download, and pull gate. A store whose backing is unknown falls back to
+    Linux free space here, where a local launch refuses it."""
+    path.mkdir(parents=True, exist_ok=True)
+    problem = storage_floor_problem(probe_storage(path, config), path, required_bytes, action=context, risk_accepted=True)
+    if problem:
+        raise ValueError(problem)

@@ -151,7 +151,11 @@ or WSL/VHDX/Windows-side operations.
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch
   fails safe unless the run explicitly sets `safety.allow_storage_risk: true`;
-  RunPod stage, download, and pull fall back to Linux free space.
+  RunPod stage, download, and pull fall back to Linux free space. Effective
+  free space is the smaller of the two, so the WSL virtual disk can be the
+  limit while the Windows drive has room; a refusal then says so and names
+  `wsl --manage <distro> --resize <size>` (recent WSL). Resizing is a
+  Windows-side operation: show the user the command, do not run it.
 - Lower those gates only when the user understands the trade-off.
 - `safety.allow_large_model_downloads` accepts only the measured download-size
   risk. It does not waive DNS, timeout, HTTP, authentication, or missing-file

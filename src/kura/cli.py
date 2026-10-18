@@ -56,8 +56,8 @@ from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
-from kura.run_commands.plan import local_min_free_gib, storage_floor_problem
-from kura.storage import probe_storage
+from kura.run_commands.plan import local_min_free_gib
+from kura.storage import probe_storage, storage_floor_problem
 from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_render_launch
 from kura.run_commands import cmd_run_logs

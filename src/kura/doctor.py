@@ -27,7 +27,7 @@ from kura.executors.docker import docker_daemon_problem
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
-from kura.storage import probe_storage, probe_storages
+from kura.storage import probe_storage, probe_storages, storage_floor_problem
 from kura.run_commands.plan import local_min_free_gib
 from kura.workspace import comfyui_endpoint, validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
@@ -295,12 +295,17 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
 
     gib = 1024**3
     issues: list[dict[str, Any]] = []
-    workspace_storage = storage_statuses.get("workspace")
-    if workspace_storage is not None and workspace_storage.effective_free_bytes < min_free_gib * gib:
+    workspace_storage = storage_statuses["workspace"]
+    # The floor a local launch keeps; an unknown backing is reported by its probe warning.
+    low = storage_floor_problem(
+        workspace_storage, workspace_root, min_free_gib * gib, action="a local Docker launch",
+        minimum="docker.min_free_gb", risk_accepted=True,
+    )
+    if low:
         issues.append(_disk_issue(
             code="workspace_effective_free_low",
             severity="warning",
-            message=f"workspace backing store has less than {min_free_gib}GiB effective free ({workspace_storage.backing_id})",
+            message=low,
             backing_id=workspace_storage.backing_id,
             backing_kind=workspace_storage.backing_kind,
             effective_free_bytes=workspace_storage.effective_free_bytes,

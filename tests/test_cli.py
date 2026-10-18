@@ -610,7 +610,7 @@ class ImageCommandTests(unittest.TestCase):
         ):
             with self.subTest(free_gib=free_gib, confidence=confidence), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                status = SimpleNamespace(effective_free_bytes=free_gib * 1024**3, backing_id="D:", confidence=confidence)
+                status = SimpleNamespace(effective_free_bytes=free_gib * 1024**3, linux_free_bytes=free_gib * 1024**3, host_free_bytes=None, backing_id="D:", confidence=confidence)
                 code, stderr, probe, docker_run = self._build_with(root=root, config={"docker": {"min_free_gb": 100}}, location=(root, ""), status=status)
                 self.assertEqual(code, expected, stderr)
                 self.assertEqual(probe.call_args.args[0], root)
@@ -1115,7 +1115,7 @@ class DoctorDockerTests(unittest.TestCase):
 
     def test_doctor_disk_warns_on_low_effective_backing_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
             (root / "cache").mkdir()
             (root / "runs").mkdir()
@@ -1154,7 +1154,7 @@ class DoctorDockerTests(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
             self.assertEqual(payload["storage"]["F:"]["effective_free_bytes"], 90 * 1024**3)
-            self.assertIn("workspace backing store has less than 100GiB effective free (F:)", payload["warnings"])
+            self.assertIn(f"{root} has only 90 GiB effective free on F:; a local Docker launch requires at least 100 GiB (docker.min_free_gb)", payload["warnings"])
 
     def test_doctor_disk_and_local_launch_share_one_free_space_floor(self) -> None:
         for min_free_gb, short in ((40, False), (60, True)):
@@ -1186,7 +1186,7 @@ class DoctorDockerTests(unittest.TestCase):
                 self.assertEqual(bool(low), short)
                 if short:
                     self.assertEqual(low[0]["threshold_bytes"], min_free_gb * 1024**3)
-                    self.assertIn(f"workspace backing store has less than {min_free_gb}GiB effective free (C:)", payload["warnings"])
+                    self.assertIn(f"has only 50 GiB effective free on C:; a local Docker launch requires at least {min_free_gb} GiB", " ".join(payload["warnings"]))
 
     def test_disk_checks_and_cleanup_follow_a_cache_outside_the_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as elsewhere:
@@ -4057,7 +4057,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
             with _wsl_with_short_host_drive(linux_free_gib=900, host_free_gib=5), \
                  patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
                  patch("kura.run_commands.runpod_ssh._run_bounded") as transfer:
-                with self.assertRaisesRegex(ValueError, "RunPod output pull needs about .* only 5 GiB is available on C:"):
+                with self.assertRaisesRegex(ValueError, "only 5 GiB effective free on C:; RunPod output pull requires at least"):
                     _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
             transfer.assert_not_called()
 
@@ -6152,7 +6152,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             with _wsl_with_short_host_drive(linux_free_gib=900, host_free_gib=5):
-                with self.assertRaisesRegex(ValueError, "test download needs about 10 GiB free .* only 5 GiB is available on C:"):
+                with self.assertRaisesRegex(ValueError, "only 5 GiB effective free on C:; test download requires at least 10 GiB"):
                     ensure_free_bytes(target, 10 * 1024**3, context="test download", config={})
                 ensure_free_bytes(target, 4 * 1024**3, context="test download", config={})
 
