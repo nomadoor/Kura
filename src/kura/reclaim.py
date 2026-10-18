@@ -63,17 +63,58 @@ def _mtime(path: Path) -> str | None:
         return None
 
 
+def read_run_status(run_dir: Path) -> dict[str, Any] | None:
+    """A run's status.json, or None when it is missing or cannot be read."""
+    try:
+        value = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def run_done(status: dict[str, Any] | None) -> bool:
+    """Whether Kura may offer or delete a run's data (the inventory and `kura run prune` ask here): its
+    status reads, it ended in a cleanup state with publication no longer pending, and no Pod of it may
+    still bill. Unknown and recovery_required wait for a person; an unreadable status counts as running."""
+    from kura.runner import _pod_left_running
+
+    return (
+        status is not None and str(status.get("state")) in CLEANUP_ELIGIBLE_STATES and run_finished(status)
+        and not _pod_left_running(status)
+    )
+
+
+def run_uses_inputs(status: dict[str, Any] | None) -> bool:
+    """Whether a run uses its models and image now or at its next launch: an unreadable status, an
+    unfinished run, or a compiled one that has not launched. A model or image it names is kept."""
+    return status is None or not run_finished(status) or status.get("state") == "compiled"
+
+
 def _runs(workspace: Path) -> dict[str, dict[str, Any]]:
     runs: dict[str, dict[str, Any]] = {}
     for run_dir in sorted((workspace / "runs").glob("*")):
         if run_dir.is_dir():
-            status = _read_json(run_dir / "status.json")
-            state = str(status.get("state") or "unknown")
-            # Finished, with publication no longer pending: what Kura may offer from a run (unknown and
-            # recovery_required wait for a person).
-            done = state in CLEANUP_ELIGIBLE_STATES and run_finished(status)
-            runs[run_dir.name] = {"dir": run_dir, "status": status, "state": state, "done": done}
+            status = read_run_status(run_dir)
+            runs[run_dir.name] = {
+                "dir": run_dir, "status": status or {}, "state": str((status or {}).get("state") or "unreadable"),
+                "done": run_done(status), "uses_inputs": run_uses_inputs(status),
+                "unfinished": status is None or not run_finished(status),
+            }
     return runs
+
+
+def became_in_use(workspace: Path, item: dict[str, Any]) -> list[str]:
+    """The runs that use an item now, read again right before it is removed (a run may have been
+    launched since the inventory was taken)."""
+    if item["kind"] == "model-links":
+        statuses = {path.name: read_run_status(path) for path in (workspace / "runs").glob("*") if path.is_dir()}
+        return sorted(name for name, status in statuses.items() if status is None or not run_finished(status))
+    if item["class"] == "download":
+        return sorted(run for run in item["referenced_by"] if run_uses_inputs(read_run_status(workspace / "runs" / run)))
+    if item["class"] in ("resume", "outputs") or item["kind"] == "run-scratch":
+        run_dir = workspace / "runs" / item["id"]
+        return [item["id"]] if run_dir.is_dir() and not run_done(read_run_status(run_dir)) else []
+    return []
 
 
 def _last_used(refs: set[str], runs: dict[str, dict[str, Any]], fallback: Path | None) -> str | None:
@@ -85,7 +126,7 @@ def _last_used(refs: set[str], runs: dict[str, dict[str, Any]], fallback: Path |
 
 
 def _in_use(refs: set[str], runs: dict[str, dict[str, Any]]) -> list[str]:
-    return sorted(run for run in refs if run in runs and not run_finished(runs[run]["status"]))
+    return sorted(run for run in refs if run in runs and runs[run]["uses_inputs"])
 
 
 def _item(cls: str, kind: str, item_id: str, *, paths: list[Path] = (), size: int | None, refs: set[str] = frozenset(),
@@ -132,7 +173,7 @@ def _free_items(workspace: Path, runs: dict[str, dict[str, Any]], docker: dict[s
     links = workspace / "cache" / "models"
     if links.is_dir() and any(links.iterdir()):
         # Links each launch writes again into the Hugging Face cache; a running run reads them.
-        active = sorted(run_id for run_id, run in runs.items() if not run_finished(run["status"]))
+        active = sorted(run_id for run_id, run in runs.items() if run["unfinished"])
         item = _item("free", "model-links", "cache/models", paths=[links], size=_sizes([links]), last_used=_mtime(links), runs=runs)
         if active:
             item["in_use_by"] = active
@@ -140,7 +181,8 @@ def _free_items(workspace: Path, runs: dict[str, dict[str, Any]], docker: dict[s
     if docker is not None:
         for usage in docker.get("usage") or []:
             if str(usage.get("Type", "")).lower() == "build cache" and (usage.get("reclaimable_bytes") or 0) > 0:
-                items.append(_item("free", "docker-build-cache", "docker-build-cache", size=usage["reclaimable_bytes"], last_used=None, runs=runs))
+                items.append(_item("free", "docker-build-cache", "docker-build-cache", size=usage["reclaimable_bytes"], last_used=None, runs=runs,
+                                   note="`docker builder prune` frees unused build cache of the whole Docker host, not only Kura's"))
         containers = doctor.stopped_kura_containers()
         if containers:
             ids = [str(item["ID"]) for item in containers if item.get("ID")]
@@ -159,14 +201,20 @@ def _repo_of_selector(value: Any) -> str | None:
     return "/".join(parts[:2]) if len(parts) >= 2 and all(parts[:2]) else None
 
 
+class UnreadableReference(ValueError):
+    """A record that may name a model or image cannot be read, so nothing it may name is offered."""
+
+
 def _model_references(run_dir: Path) -> tuple[set[str], set[str], bool]:
     """The repositories a run's model-requirement lock names, the AI-Toolkit model files its records list,
-    and whether those records list the legacy workspace directory."""
+    and whether those records list the legacy workspace directory. A record that exists but cannot be
+    read raises UnreadableReference."""
     repos: set[str] = set()
+    lock_path = run_dir / "resolved" / "model-requirements.lock.yaml"
     try:
-        lock = load_yaml(run_dir / "resolved" / "model-requirements.lock.yaml")
-    except (OSError, YAMLError):
-        lock = None
+        lock = load_yaml(lock_path) if lock_path.exists() else None
+    except (OSError, YAMLError) as exc:
+        raise UnreadableReference(f"{lock_path} cannot be read") from exc
     requirements = lock.get("requirements") if isinstance(lock, dict) else None
     for requirement in requirements if isinstance(requirements, list) else []:
         identity = requirement.get("identity") if isinstance(requirement, dict) else None
@@ -179,7 +227,11 @@ def _model_references(run_dir: Path) -> tuple[set[str], set[str], bool]:
     files: set[str] = set()
     legacy = False
     for path in (run_dir / "realizations").glob(f"*{AI_TOOLKIT_MODELS_RECORD_SUFFIX}"):
-        models = _read_json(path)
+        try:
+            models = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise UnreadableReference(f"{path} cannot be read") from exc
+        models = models if isinstance(models, dict) else {}
         models_path = str(models.get("models_path") or "")
         listed = [entry["path"] for entry in models.get("files") or [] if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
         if models_path.rstrip("/") == AI_TOOLKIT_MODELS_PATH:
@@ -189,12 +241,16 @@ def _model_references(run_dir: Path) -> tuple[set[str], set[str], bool]:
     return repos, files, legacy
 
 
-def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]], unreadable: list[str]) -> list[dict[str, Any]]:
     repo_refs: dict[str, set[str]] = {}
     file_refs: dict[str, set[str]] = {}
     legacy_refs: set[str] = set()
     for run_id, run in runs.items():
-        repos, files, legacy = _model_references(run["dir"])
+        try:
+            repos, files, legacy = _model_references(run["dir"])
+        except UnreadableReference as exc:
+            unreadable.append(str(exc))
+            continue
         for repo in repos:
             repo_refs.setdefault(repo, set()).add(run_id)
         for name in files:
@@ -209,8 +265,9 @@ def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]
             continue
         repo_id = _HUB_PREFIXES[kind] + rest.replace("--", "/")
         refs = repo_refs.get(repo_id, set()) if kind == "models" else set()
+        link = {"link_to": str(repo_dir.resolve())} if repo_dir.is_symlink() else {}
         items.append(_item("download", "hf-repository", repo_id, paths=[repo_dir], size=doctor._path_size_bytes(repo_dir), refs=refs,
-                           last_used=_last_used(refs, runs, repo_dir), runs=runs))
+                           last_used=_last_used(refs, runs, repo_dir), runs=runs, **link))
     models_root = hf_cache / AI_TOOLKIT_MODELS_DIR
     for entry in list_model_files(str(models_root)):
         name = f"{AI_TOOLKIT_MODELS_DIR}/{entry['path']}"
@@ -226,21 +283,32 @@ def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]
 
 
 def _frozen_image(run_dir: Path) -> str | None:
-    try:
-        lock = load_yaml(run_dir / "resolved" / "env.lock")
-    except (OSError, YAMLError):
+    path = run_dir / "resolved" / "env.lock"
+    if not path.exists():
         return None
+    try:
+        lock = load_yaml(path)
+    except (OSError, YAMLError) as exc:
+        raise UnreadableReference(f"{path} cannot be read") from exc
     value = lock.get("selected_image") or lock.get("local_image") if isinstance(lock, dict) else None
     return value if isinstance(value, str) and value else None
 
 
-def _image_items(config: dict[str, Any], runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _image_items(config: dict[str, Any], runs: dict[str, dict[str, Any]], unreadable: list[str]) -> list[dict[str, Any]]:
     """Kura images on this Docker host that are old: not the current pin, not a workspace override, and
     not frozen in an unfinished run. One item per image ID, removed by every reference it has."""
     repositories = {reference.split("@", 1)[0] for reference in PINNED_IMAGES.values()}
     current = {effective_image(config, name)["reference"] for name in PINNED_IMAGES} | set(PINNED_IMAGES.values())
-    frozen = {run_id: image for run_id, run in runs.items() if (image := _frozen_image(run["dir"]))}
-    unfinished = {frozen[run_id] for run_id, run in runs.items() if run_id in frozen and not run_finished(run["status"])}
+    frozen: dict[str, str] = {}
+    for run_id, run in runs.items():
+        try:
+            image = _frozen_image(run["dir"])
+        except UnreadableReference as exc:
+            unreadable.append(str(exc))
+            continue
+        if image:
+            frozen[run_id] = image
+    unfinished = {frozen[run_id] for run_id, run in runs.items() if run_id in frozen and run["uses_inputs"]}
     by_id: dict[str, dict[str, Any]] = {}
     for line in doctor._docker_json_lines(["docker", "image", "ls", "--digests", "--format", "{{json .}}"]):
         repository = str(line.get("Repository") or "")
@@ -324,19 +392,23 @@ def _totals(items: list[dict[str, Any]], classes: tuple[str, ...]) -> dict[str, 
                   "size_bytes": sum(item["size_bytes"] or 0 for item in items if item["class"] == cls)} for cls in classes}
 
 
-def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool = False) -> dict[str, Any]:
+def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool = False, docker: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything a user can free, by class, with each item's size, cost to recover, referencing runs,
-    and last use. Outputs are listed only when `outputs` asks for them, and are never in the totals."""
+    and last use. Outputs are listed only when `outputs` asks for them, and are never in the totals.
+    `docker` is a `doctor._docker_storage_summary()` the caller already has."""
     runs = _runs(workspace)
     hf_cache = local_hf_cache(workspace, config)
     notes: list[str] = []
-    docker = doctor._docker_storage_summary()
+    unreadable: list[str] = []
+    docker = docker if docker is not None else doctor._docker_storage_summary()
     if not docker.get("daemon_reachable"):
         notes.append(f"Docker items are not listed: {docker.get('diagnosis') or 'the Docker daemon is not reachable'}")
         docker = None
-    items = _free_items(workspace, runs, docker) + _model_items(workspace, hf_cache, runs)
+    items = _free_items(workspace, runs, docker) + _model_items(workspace, hf_cache, runs, unreadable)
     if docker is not None:
-        items += _image_items(config, runs)
+        items += _image_items(config, runs, unreadable)
+    if unreadable:
+        notes.append("models and images cannot be removed while a run record that may name them cannot be read: " + "; ".join(unreadable))
     items += _resume_items(workspace, runs, notes)
     if outputs:
         items += _output_items(runs)
@@ -348,6 +420,8 @@ def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool 
         "hf_cache": str(hf_cache),
         "hf_cache_inside_workspace": workspace.resolve() in hf_cache.parents,
         "notes": notes,
+        "unreadable_references": unreadable,
+        "unfinished_runs": sorted(run_id for run_id, run in runs.items() if run["unfinished"]),
     }
 
 
@@ -358,13 +432,20 @@ def select_reclaim(
     inventory: dict[str, Any], *, models: list[str] = (), images: str | None = None, resume_data: list[str] = (),
     archive: str | None = None, archive_to: str | None = None, checkpoints: str | None = None, keep: list[str] = (),
 ) -> list[dict[str, Any]]:
-    """What one `kura cleanup` invocation removes or moves: the free class always, and only the items the
-    flags name from the other classes. Raises naming every problem before anything is touched."""
+    """What one `kura cleanup` invocation removes or moves: the free class when no option names anything
+    else, otherwise only the items the options name. Raises naming every problem before anything is touched."""
     items = inventory["items"]
     problems: list[str] = []
-    actions: list[dict[str, Any]] = [
+    named = bool(models or images or resume_data or archive or checkpoints)
+    actions: list[dict[str, Any]] = [] if named else [
         {"action": "free", "item": item} for item in items if item["class"] == "free" and "in_use_by" not in item
     ]
+    if (models or images) and inventory.get("unreadable_references"):
+        problems.append("models and images are not removed while a run record that may name them cannot be read: "
+                        + "; ".join(inventory["unreadable_references"]) + "; repair or remove that run first")
+    if "unreferenced" in models and inventory.get("unfinished_runs"):
+        problems.append("--models unreferenced waits until no run is unfinished (a running trainer may be downloading models "
+                        f"no record names yet): {', '.join(inventory['unfinished_runs'])}; run it after they finish, or name models by id")
 
     def find(kinds: tuple[str, ...], item_id: str) -> dict[str, Any] | None:
         return next((item for item in items if item["kind"] in kinds and item["id"] == item_id), None)
@@ -377,7 +458,9 @@ def select_reclaim(
             continue
         for item in chosen:
             if "in_use_by" in item:
-                problems.append(f"model {token!r} is in use by unfinished run(s) {', '.join(item['in_use_by'])}; free it after they end")
+                problems.append(f"model {token!r} is in use by run(s) {', '.join(item['in_use_by'])} (unfinished, compiled, or unreadable); free it after they end")
+            elif "link_to" in item:
+                problems.append(f"model {token!r} is a link to {item['link_to']}; Kura removes only what is inside the Hugging Face cache")
             elif all(action["item"] is not item for action in actions):
                 actions.append({"action": "models", "item": item})
     if images is not None:

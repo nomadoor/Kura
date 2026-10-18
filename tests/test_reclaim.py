@@ -174,7 +174,7 @@ class ReclaimInventoryTests(unittest.TestCase):
             _write(root / "cache" / "huggingface" / "hub" / "models--org--model" / "blobs" / "x")
             code, _, err = _cleanup(["--models", "org/model", "--yes"])
             self.assertEqual(code, 1)
-            self.assertIn("in use by unfinished run(s) live", err)
+            self.assertIn("in use by run(s) live", err)
             self.assertTrue((root / "cache" / "huggingface" / "hub" / "models--org--model").is_dir())
             code, _, err = _cleanup(["--models", "org/typo"])
             self.assertEqual(code, 1)
@@ -308,6 +308,144 @@ class ReclaimApplyTests(unittest.TestCase):
         self.assertEqual(doctor["reclaimable"]["list"], "kura cleanup plan")
         self.assertTrue(all(totals[cls]["count"] == 1 for cls in ("free", "download", "resume")))
         self.assertNotIn("advisories", doctor)
+
+
+class FailClosedTests(unittest.TestCase):
+    def _model(self, root: Path, repo: str = "org/model") -> Path:
+        return _write(root / "cache" / "huggingface" / "hub" / f"models--{repo.replace('/', '--')}" / "blobs" / "x").parent.parent
+
+    def test_an_unreadable_status_keeps_the_models_its_run_names(self) -> None:
+        with _workspace() as root:
+            run_dir = _run(root, "broken", ended="2026-10-01T00:00:00+00:00", repos=("org/model",))
+            (run_dir / "status.json").write_text("{not json", encoding="utf-8")
+            model = self._model(root)
+            code, _, err = _cleanup(["--models", "org/model", "--yes"])
+            self.assertEqual(code, 1)
+            self.assertIn("broken", err)
+            self.assertTrue(model.is_dir())
+
+    def test_an_unreadable_lock_refuses_every_model_and_image_removal(self) -> None:
+        with _workspace() as root:
+            run_dir = _run(root, "done", ended="2026-10-01T00:00:00+00:00")
+            (run_dir / "resolved" / "model-requirements.lock.yaml").write_text("requirements: [unclosed", encoding="utf-8")
+            model = self._model(root, "org/other")
+            code, _, err = _cleanup(["--models", "org/other", "--yes"])
+            self.assertEqual(code, 1)
+            self.assertIn("cannot be read", err)
+            self.assertTrue(model.is_dir())
+
+    def test_a_compiled_run_uses_its_models(self) -> None:
+        with _workspace() as root:
+            _run(root, "next", state="compiled", repos=("org/model",))
+            model = self._model(root)
+            self.assertEqual(_cleanup(["--models", "org/model", "--yes"])[0], 1)
+            self.assertTrue(model.is_dir())
+
+    def test_unreferenced_waits_for_a_running_ai_toolkit_run(self) -> None:
+        with _workspace() as root:
+            _run(root, "ait", state="running", selector="black-forest-labs/FLUX.1-dev")
+            downloading = _write(root / "cache" / "huggingface" / "ai-toolkit-models" / "flux" / "t5.safetensors")
+            code, _, err = _cleanup(["--models", "unreferenced", "--yes"])
+            self.assertEqual(code, 1)
+            self.assertIn("ait", err)
+            self.assertIn("after they finish", err)
+            self.assertTrue(downloading.is_file())
+            # Named by id, a model no running run's record names can still go.
+            self.assertEqual(_cleanup(["--models", "ai-toolkit-models/flux/t5.safetensors", "--yes"])[0], 0)
+            self.assertFalse(downloading.exists())
+
+    def test_a_hub_entry_linked_outside_the_cache_is_refused(self) -> None:
+        with _workspace() as root, tempfile.TemporaryDirectory() as elsewhere:
+            target = _write(Path(elsewhere) / "models--org--linked" / "blobs" / "x").parent.parent
+            hub = root / "cache" / "huggingface" / "hub"
+            hub.mkdir(parents=True)
+            (hub / "models--org--linked").symlink_to(target, target_is_directory=True)
+            code, _, err = _cleanup(["--models", "org/linked", "--yes"])
+            self.assertEqual(code, 1)
+            self.assertIn("is a link to", err)
+            self.assertTrue((target / "blobs" / "x").is_file())
+
+    def test_a_run_launched_after_the_inventory_is_skipped(self) -> None:
+        from kura.reclaim import became_in_use
+
+        with _workspace() as root:
+            run_dir = _run(root, "done", ended="2026-10-01T00:00:00+00:00", repos=("org/model",))
+            self._model(root)
+            item = next(item for item in _items(root) if item["id"] == "org/model")
+            self.assertEqual(became_in_use(root, item), [])
+            _write(run_dir / "status.json", json.dumps({"state": "running"}))
+            self.assertEqual(became_in_use(root, item), ["done"])
+
+
+class RunDoneTests(unittest.TestCase):
+    """One rule decides whether a run's data may be offered or deleted, for the inventory and prune alike."""
+
+    def test_a_pending_publication_or_a_live_pod_keeps_a_run(self) -> None:
+        cases = {
+            "docker-pending": {"state": "completed", "publication_state": "pending", "ended": "2026-10-01T00:00:00+00:00"},
+            "runpod-live-pod": {"state": "interrupted", "pod_id": "pod-1", "ended": "2026-10-01T00:00:00+00:00"},
+        }
+        with _workspace() as root:
+            for run_id, status in cases.items():
+                run_dir = _run(root, run_id)
+                _write(run_dir / "status.json", json.dumps({**status, "last_realization": "realizations/r1.json"}))
+                _write(run_dir / "cache" / "x")
+                _state(root, f"state-step-00000010-{run_id[:6]:0<12}", run_id)
+            done = _run(root, "runpod-stopped")
+            _write(done / "status.json", json.dumps({"state": "interrupted", "pod_id": "pod-2", "pod_stopped_at": "2026-10-01T01:00:00+00:00",
+                                                     "ended": "2026-10-01T00:00:00+00:00", "last_realization": "realizations/r1.json"}))
+            _write(done / "cache" / "x")
+            listed = {(item["class"], item["id"]) for item in _items(root, outputs=True)}
+            self.assertFalse(any(run_id in {item_id for _, item_id in listed} for run_id in cases))
+            self.assertIn(("free", "runpod-stopped"), listed)
+            for run_id, expected in (("docker-pending", "publication pending"), ("runpod-live-pod", "kura run stop runpod-live-pod")):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", run_id, "--yes"])), 1)
+                self.assertIn(expected, err.getvalue())
+                self.assertTrue((root / "runs" / run_id).is_dir())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "runpod-stopped", "--yes"])), 0)
+            self.assertFalse(done.exists())
+
+
+class ApplyScopeTests(unittest.TestCase):
+    def test_a_named_option_does_only_what_it_names(self) -> None:
+        with _workspace() as root:
+            run_dir = _run(root, "done", ended="2026-10-01T00:00:00+00:00")
+            scratch = _write(run_dir / "tmp" / "x")
+            _write(root / "cache" / "huggingface" / "hub" / "models--org--m" / "blobs" / "x")
+            code, out, _ = _cleanup(["--models", "org/m"])
+            payload = json.loads(out)
+            self.assertEqual([item["action"] for item in payload["actions"]], ["models"])
+            self.assertIn("hf_cache", payload)
+            self.assertTrue(payload["hf_cache_inside_workspace"])
+            self.assertEqual(_cleanup(["--models", "org/m", "--yes"])[0], 0)
+            self.assertTrue(scratch.is_file())
+
+    def test_doctor_asks_docker_for_its_usage_once(self) -> None:
+        with _workspace():
+            with (
+                patch("kura.doctor._docker_storage_summary", return_value=NO_DOCKER) as summary,
+                patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                cmd_doctor_disk(argparse.Namespace())
+        self.assertEqual(summary.call_count, 1)
+
+    def test_run_prune_with_no_run_names_the_listing(self) -> None:
+        with _workspace(), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune"])), 2)
+        self.assertIn("kura cleanup plan --outputs", err.getvalue())
+
+    def test_the_retired_runpod_download_floor_is_dropped_by_migrate_and_named_by_validate(self) -> None:
+        from kura.workspace import migrate_workspace_config, validate_workspace_config
+
+        with self.assertRaises(ValueError) as caught:
+            validate_workspace_config({"runpod": {"download_min_free_gb": 50}})
+        self.assertIn("docker.min_free_gb", str(caught.exception))
+        migrated, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"download_min_free_gb": 50}})
+        self.assertNotIn("download_min_free_gb", migrated.get("runpod", {}))
+        self.assertTrue(any("runpod.download_min_free_gb" in note for note in notes))
 
 
 class RetiredSurfaceTests(unittest.TestCase):

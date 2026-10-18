@@ -80,13 +80,19 @@ The classes:
   leftover dataset view of a run whose container Docker reported missing, the
   model links in `cache/models`, Docker build cache, and stopped Kura
   containers and volumes. The model links are kept while a run is unfinished.
+  `docker builder prune` frees unused build cache of the whole Docker host,
+  not only Kura's; say so when other projects use Docker.
 - **download**: comes back as a download the next time a run needs it.
   Models in the Hugging Face cache (one item per repository, or per file in
   `ai-toolkit-models/`), the legacy `cache/ai-toolkit` directory, and old Kura
   Docker images (not the current pin, not an `images.<name>` override, not
-  frozen in an unfinished run). A cache outside the workspace
+  frozen in an unfinished or compiled run). A cache outside the workspace
   (`docker.hf_cache`) is listed too; it may be shared with other workspaces,
-  so say so. A model an unfinished run uses cannot be removed.
+  so say so. A model that an unfinished or compiled run names cannot be
+  removed; a run whose status or records cannot be read counts as using
+  everything, and while one exists no model or image is removed.
+  `--models unreferenced` waits until no run is unfinished: a running
+  AI-Toolkit trainer records the files it downloaded only when it ends.
 - **resume data**: the training states of a finished run, in its `outputs/`
   (the `*-state` folders) and in `artifacts/training-state/`. Removing it means
   that run can no longer be resumed; every LoRA and checkpoint stays. States a
@@ -104,8 +110,9 @@ Then:
    list commands.
 3. Get one yes for exactly what you proposed.
 4. Apply it in one invocation. Without `--yes` it only shows what it would
-   do; check that, then add `--yes`. Every `kura cleanup` invocation removes
-   the free class; the options add only the items they name:
+   do; check that, then add `--yes`. With no option it frees the free class;
+   each option does only what it names, so a proposal covering several
+   classes is applied as one command per class, all under the same yes:
 
    ```sh
    kura cleanup --yes                                  # the free class
@@ -134,6 +141,8 @@ kura run prune <run>... --yes                               # delete whole finis
   outside its state folders. Samples and state folders stay. Ask the user
   which checkpoints to keep; never pick for them.
 - `kura run prune` deletes each named run directory with everything in it.
+  It refuses a run whose publication is pending or whose Pod may still exist
+  and bill (run `kura run stop <run>` first).
   `kura run discard <run>` removes a draft or an unlaunched compiled run.
 
 Also require explicit approval for dataset deletion, `docker system prune -a`,

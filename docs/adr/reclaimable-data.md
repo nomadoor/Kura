@@ -71,8 +71,14 @@ modification time when no record names it. Age is a sort key, never a policy:
 there is no default number of days and no number of runs kept.
 
 **3. One command lists everything reclaimable, by class, with totals.**
-Applying it is one invocation naming the classes and items the user agreed
-to; without `--yes` that invocation is a dry run. The Hugging Face cache is
+Applying it names the classes and items the user agreed to, and without
+`--yes` it is a dry run. With no option it frees the free class; each other
+option removes or moves only what it names. One owner decides whether a run's
+data may be offered or deleted at all (it ended, its publication is not
+pending, and no Pod of it may still bill), for the listing and the whole-run
+delete alike. Kura fails closed: a run whose status or records cannot be read
+counts as using every model and image, and a compiled run uses the models and
+image it froze. The Hugging Face cache is
 listed even when it is outside the workspace, and its items are removed one by
 one on the user's yes, never as a whole.
 
@@ -115,8 +121,13 @@ apply. Nothing cleans up in the background.
 - The cleanup surface is reorganized around the listing command and per-class
   apply flags. Earlier cleanup targets and flags are refused with a message
   naming the replacement.
-- Archiving and removals append a record to the run's `realizations/`.
-  Readers that do not know its kind ignore it, and status still loads.
+- Archiving and removals append a record to the run's `realizations/`
+  after the effect. Readers that do not know its kind ignore it, and status
+  still loads. Kura writes no intent record first: a process killed in the
+  middle of an apply can leave a move or removal unrecorded (the files are
+  then simply gone, or at the archive destination). This is accepted because
+  the user approved the effect and nothing bills; a later listing shows the
+  current files.
 - A source run's resume data can now be freed. Resuming that run afterwards
   is refused as before, because no recoverable state exists.
 - Promises: P7 (nothing a user made is deleted without their yes, and outputs

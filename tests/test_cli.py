@@ -53,7 +53,7 @@ from kura.training_artifacts import trained_steps
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.doctor import readiness_gaps
 from kura.paths import local_docker_mounts
-from kura.storage import StorageStatus, ensure_free_bytes, probe_storage
+from kura.storage import RECLAIM_POINTER, StorageStatus, ensure_free_bytes, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -616,6 +616,7 @@ class ImageCommandTests(unittest.TestCase):
                 self.assertEqual(probe.call_args.args[0], root)
                 if expected:
                     self.assertIn(message, stderr)
+                    self.assertTrue(stderr.strip().endswith(RECLAIM_POINTER))
                     docker_run.assert_not_called()
 
     def test_image_build_says_when_it_cannot_see_dockers_data_and_stops_without_a_daemon(self) -> None:
@@ -4029,11 +4030,14 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 Path(command[-1]).write_bytes(payload)
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
-                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}, "docker": {"min_free_gb": 3}}), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes") as ensure_free, \
                  patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer), \
                  patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(item)]):
                 pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
+            # The pull keeps the local reserve plus what it writes.
+            self.assertEqual(ensure_free.call_args.args[1], 3 * 1024**3 + len(payload))
+            self.assertEqual(ensure_free.call_args.kwargs["context"], "RunPod output pull")
 
             published = run_dir / pulled[0]["path"]
             self.assertEqual(published.read_bytes(), payload)
@@ -8941,12 +8945,15 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
-                     patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
+                     patch("kura.run_commands.runpod_ssh.ensure_free_bytes") as ensure_free:
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
             finally:
                 os.chdir(previous)
 
             self.assertEqual(code, 0)
+            # The download keeps the local reserve (default 20 GiB) plus twice what it transfers.
+            gate = next(call for call in ensure_free.call_args_list if call.kwargs.get("context") == "RunPod delta download")
+            self.assertEqual(gate.args[1], 20 * 1024**3 + 2 * len(remote_exit_bytes))
             self.assertEqual(transferred, ["realizations/remote-exit-20260101.json"])
             snapshot_checkpoint = run_dir / "downloads" / "example" / "outputs" / checkpoint.name
             self.assertTrue(snapshot_checkpoint.samefile(checkpoint))

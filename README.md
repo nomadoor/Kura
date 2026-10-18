@@ -129,7 +129,7 @@ uv run kura doctor disk    # what uses how much space (read-only)
 uv run kura cleanup plan   # what can be freed, and what each item costs to get back (read-only)
 ```
 
-`kura cleanup plan` groups what can be freed by what deleting it costs: temporary data (nothing), models and old images (downloaded again when needed), and resume data (that run can no longer be continued; its LoRAs stay). `kura cleanup` frees the temporary data and only the items you name, and only shows what it would do until you add `--yes`. Your trained LoRAs, samples, and datasets are never removed unless you name the run (see the [command reference](docs/commands.md)). An agent does this for you: it shows the list, asks once, and applies it.
+`kura cleanup plan` groups what can be freed by what deleting it costs: temporary data (nothing), models and old images (downloaded again when needed), and resume data (that run can no longer be continued; its LoRAs stay). `kura cleanup` with no option frees the temporary data, each option removes only the items it names, and nothing happens until you add `--yes`. Your trained LoRAs, samples, and datasets are never removed unless you name the run (see the [command reference](docs/commands.md)). An agent does this for you: it shows the list, asks once, and applies it.
 
 ## Supported models
 

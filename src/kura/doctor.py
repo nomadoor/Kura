@@ -375,7 +375,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     # What can be freed, by class, from the owner `kura cleanup plan` lists (docs/adr/reclaimable-data.md).
     from kura.reclaim import reclaim_inventory
 
-    reclaimable = {**reclaim_inventory(workspace_root, config)["totals"], "list": "kura cleanup plan"}
+    reclaimable = {**reclaim_inventory(workspace_root, config, docker=docker_storage)["totals"], "list": "kura cleanup plan"}
 
     # Kept short: the paths that share a backing store are listed once with its free space,
     # Docker usage is one size per type, and long lists keep their count and a few samples.

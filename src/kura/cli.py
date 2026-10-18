@@ -65,7 +65,7 @@ from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
-from kura.reclaim import CLASSES, reclaim_inventory, record_reclaim, select_reclaim
+from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, run_done, select_reclaim
 from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -992,11 +992,17 @@ _CLASS_HEADINGS = {
     "outputs": "outputs (cannot be recreated; Kura never removes these on its own)",
 }
 _APPLY_HINTS = {
-    "free": "kura cleanup --yes",
+    "free": "kura cleanup --yes (with no other option)",
     "download": "kura cleanup --models <id>... | --models unreferenced | --images old --yes",
     "resume": "kura cleanup --resume-data <run>... | --resume-data finished --yes",
     "outputs": "kura cleanup --archive-outputs <run> --to <dir> --yes, kura cleanup --checkpoints <run> --keep <file>... --yes, or kura run prune <run>... --yes",
 }
+
+
+_SHARED_CACHE_NOTE = (
+    "the Hugging Face cache {} is outside this workspace and may be shared with other workspaces; "
+    "its models are listed and removed one by one, only when named"
+)
 
 
 def format_reclaim_plan(inventory: dict[str, Any]) -> str:
@@ -1023,8 +1029,7 @@ def format_reclaim_plan(inventory: dict[str, Any]) -> str:
             lines.append(f"  apply: {_APPLY_HINTS[cls]}")
     lines.extend(f"note: {note}" for note in inventory["notes"])
     if not inventory["hf_cache_inside_workspace"]:
-        lines.append(f"note: the Hugging Face cache {inventory['hf_cache']} is outside this workspace and may be shared; "
-                     "its models are listed and removed one by one, only when named")
+        lines.append("note: " + _SHARED_CACHE_NOTE.format(inventory["hf_cache"]))
     lines.append("Without --yes, `kura cleanup` only shows what it would do.")
     return "\n".join(lines)
 
@@ -1136,11 +1141,18 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         # Bytes freed: an archive moves its bytes elsewhere, and a checkpoint removal frees only the files it removes.
         "total_bytes": sum(item["remove_bytes"] if "remove_bytes" in item else 0 if item["action"] == "archive-outputs" else item["size_bytes"] or 0 for item in planned),
         "kept_in_use": [item["id"] for item in inventory["items"] if item["class"] == "free" and "in_use_by" in item],
-        "notes": inventory["notes"],
+        "hf_cache": inventory["hf_cache"],
+        "hf_cache_inside_workspace": inventory["hf_cache_inside_workspace"],
+        "notes": inventory["notes"] + ([] if inventory["hf_cache_inside_workspace"] else [_SHARED_CACHE_NOTE.format(inventory["hf_cache"])]),
     }
     if args.yes:
         applied: list[dict[str, Any]] = []
         for action in actions:
+            users = became_in_use(workspace, action["item"])
+            if users:
+                # A run was launched (or its status became unreadable) since the inventory: leave the item.
+                applied.append({"action": action["action"], "id": action["item"]["id"], "skipped": f"now in use by {', '.join(users)}"})
+                continue
             try:
                 applied.append(_apply_reclaim(workspace, inventory, action))
             except (OSError, ValueError) as exc:
@@ -1309,6 +1321,10 @@ def cmd_run_discard(args: argparse.Namespace) -> int:
 
 def cmd_run_prune(args: argparse.Namespace) -> int:
     """Delete whole finished runs the user names: Kura's one whole-run delete (docs/adr/reclaimable-data.md)."""
+    if not args.run_ids:
+        print("cannot prune runs: name the runs to delete, `kura run prune <run-id>...`; "
+              "`kura cleanup plan --outputs` lists finished runs and their outputs", file=sys.stderr)
+        return 2
     workspace = _require_workspace()
     runs_root = (workspace / "runs").resolve()
     actions: list[dict[str, Any]] = []
@@ -1321,18 +1337,20 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         if not run_dir.is_dir():
             problems.append(f"there is no run {run_id!r}; `kura cleanup plan --outputs` lists finished runs")
             continue
-        try:
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            status = {}
-        state = str(status.get("state") or "unknown") if isinstance(status, dict) else "unknown"
-        if state not in CLEANUP_ELIGIBLE_STATES:
-            problems.append(
-                f"run {run_id!r} is {state}; only a finished run ({', '.join(sorted(CLEANUP_ELIGIBLE_STATES))}) is deleted here, "
-                "and `kura run discard` removes a draft or unlaunched compiled run"
-            )
+        status = read_run_status(run_dir)
+        if not run_done(status):
+            pod_id = (status or {}).get("pod_id")
+            if isinstance(pod_id, str) and not (status or {}).get("pod_stopped_at") and not (status or {}).get("pod_missing_at"):
+                problems.append(f"run {run_id!r} has Pod {pod_id}, which may still exist and bill; run `kura run stop {run_id}` first")
+            else:
+                state = "unreadable" if status is None else f"{status.get('state') or 'unknown'}" + (
+                    f" with publication {status['publication_state']}" if status.get("publication_state") == "pending" else "")
+                problems.append(
+                    f"run {run_id!r} is {state}; only a finished run ({', '.join(sorted(CLEANUP_ELIGIBLE_STATES))}, publication "
+                    "not pending) is deleted here, and `kura run discard` removes a draft or unlaunched compiled run"
+                )
             continue
-        actions.append({"id": run_id, "state": state, "target": str(run_dir.relative_to(workspace.resolve())), "size_bytes": _path_size_bytes(run_dir)})
+        actions.append({"id": run_id, "state": status["state"], "target": str(run_dir.relative_to(workspace.resolve())), "size_bytes": _path_size_bytes(run_dir)})
     if problems:
         print("cannot prune runs: " + "; ".join(problems), file=sys.stderr)
         return 1
@@ -1638,7 +1656,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "`kura cleanup plan` lists reclaimable data in classes by what deleting costs: free (nothing), download "
             "(downloaded again when needed), and resume (that run can no longer be resumed; LoRAs stay). "
-            "`kura cleanup` applies: always the free class, plus only the items the options name. Outputs "
+            "`kura cleanup` with no option frees the free class; with options it does only what they name. Outputs "
             "(checkpoints, LoRAs, samples, downloads, records) are never removed unless an option names the run."
         ),
     )
@@ -1777,8 +1795,11 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile = run_sub.add_parser("reconcile", help="Refresh observed external state")
     reconcile.add_argument("run_id")
     reconcile.set_defaults(func=cmd_run_reconcile)
-    prune = run_sub.add_parser("prune", help="Preview or delete whole finished runs you name, outputs included (add --yes to delete)")
-    prune.add_argument("run_ids", nargs="+", metavar="RUN_ID")
+    prune = run_sub.add_parser(
+        "prune", help="Preview or delete whole finished runs you name, outputs included (add --yes to delete)",
+        description="Delete whole finished runs, outputs and records included. `kura cleanup plan --outputs` lists finished runs.",
+    )
+    prune.add_argument("run_ids", nargs="*", metavar="RUN_ID", help="the runs to delete; `kura cleanup plan --outputs` lists finished runs")
     prune.add_argument("--yes", action="store_true")
     _name_runs = "name the runs to delete: `kura run prune <run-id>...`; `kura cleanup plan --outputs` lists finished runs"
     prune.add_argument("--keep", action=_retired_option(_name_runs), nargs="?", help=argparse.SUPPRESS)
