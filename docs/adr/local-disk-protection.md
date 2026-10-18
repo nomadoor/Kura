@@ -74,7 +74,11 @@ from Hugging Face metadata (a file already in the cache counts 0), and the
 run's own weights-sized writes, bounded by `rank × 64 MiB` per weights-sized
 file on disk at once (the most checkpoints at once, the trainer's training
 state folders, and Kura's copies of them; a state counts its optimizer
-moments too). There is no per-architecture size table. The launch refuses a
+moments too). A model a recorded run measured is bounded at that run's fp32
+LoRA bytes per rank, rounded up to a whole MiB, instead (amended 2026-10-19:
+64 MiB per rank put a 100-step Z-Image run at 42 GiB for about 2.5 GB
+written); these measurements are the only size table, and a model enters it
+only from a measured run. The launch refuses a
 run when a store's free space minus the estimate is below the reserve; the
 plan shows the same numbers. The bound uses only measured facts and the
 rank, so it is never a size the user declares. It assumes linear LoRA
@@ -108,8 +112,8 @@ measured downloads and bounded writes do not fit above the reserve."
 
 ## Alternatives considered
 
-- **Keep a launch-only estimate and make it precise.** A per-architecture
-  size table and declared sizes for unmeasurable writes would still miss
+- **Keep a launch-only estimate and make it precise.** A size table for
+  every architecture and declared sizes for unmeasurable writes would still miss
   what the trainer or another program writes after launch, and every new
   model would need a table entry. The watch covers all of it with one check.
 - **Keep the 100 GiB floor as the safety margin.** It refuses runs that fit

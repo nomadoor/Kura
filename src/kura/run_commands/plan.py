@@ -487,12 +487,29 @@ def _run_adapter(run: dict[str, Any]) -> Any:
 
 
 # The run's own writes are bounded, never sized by a declared estimate (docs/adr/local-disk-protection.md,
-# decision 3): every weights-sized file on disk at once is counted at `rank × 64 MiB`. A LoRA file grows
-# with its rank; the 13 acceptance runs wrote checkpoints of 44-163 MiB at rank 16 and 267 MiB at rank 32,
-# at most 10.2 MiB per rank even in fp32 (sd-scripts and Musubi Tuner save fp32 when Kura passes no save
-# precision). The bound assumes linear LoRA modules; conv LoRA, LoKr, full-matrix training, and very large
-# models can exceed it, and the disk watch covers them.
+# decision 3): every weights-sized file on disk at once is counted at `rank ×` a size per rank. A LoRA
+# file grows linearly with its rank. A model a recorded run measured is counted at that measurement
+# (`MEASURED_WEIGHTS_MIB_PER_RANK`); any other at 64 MiB per rank: the 13 acceptance runs wrote checkpoints
+# of 44-163 MiB at rank 16 and 267 MiB at rank 32, at most 10.2 MiB per rank even in fp32 (sd-scripts and
+# Musubi Tuner save fp32 when Kura passes no save precision), and the headroom is for larger models no
+# run has measured. The bound assumes the trainer's default linear LoRA modules; conv LoRA, LoKr,
+# full-matrix training, modules added through an escape hatch, and very large models can exceed it,
+# and the disk watch covers them.
 WEIGHTS_BYTES_PER_RANK = 64 * 1024**2
+# Per backend and the backend.config values that choose the model: the fp32 LoRA bytes per rank a
+# recorded run wrote (a training state's model.safetensors, which the trainer keeps in fp32 whatever the
+# save precision), rounded up to a whole MiB, and that run. A run matches when its backend and every
+# listed value are the entry's; a model is added here only from a measured run.
+MEASURED_WEIGHTS_MIB_PER_RANK: tuple[tuple[str, dict[str, str], int, str], ...] = (
+    ("musubi-tuner", {"architecture": "zimage"}, 9,
+     "acceptance run 20261019-0750_vivi-zimage-local_887b: 280,241,816 bytes at rank 32"),
+    ("musubi-tuner", {"architecture": "flux2", "model_version": "klein-base-4b"}, 6,
+     "acceptance run 20261019-0751_vivi-klein4b-runpod_8992: 184,840,232 bytes at rank 32"),
+    ("musubi-tuner", {"architecture": "wan", "task": "t2v-1.3B"}, 6,
+     "conformance run 20261019-0326_conf-musubi-one-control_6640: 5,567,608 bytes at rank 1"),
+    ("sd-scripts", {"architecture": "sd15", "mode": "lora"}, 3,
+     "conformance run 20261019-0256_conf-sd-one-control_efc3: 9,548,360 bytes at rank 4"),
+)
 # A training state holds the weights (fp32, 4 bytes per parameter) and the optimizer's moments: AdamW's
 # two fp32 moments add 8 bytes per parameter, 8-bit AdamW (the pinned AI-Toolkit baseline's default)
 # about 2. So a state is at most 3 weights-sized fp32 files with AdamW, 1.5 with 8-bit AdamW. One rule
@@ -505,7 +522,7 @@ def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
     """The run's own weights-sized writes on disk at once, for `run_write_estimate`: the most checkpoints
     at once (`peak_checkpoints`), the training states the trainer keeps, and Kura's copies of them (made
     on the local machine, so not on a Pod), each state as `STATE_WEIGHT_FILES` files, at
-    `rank × WEIGHTS_BYTES_PER_RANK` per file. A run with no rank (`network_dim`) is not bounded."""
+    `rank × weights_bytes_per_rank(run)` per file. A run with no rank (`network_dim`) is not bounded."""
     adapter = _run_adapter(run)
     display = adapter.display(run) if adapter is not None else {}
     checkpoint = display.get("checkpoint") or {}
@@ -532,32 +549,50 @@ def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
             # publish_training_state copies a state into the artifact store, then prunes to `keep`.
             kura_copies = keep + 1
     rank = _as_positive_int(display.get("rank"))
+    per_rank, measured_for = weights_bytes_per_rank(run)
     files = checkpoints + STATE_WEIGHT_FILES * (trainer_states + kura_copies)
     bound = {
         "rank": rank, "checkpoints": checkpoints, "trainer_states": trainer_states, "kura_state_copies": kura_copies,
-        "weights_files": files, "per_file_bytes": rank * WEIGHTS_BYTES_PER_RANK if rank else None,
-        "bytes": files * rank * WEIGHTS_BYTES_PER_RANK if rank else 0,
+        "weights_files": files, "per_rank_bytes": per_rank, "measured_for": measured_for,
+        "per_file_bytes": rank * per_rank if rank else None, "bytes": files * rank * per_rank if rank else 0,
     }
     if peak is not None and peak["trainer_default_saves"]:
         bound["trainer_default_saves_not_counted"] = True
     return bound
 
 
+def weights_bytes_per_rank(run: dict[str, Any]) -> tuple[int, str | None]:
+    """The size per rank `own_write_bound` counts a weights-sized file at: the measured size of the run's
+    model (`MEASURED_WEIGHTS_MIB_PER_RANK`) and what it was measured for, else `WEIGHTS_BYTES_PER_RANK`
+    and None."""
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+    for name, values, mib, _source in MEASURED_WEIGHTS_MIB_PER_RANK:
+        if backend.get("name") == name and all(config.get(key) == value for key, value in values.items()):
+            return mib * 1024**2, name + " " + ", ".join(f"{key}={value}" for key, value in values.items())
+    return WEIGHTS_BYTES_PER_RANK, None
+
+
 def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
     """The own-writes part of a disk line: what was counted, and at what size. Only a local run has the
     disk watch, so an unbounded RunPod run is told to leave room in the container disk instead."""
-    parts = f"{bound['checkpoints']} checkpoint(s)"
+    parts = f"{bound['checkpoints']} checkpoint file" + ("" if bound["checkpoints"] == 1 else "s")
     states = bound["trainer_states"] + bound["kura_state_copies"]
     if states:
-        parts += f" + {states} training state(s) × {STATE_WEIGHT_FILES}"
+        holders = [f"{bound['trainer_states']} the trainer keeps"] if bound["trainer_states"] else []
+        if bound["kura_state_copies"]:
+            holders.append(f"{bound['kura_state_copies']} Kura copies")
+        parts += f", and {states} training states at {STATE_WEIGHT_FILES} files each ({', '.join(holders)})"
     uncounted = "; trainer-default saves not counted" if bound.get("trainer_default_saves_not_counted") else ""
     if not bound["rank"]:
         cover = ("leave room in runpod.container_disk_gb" if executor == "runpod"
                  else "the disk watch stops the run before a store falls below the reserve")
-        return (f"own writes not bounded: {bound['weights_files']} weights-sized files ({parts}), but the run sets no rank "
-                f"(network_dim); {cover}{uncounted}")
-    return (f"own writes: {bound['weights_files']} weights-sized files ({parts}) at rank {bound['rank']} × 64 MiB = "
-            f"{_preflight_bytes(bound['bytes'])}{uncounted}")
+        return (f"own writes not bounded: the run sets no rank (network_dim); {cover}. It writes "
+                f"{bound['weights_files']} weights-sized files: {parts}{uncounted}")
+    basis = f"measured for {bound['measured_for']}" if bound.get("measured_for") else "no measurement for this model"
+    return (f"own writes at most {_preflight_bytes(bound['bytes'])}: {bound['weights_files']} weights-sized files of up to "
+            f"{_preflight_bytes(bound['per_file_bytes'])} (rank {bound['rank']} × {bound['per_rank_bytes'] // 1024**2} MiB, {basis}): "
+            f"{parts}{uncounted}")
 
 
 def _plan_requirements(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -629,7 +664,7 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     steps = trained_steps(run)
     expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None:
-        return [_preflight_record("checkpoint-safety", "info", f"checkpoint cadence implies about {expected} checkpoint(s){_trained_steps_basis(run, steps)}", "run.yaml")]
+        return [_preflight_record("checkpoint-safety", "info", f"checkpoint cadence implies about {expected} step checkpoint(s){_trained_steps_basis(run, steps)}, plus the final file", "run.yaml")]
     return []
 
 
