@@ -97,7 +97,7 @@ class SurfaceContractTests(unittest.TestCase):
 
     def test_nested_fixed_maps_and_list_items_reject_unknown_keys(self) -> None:
         malformed = (
-            ({"runpod": {"object_store": {"buckett": "models"}}}, "bucket"),
+            ({"agents": {"view_image": True}}, "view_images"),
             ({"comfyui": {"runpod": {"container_disk_g": 80}}}, "container_disk_gb"),
             ({"docker": {"mounts": [{"source": ".", "target": "/workspace", "writable": True}]}}, "writable"),
         )
@@ -142,10 +142,27 @@ class SurfaceContractTests(unittest.TestCase):
         self.assertEqual(migrated["docker"], {"min_free_gb": 50})
         self.assertTrue(any("docker.build_cache_limit_gb" in note for note in notes))
 
+    def test_the_removed_runpod_storage_modes_are_refused_and_migrated(self) -> None:
+        from kura.workspace import migrate_workspace_config
+
+        validate_workspace_config({"runpod": {"storage_mode": "upload"}})
+        for mode in ("container_disk", "object_staging"):
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(ValueError, r"runpod\.storage_mode .*was removed.*'upload'.*kura workspace migrate"):
+                    validate_workspace_config({"runpod": {"storage_mode": mode}})
+                migrated, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"storage_mode": mode, "gpu_count": 1}})
+                self.assertEqual(migrated["runpod"], {"gpu_count": 1})
+                self.assertTrue(any(note.startswith(f"dropped runpod.storage_mode {mode}") and "upload" in note for note in notes), notes)
+        with self.assertRaisesRegex(ValueError, r"obsolete setting.*runpod\.object_store"):
+            validate_workspace_config({"runpod": {"object_store": {"bucket": "models"}}})
+        migrated, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"storage_mode": "upload", "object_store": {"bucket": "models"}}})
+        self.assertEqual(migrated["runpod"], {"storage_mode": "upload"})
+        self.assertTrue(any(note.startswith("dropped runpod.object_store") for note in notes), notes)
+
     def test_workspace_schema_description_exposes_nested_contract(self) -> None:
         settings = workspace_schema_description()
         self.assertEqual(settings["images"]["sd-scripts"], "string")
-        self.assertEqual(settings["runpod"]["object_store"]["bucket"], "string")
+        self.assertEqual(settings["runpod"]["storage_mode"], {"type": "string", "choices": ["upload"]})
         self.assertEqual(settings["comfyui"]["runpod"]["container_disk_gb"], "integer")
         self.assertEqual(settings["docker"]["mounts"]["list_of"]["mode"]["choices"], ["ro", "rw"])
 
@@ -154,7 +171,7 @@ class SurfaceContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "workspace.yaml").write_text("runpod:\n  object_store:\n    buckett: models\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("agents:\n  view_image: true\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             output = io.StringIO()
@@ -165,7 +182,7 @@ class SurfaceContractTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(output.getvalue())
             self.assertEqual(code, 1)
-            self.assertIn("use 'bucket'", payload["configuration_error"])
+            self.assertIn("use 'view_images'", payload["configuration_error"])
 
     def test_recipe_rejects_an_undeclared_key(self) -> None:
         with self.assertRaises(ValueError) as caught:

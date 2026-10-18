@@ -76,9 +76,10 @@ stop Pod
   rely on the Pod's preinstalled `runpodctl`; its syntax follows the version
   RunPod ships.
 - `--job-timeout 0`: wait until remote exit.
-- `runpod.storage_mode: upload`: no Network Volume by default. Manifest-v2
-  runs require it: their inputs arrive only through the verified
-  selected-file transfer. A Pod-side verification failure writes
+- `runpod.storage_mode: upload` is the only mode (omitting it means the same):
+  no Network Volume by default, and every run's inputs arrive over SSH before
+  the trainer starts. Manifest-v2 runs send only the verified selected-file
+  transfer. A Pod-side verification failure writes
   `realizations/<id>.runpod-input.json` with `status: failed`, never starts the
   trainer, and the normal download-then-stop path still runs. Launch pins the
   proven manifest in `realizations/<id>.transfer-manifest.json`; the Pod
@@ -164,7 +165,7 @@ stop Pod
 - Every remote execution path must establish the executor contract before any
   work: `HF_HOME` set inside the workspace namespace (`$KURA_WORKSPACE/cache/huggingface`) and `HF_HUB_CACHE` set to its `hub/` child
   and `KURA_*` variables the scripts consume. This applies to any revived or
-  new path (object staging included) — a path that forgets this repeats the
+  new path — a path that forgets this repeats the
   2026-07-05 "download lands in container-private /root/.cache" incident.
 - Treat compute choice as a constrained resource plan, not a convenience
   default. Start with the smallest candidate that should satisfy the declared

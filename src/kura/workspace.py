@@ -48,10 +48,13 @@ def _schema_version(path: Path, _mtime_ns: int) -> Any:
     return data.get("schema_version") if isinstance(data, dict) else None
 
 
-def _value(value_type: str, *, choices: tuple[Any, ...] = ()) -> dict[str, Any]:
+def _value(value_type: str, *, choices: tuple[Any, ...] = (), removed: tuple[Any, ...] = ()) -> dict[str, Any]:
+    """`removed` lists values earlier Kura versions accepted; `kura workspace migrate` handles them."""
     schema: dict[str, Any] = {"kind": "value", "type": value_type}
     if choices:
         schema["choices"] = choices
+    if removed:
+        schema["removed"] = removed
     return schema
 
 
@@ -84,13 +87,13 @@ _MODEL_ENTRY = _mapping({name: _STRING for name in MODEL_ENTRY_KEYS})
 _MODEL_SECTION = _dynamic(_MODEL_ENTRY)
 # One shape: model folder name, then ComfyUI model name, then its source.
 _MODEL_REGISTRY = _dynamic(_MODEL_SECTION)
-_OBJECT_STORE = _mapping({
-    name: _STRING
-    for name in ("endpoint_url", "bucket", "region", "prefix", "access_key_env", "secret_key_env")
-})
+# A RunPod training Pod starts SSH and waits; Kura uploads the staged inputs, runs the
+# trainer over SSH, and collects the outputs before the Pod stops. Nothing else is accepted.
+RUNPOD_STORAGE_MODES = ("upload",)
+# Values earlier Kura versions accepted; `kura workspace migrate` drops them (absent means upload).
+_REMOVED_RUNPOD_STORAGE_MODES = ("container_disk", "object_staging")
 _RUNPOD_FIELDS: dict[str, Any] = {
-    "storage_mode": _value("string", choices=("upload", "container_disk", "object_staging")),
-    "object_store": _OBJECT_STORE,
+    "storage_mode": _value("string", choices=RUNPOD_STORAGE_MODES, removed=_REMOVED_RUNPOD_STORAGE_MODES),
     "gpu_type_ids": _STRING_LIST,
     "gpu_type_priority": _value("string", choices=("availability", "custom")),
     "gpu_count": _INTEGER,
@@ -126,13 +129,8 @@ WORKSPACE_SCHEMA = _mapping({
         **{name: _value("string", choices=("auto", "symlink", "copy")) for name in ("lora_stage_mode", "model_patch_stage_mode", "input_stage_mode")},
         **{name: _value("string", choices=("remove_after_render", "keep")) for name in ("lora_stage_cleanup", "model_patch_stage_cleanup", "input_stage_cleanup")},
         "model_registry": _MODEL_REGISTRY,
-        # Render sessions use RunPod compute/network settings, but do not use
-        # object staging or the later download-space check.
-        "runpod": _mapping({
-            name: schema
-            for name, schema in _RUNPOD_FIELDS.items()
-            if name not in {"storage_mode", "object_store"}
-        }),
+        # Render sessions use RunPod compute/network settings, but do not stage training inputs.
+        "runpod": _mapping({name: schema for name, schema in _RUNPOD_FIELDS.items() if name != "storage_mode"}),
     }),
     "runpod": _mapping(_RUNPOD_FIELDS),
     # The job runner starts this many local Docker training runs at once and queues the rest.
@@ -161,6 +159,7 @@ WORKSPACE_OBSOLETE_KEYS = {
     "runpod.cloud_type": _CLOUD_TYPES,
     "comfyui.runpod.cloud_type": _CLOUD_TYPES,
     "runpod.download_min_free_gb": "RunPod downloads and pulls keep the local reserve, docker.min_free_gb (a run raises its own with safety.max_run_disk_gb)",
+    "runpod.object_store": "object staging was never enabled; RunPod runs upload their inputs over SSH (runpod.storage_mode: upload)",
     "docker.build_cache_limit_gb": "image builds check the free space where Docker keeps its data against docker.min_free_gb, and `kura doctor disk` reports build cache that can be freed",
 }
 
@@ -208,6 +207,11 @@ def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str
         if isinstance(value, str) and not value.strip():
             raise _workspace_schema_error(source, path, "is empty; delete the line to leave it unset")
         choices = schema.get("choices")
+        if value in schema.get("removed", ()):
+            raise ValueError(
+                f"{source} {path} {value!r} was removed; use one of " + ", ".join(repr(choice) for choice in choices)
+                + ", or run `kura workspace migrate`, which drops it."
+            )
         if choices and value not in choices:
             raise _workspace_schema_error(source, path, "must be one of " + ", ".join(repr(choice) for choice in choices))
         return
@@ -418,6 +422,15 @@ def _move_cloud_type(config: dict[str, Any]) -> list[str]:
     return notes
 
 
+def _drop_removed_storage_mode(config: dict[str, Any]) -> list[str]:
+    """Remove a runpod.storage_mode Kura no longer runs, in place; absent means upload."""
+    runpod = config.get("runpod")
+    if not isinstance(runpod, dict) or runpod.get("storage_mode") not in _REMOVED_RUNPOD_STORAGE_MODES:
+        return []
+    mode = runpod.pop("storage_mode")
+    return [f"dropped runpod.storage_mode {mode}: it was removed, and RunPod runs now use upload, the one mode, which collects outputs before the Pod stops"]
+
+
 def _one_model_registry_shape(config: dict[str, Any]) -> list[str]:
     """Unwrap comfyui.model_registry.models and rename each entry's older key spellings, in place."""
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
@@ -496,7 +509,7 @@ def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
 def _fix_in_place(config: dict[str, Any]) -> list[str]:
     """The fixes every schema version gets, in order; one note per change."""
     return [
-        *_normalize_host_drive(config), *_move_cloud_type(config), *_one_model_registry_shape(config), *_drop_obsolete_keys(config),
+        *_normalize_host_drive(config), *_move_cloud_type(config), *_drop_removed_storage_mode(config), *_one_model_registry_shape(config), *_drop_obsolete_keys(config),
         *_drop_unset_mounts(config), *_move_hf_cache_mount(config), *_drop_empty_strings(config),
     ]
 

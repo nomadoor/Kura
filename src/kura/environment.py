@@ -24,8 +24,6 @@ USER_VARIABLES: tuple[UserVariable, ...] = (
     UserVariable("KURA_NTFY_TOKEN", "Optional: access token for a protected ntfy topic."),
     UserVariable("KURA_NTFY_PRIORITY", "Optional: ntfy priority from 1 to 5; 4 when empty."),
     UserVariable("KURA_NOTIFY", "Optional: notification channels to use by default, for example ntfy."),
-    UserVariable("R2_ACCESS_KEY_ID", "Only for runpod.storage_mode object_staging: the object store access key."),
-    UserVariable("R2_SECRET_ACCESS_KEY", "Only for runpod.storage_mode object_staging: the object store secret key."),
 )
 
 # Read by Kura but never set by a user: values Kura passes to its own remote

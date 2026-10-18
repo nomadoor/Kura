@@ -7312,25 +7312,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             ],
         }
 
-    @staticmethod
-    def _container_disk_config() -> dict[str, object]:
-        return {"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"]}
-
-    @staticmethod
-    def _object_config() -> dict[str, object]:
-        return {
-            "storage_mode": "object_staging",
-            "gpu_type_ids": ["NVIDIA A40"],
-            "object_store": {
-                "endpoint_url": "https://example.r2.cloudflarestorage.com",
-                "bucket": "kura",
-                "region": "auto",
-                "prefix": "tests",
-                "access_key_env": "R2_ACCESS_KEY_ID",
-                "secret_key_env": "R2_SECRET_ACCESS_KEY",
-            },
-        }
-
     def _run_dir(self, root: Path) -> Path:
         run_dir = root / "runs" / "example"
         (run_dir / "realizations").mkdir(parents=True)
@@ -7351,6 +7332,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_launch_runpod_non_tty_requires_yes_before_any_runpod_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
+            self._stage_upload(Path(directory), run_dir)
             with (
                 patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False),
                 patch("sys.stdin", io.StringIO()),
@@ -7362,7 +7344,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                         run_dir=run_dir,
                         spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                         image="registry/image:tag",
-                        config=self._container_disk_config(),
+                        config=self._config(),
                         max_lease_sec=12 * 3600,
                     )
             availability.assert_not_called()
@@ -7403,6 +7385,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
+            self._stage_upload(Path(directory), run_dir)
             stderr = io.StringIO()
             with (
                 patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False),
@@ -7415,7 +7398,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     run_dir=run_dir,
                     spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                     image="registry/image:tag",
-                    config=self._container_disk_config(),
+                    config=self._config(),
                     wait_for_capacity_sec=6 * 3600,
                     max_lease_sec=12 * 3600,
                 )
@@ -7585,43 +7568,45 @@ class RunPodLifecycleTests(unittest.TestCase):
 
     def test_launch_runpod_training_pod_arms_the_max_lease_at_start(self) -> None:
         log_path = "/workspace/runs/example/logs/stdout.log"
-        for name in ("staging", "container_disk"):
-            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            # No dataset-projection lock (an explicit native command, or a run compiled
+            # before manifest v2): the Pod still starts SSH and waits for the upload.
+            self._stage_upload(root, run_dir)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
+                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                                  image="registry/image:tag", config=self._config(), yes=True, max_lease_sec=3 * 3600)
+            start = request.call_args.args[3]["dockerStartCmd"]
+            # A Pod whose controller never reaches it is still bounded.
+            self._assert_arms_lease_first(start[2], max_lease_sec=3 * 3600, log_path=log_path)
+            # The trainer runs only over SSH, after the upload; the Pod never starts it on its own.
+            self.assertEqual(len(start), 3)
+            self.assertIn("/usr/sbin/sshd", start[2])
+            self.assertNotIn("train.py", start[2])
+
+    def test_launch_runpod_refuses_a_removed_storage_mode_before_any_runpod_api_call(self) -> None:
+        # A runner launch request written before the modes were removed carries its own settings.
+        for mode in ("container_disk", "object_staging"):
+            with self.subTest(mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 run_dir = self._run_dir(root)
-                if name == "staging":
-                    self._stage_upload(root, run_dir)
-                config = self._config() if name == "staging" else self._container_disk_config()
-                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                    with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
-                         patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                self._stage_upload(root, run_dir)
+                with (
+                    patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False),
+                    patch("kura.executors.runpod.runpod_gpu_availability") as availability,
+                    patch("kura.executors.runpod._runpod_request") as request,
+                    patch("kura.executors.runpod._runpod_graphql") as graphql,
+                ):
+                    with self.assertRaisesRegex(ValueError, "runpod.storage_mode must be 'upload'.*kura workspace migrate"):
                         launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
-                                      image="registry/image:tag", config=config, yes=True, max_lease_sec=3 * 3600)
-                script = request.call_args.args[3]["dockerStartCmd"][2]
-                # A Pod whose controller never reaches it is still bounded.
-                self._assert_arms_lease_first(script, max_lease_sec=3 * 3600, log_path=log_path)
-
-    def test_container_disk_ai_toolkit_run_says_its_model_files_are_not_recorded(self) -> None:
-        from kura.executors.runpod import AI_TOOLKIT_MODELS_NOT_RECORDED
-        from kura.paths import AI_TOOLKIT_MODELS_PATH
-
-        models = {"MODELS_PATH": AI_TOOLKIT_MODELS_PATH}
-        roots = [{"role": "model-cache", "path": AI_TOOLKIT_MODELS_PATH, "env": "MODELS_PATH"}]
-        for name, spec_extra, expected in (
-            ("ai-toolkit", {"env": models, "write_roots": roots}, AI_TOOLKIT_MODELS_NOT_RECORDED),
-            ("no-models-path", {"env": {}}, None),
-        ):
-            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
-                run_dir = self._run_dir(Path(directory))
-                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                    with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
-                         patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
-                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], **spec_extra},
-                                      image="registry/image:tag", config=self._container_disk_config(), yes=True, max_lease_sec=3600)
-                status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-                realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
-                self.assertEqual(status.get("ai_toolkit_models"), expected)
-                self.assertEqual(realization.get("ai_toolkit_models"), expected)
+                                      image="registry/image:tag", config={**self._config(), "storage_mode": mode}, yes=True, max_lease_sec=3600)
+                availability.assert_not_called()
+                request.assert_not_called()
+                graphql.assert_not_called()
+                self.assertEqual(sorted(path.name for path in (run_dir / "realizations").iterdir() if not path.name.startswith("stage-")), [])
 
     def test_launch_runpod_can_pin_availability_filters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8223,23 +8208,16 @@ class RunPodLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "only supports /http and /tcp"):
                 launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, dry_run=True)
 
-    def test_launch_runpod_object_staging_is_disabled_until_secret_safe(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = self._run_dir(Path(directory))
-            env = {"RUNPOD_API_KEY": "api-secret", "R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}
-            with patch.dict(os.environ, env, clear=False):
-                with self.assertRaisesRegex(ValueError, "disabled until object-store credentials"):
-                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._object_config())
-
     def test_launch_runpod_records_failed_attempt_without_stale_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             (run_dir / "status.json").write_text(json.dumps({"state": "interrupted", "pod_id": "stale-pod", "last_observation": "realizations/old.observed.json"}), encoding="utf-8")
+            self._stage_upload(Path(directory), run_dir)
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret", "HF_TOKEN": "hf-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API POST /pods failed (500): echoed api-secret hf-secret")):
                     with self.assertRaisesRegex(ValueError, r"\\*\\*\\*"):
-                        launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._container_disk_config(), yes=True)
+                        launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "launch_failed")
             self.assertNotIn("pod_id", status)
@@ -8256,7 +8234,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             with self.assertRaisesRegex(ValueError, "pod env must not contain secrets"):
-                launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "should-not-enter-pod-env"}}, image="registry/image:tag", config=self._container_disk_config())
+                launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "should-not-enter-pod-env"}}, image="registry/image:tag", config=self._config())
 
     def test_runpod_ssh_secret_injection_keeps_token_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9876,30 +9854,14 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("this process could not write", payload["diagnosis"])
             self.assertNotIn("not visible", payload["diagnosis"])
 
-    def test_stage_runpod_object_staging_is_disabled(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "example"
-            (run_dir / "resolved").mkdir(parents=True)
-            (run_dir / "realizations").mkdir()
-            (run_dir / "logs").mkdir()
-            (run_dir / "logs" / "events.jsonl").touch()
-            (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("locked: true\n", encoding="utf-8")
-            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
-            dataset = root / "datasets" / "tiny" / "images"
-            dataset.mkdir(parents=True)
-            (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
-            with patch.dict(os.environ, {"R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}, clear=False):
-                with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
-                    stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config={"runpod": self._object_config()})
-
-    def test_stage_runpod_object_staging_fails_before_source_checks(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "missing"
-            with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
-                stage_runpod(workspace=root, run_dir=run_dir, dataset_id="missing-dataset", config={"runpod": self._object_config()})
+    def test_stage_runpod_refuses_a_removed_storage_mode_before_source_checks(self) -> None:
+        for mode in ("container_disk", "object_staging"):
+            with self.subTest(mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = root / "runs" / "missing"
+                with self.assertRaisesRegex(ValueError, "runpod.storage_mode must be 'upload'"):
+                    stage_runpod(workspace=root, run_dir=run_dir, dataset_id="missing-dataset", config={"runpod": {**self._config(), "storage_mode": mode}})
+                self.assertFalse(run_dir.exists())
 
     def test_stop_runpod_terminates_disposable_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9912,6 +9874,18 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(events[-1]["event"], "runpod_pod_stopped")
+
+    def test_stop_runpod_still_stops_a_pod_whose_recorded_settings_name_a_removed_storage_mode(self) -> None:
+        # A runner request written before container_disk was removed carries it, and its Pod may be billing.
+        for mode in ("container_disk", "object_staging"):
+            with self.subTest(mode), tempfile.TemporaryDirectory() as directory:
+                run_dir = self._run_dir(Path(directory))
+                (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                    with patch("kura.executors.runpod._runpod_request", return_value={}) as request:
+                        status = stop_runpod(run_dir, {**self._config(), "storage_mode": mode})
+                self.assertEqual(status["state"], "interrupted")
+                self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
 
     def test_stop_runpod_records_pod_stopped_phase(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -50,6 +50,14 @@ def _status(run_dir: Path) -> dict:
     return json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
 
 
+def _write_upload_stage(run_dir: Path) -> None:
+    """A compiled run with the upload stage `kura run execute` writes before it launches."""
+    # Kept outside realizations/ so the tests' realization listings stay as they were.
+    (run_dir / "transfer").mkdir(parents=True, exist_ok=True)
+    (run_dir / "transfer" / "stage.json").write_text(json.dumps(
+        {"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+    (run_dir / "status.json").write_text(json.dumps({"state": "compiled", "last_stage": "transfer/stage.json"}), encoding="utf-8")
+
 class CreateIntentRecoveryTests(unittest.TestCase):
     def test_a_pod_found_by_name_is_recorded_interrupted_and_stop_deletes_it_and_its_duplicate(self) -> None:
         with _crashed_launch(previous_pod="pod-old") as run_dir:
@@ -141,13 +149,13 @@ def _crash_after_capacity_wait():
         run_dir = root / "runs" / "example"
         (run_dir / "resolved").mkdir(parents=True)
         (run_dir / "logs").mkdir()
-        (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+        _write_upload_stage(run_dir)
         (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({
             "id": "example", "type": "train", "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
             "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
         }), encoding="utf-8")
         (root / "workspace.yaml").write_text(yaml.safe_dump({
-            "runpod": {"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]}, "docker": {}, "images": {"ai-toolkit": "local"},
+            "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]}, "docker": {}, "images": {"ai-toolkit": "local"},
         }), encoding="utf-8")
         replies = [RunPodAPIError(CAPACITY_REFUSED, status_code=400), {"id": "pod-1", "name": "created", "desiredStatus": "RUNNING"}]
 
@@ -166,7 +174,7 @@ def _crash_after_capacity_wait():
                         patch("kura.executors.runpod._write_status", side_effect=KeyboardInterrupt):
                     with unittest.TestCase().assertRaises(KeyboardInterrupt):
                         launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
-                                      image="registry/image:tag", config={"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
+                                      image="registry/image:tag", config={"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
                                       wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
                 yield root, run_dir
         finally:
@@ -364,7 +372,7 @@ class InterruptAfterCreateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "logs").mkdir(parents=True)
-            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            _write_upload_stage(run_dir)
 
             def interrupt_once_the_pod_is_returned(frame, event, _arg):
                 if frame.f_code is launch_runpod.__code__ and event == "line" and frame.f_locals.get("pod") is not None \
@@ -384,7 +392,7 @@ class InterruptAfterCreateTests(unittest.TestCase):
                 try:
                     with self.assertRaisesRegex(ValueError, "kura run reconcile"):
                         launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
-                                      image="registry/image:tag", config={"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
+                                      image="registry/image:tag", config={"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
                                       wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
                 finally:
                     sys.settrace(None)

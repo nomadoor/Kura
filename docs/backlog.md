@@ -15,6 +15,9 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-18 | workspace.yaml | The removed-value error for `runpod.storage_mode` is a bare `ValueError`, so it lacks the "Run `kura doctor workspace`" suffix the other schema errors carry | review of the container_disk removal | -
+- 2026-10-18 | RunPod images | `docker/ai-toolkit/kura_runpod_object_job.py` (object staging) is still copied into the AI-Toolkit and Musubi Tuner images although object staging is removed; delete it and the Dockerfile `COPY` lines with the next image rebuild, and the test that reads it | review of the container_disk removal | -
+- 2026-10-18 | run records | A stale `ai_toolkit_models` status field from a container_disk launch is cleared only by the next RunPod launch, not by a local Docker launch (nothing reads the field) | review of the container_disk removal | -
 - 2026-10-18 | run records | `last_realization` is spelled three ways: the executors write it with the host's separator (`str(relative_to(...))`), render and settling write POSIX; one realization-reference helper for every writer and comparison would remove the reader-side normalisation in `unresolved_create_intents` | review of the create-intent fix | P6
 - 2026-10-18 | run records | `settle_status_from_realization` does not set `host` or clear the progress fields as the regular launch writers do | review of the create-intent fix | P6
 - 2026-10-18 | run records | With `status.json` missing, `kura run reconcile` raises from `_load_status` instead of settling the run from its records; decide the behavior and test it | review of the create-intent fix | P6

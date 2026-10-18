@@ -150,11 +150,6 @@ class SetTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertFalse(user_file.exists())
 
-    def test_configured_object_store_key_names_are_accepted(self) -> None:
-        with _setup("schema_version: 2\nrunpod:\n  object_store: {access_key_env: MY_R2_KEY}\n"):
-            code, output = _set("MY_R2_KEY", "r2")
-            self.assertEqual(code, 0, output)
-
     def test_a_value_spanning_lines_is_refused(self) -> None:
         with _setup() as (_, user_file):
             code, _ = _set("HF_TOKEN", "hf-a\u2028hf-b")
