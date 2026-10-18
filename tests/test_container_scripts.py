@@ -1324,6 +1324,48 @@ class ContainerScriptTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "insufficient disk"):
                     namespace["preflight_downloads"]([item])
 
+    @posix_only(POSIX_PATHS)
+    def test_hf_download_preflight_names_the_user_actions_only_for_an_authentication_failure(self) -> None:
+        def refusal(status_code: int) -> str:
+            namespace = {"__name__": "__test__"}
+            exec(script_source("hf_download.py"), namespace)
+            error = RuntimeError("refused")
+            error.response = SimpleNamespace(status_code=status_code)  # type: ignore[attr-defined]
+
+            def metadata(*args: object, **kwargs: object) -> None:
+                raise error
+
+            fake_hub = SimpleNamespace(
+                try_to_load_from_cache=lambda *args, **kwargs: None,
+                hf_hub_url=lambda **kwargs: "https://huggingface.invalid/file",
+                get_hf_file_metadata=metadata,
+            )
+            item = {
+                "key": "dit",
+                "repo_id": "owner/model",
+                "filename": "weights.safetensors",
+                "link_path": "/workspace/cache/models/owner--model/dit/weights.safetensors",
+            }
+            with tempfile.TemporaryDirectory() as directory:
+                home = Path(directory) / "hf"
+                cache = home / "hub"
+                mapping = json.dumps([{"container": str(cache), "workspace": "/workspace/cache/huggingface"}])
+                with (
+                    patch.dict(os.environ, {"HF_HOME": str(home), "HF_HUB_CACHE": str(cache), "KURA_WORKSPACE_PATH_MAPS": mapping}, clear=True),
+                    patch.dict(sys.modules, {"huggingface_hub": fake_hub}),
+                    self.assertRaises(SystemExit) as caught,
+                ):
+                    namespace["preflight_downloads"]([item])
+            return str(caught.exception.code)
+
+        auth = refusal(401)
+        self.assertIn("authentication failure for dit:weights.safetensors", auth)
+        self.assertIn("accept its license", auth)
+        self.assertIn("`kura secrets set HF_TOKEN` in their own terminal", auth)
+        missing = refusal(404)
+        self.assertIn("missing-artifact failure", missing)
+        self.assertNotIn("HF_TOKEN", missing)
+
     def test_hf_download_preflight_classifies_auth_and_missing_artifact(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)

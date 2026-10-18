@@ -5899,10 +5899,37 @@ class DockerLifecycleTests(unittest.TestCase):
             "unknown": [],
             "probe_failures": [{"artifact": "repo:model.safetensors", "status": "auth_error", "detail": "HTTP 401"}],
         }
-        with self.assertRaisesRegex(ValueError, "auth_error"):
+        with self.assertRaisesRegex(ValueError, "refused access"):
             _model_download_safety_preflight({}, auth_estimate, executor="runpod")
         auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
+
+    def test_probe_failure_wording_names_the_action_for_each_status(self) -> None:
+        def wording(status: str, detail: str) -> list[str]:
+            estimate = {"bytes": 0, "unknown": [], "probe_failures": [{"artifact": "repo:model.safetensors", "status": status, "detail": detail}]}
+            with self.assertRaises(ValueError) as caught:
+                _model_download_safety_preflight({}, estimate, executor="docker")
+            records = _model_download_preflight_report({}, estimate, executor="docker", local_cache=Path("cache"))
+            facts = [item["fact"] for item in records if item["check"] == "model-metadata-connectivity"]
+            self.assertEqual(len(facts), 1)
+            return [str(caught.exception), facts[0]]
+
+        for text in wording("auth_error", "HTTP 403"):
+            self.assertIn("Hugging Face refused access to repo:model.safetensors (HTTP 403)", text)
+            self.assertIn("gated or private", text)
+            self.assertIn("accept its license", text)
+            self.assertIn("`kura secrets set HF_TOKEN` in their own terminal", text)
+            self.assertNotIn("connectivity", text)
+        for text in wording("not_found", "HTTP 404"):
+            self.assertIn("repo:model.safetensors (HTTP 404)", text)
+            self.assertIn("check repo_id, filename, and revision in run.yaml", text)
+            self.assertNotIn("connectivity", text)
+            self.assertNotIn("HF_TOKEN", text)
+        for status, detail in (("unreachable", "DNS failed"), ("http_error", "HTTP 503")):
+            for text in wording(status, detail):
+                self.assertIn(f"Hugging Face metadata probe failed for repo:model.safetensors ({status}: {detail})", text)
+                self.assertIn("restore controller connectivity", text)
+                self.assertNotIn("HF_TOKEN", text)
 
     def test_missing_hf_artifact_is_not_collapsed_into_unknown_size(self) -> None:
         run = {
@@ -6221,7 +6248,7 @@ class DockerLifecycleTests(unittest.TestCase):
                         pass
             phases = launch_phases(run_dir, "r1")
         self.assertEqual([item["phase"] for item in phases], ["container_started", "container_exited"])
-        self.assertEqual(format_launch_phases(phases), "model download + training 3m 40s")
+        self.assertEqual(format_launch_phases(phases), "training (incl. model load and any download) 3m 40s")
 
     def test_reconcile_docker_merges_observation_into_latest_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6530,7 +6557,7 @@ class LaunchPhaseTests(unittest.TestCase):
             ]:
                 record_launch_phase(run_dir, "r1", phase, at=at)
             summary = format_launch_phases(launch_phases(run_dir, "r1"))
-        self.assertEqual(summary, "startup 4m 34s · upload 22s · model download + training 1m 40s · download 40s")
+        self.assertEqual(summary, "startup 4m 34s · upload 22s · training (incl. model load and any download) 1m 40s · download 40s")
 
     def test_launch_phase_write_failure_only_warns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6623,7 +6650,7 @@ class LaunchPhaseTests(unittest.TestCase):
             record_launch_phase(run_dir, "r1", "container_started", at="2026-10-01T03:00:15+00:00")
             record_launch_phase(run_dir, "r1", "container_exited", at="2026-10-01T03:01:00+00:00")
             text = format_run_completion(root, run_dir, {"state": "completed", "exit_code": 0, "last_realization": "realizations/r1.json"})
-        self.assertIn("time       startup 15s · model download + training 45s", text)
+        self.assertIn("time       startup 15s · training (incl. model load and any download) 45s", text)
 
     def test_docker_timestamps_normalize_to_parseable_values(self) -> None:
         from datetime import datetime, timezone

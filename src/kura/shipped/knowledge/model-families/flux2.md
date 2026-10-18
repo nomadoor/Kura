@@ -21,6 +21,12 @@ source: owner (2026-08-15)
   2.6 s per step at 11.15 GB; with `native_config.train.cache_text_embeddings:
   true` 1.3 to 2.3 s per step at 7.9 GB.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
+- Disk: for Klein 4B, AI-Toolkit downloads `black-forest-labs/FLUX.2-klein-base-4B`,
+  `Qwen/Qwen3-4B` and `ai-toolkit/flux2_vae`; Musubi's bundle downloads
+  `Comfy-Org/vae-text-encorder-for-flux-klein-4b`. The transformer and VAE files
+  are byte-identical across the two, but the Hugging Face cache keeps one copy
+  per repository, so training on both backends stores about 15 GB twice.
+  source: Hugging Face cache measurement 2026-10-18 (blob sha256 compared)
 - Musubi `architecture: flux2` Klein 4B on the same GPU with `fp8_base` and
   `fp8_scaled`, 768 px: 1.74 s per step on the first try.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
@@ -31,4 +37,10 @@ source: owner (2026-08-15)
   A40, suggest gradient_checkpointing: true and batch_size 1 with gradient
   accumulation for the effective batch, and say why; the user decides.
   source: Kura's former A40 guard (added 2026-07-04, moved here 2026-10-14); the observing run was not recorded
+- Upstream's recommended timestep sampling: Musubi's own FLUX.2 guide trains
+  with `timestep_sampling: flux2_shift` and `weighting_scheme: none`, and
+  names `flux2_shift` as recommended for FLUX.2; it sets no
+  `discrete_flow_shift`. Kura requires `timestep_sampling` for
+  `architecture: flux2` because the trainer's generic default is `sigma`.
+  source: upstream (Musubi Tuner flux_2.md guide at the pinned v0.3.5)
 - No evaluated task entries yet.

@@ -10,6 +10,11 @@
   gradient checkpointing completed 600 steps locally on an RTX 4070 Ti with
   12 GB VRAM and no block swap, at about 3.25 seconds per step.
   source: owner (2026-10-18)
+- Upstream's starting timestep values: Musubi's own Z-Image guide trains with
+  `timestep_sampling: shift`, `weighting_scheme: none`, and
+  `discrete_flow_shift: 2.0`, and says the best Z-Image settings are unclear,
+  so these are a base to adjust from.
+  source: upstream (Musubi Tuner zimage.md guide at the pinned v0.3.5)
 
 ## Training on AI-Toolkit
 
@@ -19,6 +24,12 @@
   `native_config.train.cache_text_embeddings: true` about 2.6 to 3.1 s per
   step at 9.6 GB, and 600 steps took 28 minutes.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
+
+- Disk: AI-Toolkit's `zimage` downloads the `Tongyi-MAI/Z-Image` diffusers
+  shards (about 19 GB) and Musubi's files come from `Comfy-Org/z_image` (about
+  19 GB); the transformer layouts differ, so training on both backends stores
+  both.
+  source: Hugging Face cache measurement 2026-10-18 (blob sha256 compared)
 
 ## Model files
 

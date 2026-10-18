@@ -213,7 +213,12 @@ def preflight_downloads(items):
             metadata = get_hf_file_metadata(url, token=token)
         except Exception as exc:
             kind = metadata_failure_kind(exc)
-            raise SystemExit(f"[kura] hf preflight {kind} failure for {label}: {type(exc).__name__}: {exc}") from exc
+            action = (
+                "; the model is gated or private: ask the user to accept its license on the model's Hugging Face page "
+                "and to run `kura secrets set HF_TOKEN` in their own terminal (an agent never runs it)"
+                if kind == "authentication" else ""
+            )
+            raise SystemExit(f"[kura] hf preflight {kind} failure for {label}: {type(exc).__name__}: {exc}{action}") from exc
         size = getattr(metadata, "size", None)
         if not isinstance(size, int) or size < 0:
             raise SystemExit(f"[kura] hf preflight metadata has no usable size for {label}")

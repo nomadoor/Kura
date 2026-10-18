@@ -26,7 +26,7 @@ from kura import checks
 from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image, enclosing_checkout
 from kura.managed import ensure_current
 from kura.install_source import kura_continuity_warning, kura_provenance
-from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
+from kura.backends import REQUIRED_VALUE_SOURCES, backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
 from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
@@ -473,6 +473,7 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
         print(f"  {field}: {note}")
     if payload["required_fields"]:
         print("backend.config fields you must write (Kura adds no training default):")
+        print(f"  ({REQUIRED_VALUE_SOURCES})")
         for field, contract in payload["required_fields"].items():
             clauses = " or ".join(
                 " and ".join(f"{selector}=" + "|".join(map(str, allowed)) for selector, allowed in clause.items())
@@ -1694,7 +1695,7 @@ def main() -> None:
     )
     run_sub = run.add_subparsers(dest="run_command", required=True)
     new = run_sub.add_parser("new", help="Create a train run")
-    new.add_argument("--from", dest="source", metavar="RUN_ID", help="Start from this training run's run.yaml (to change a compiled run, which never changes itself)")
+    new.add_argument("--from", dest="source", metavar="RUN_ID", help="Copy this training run's run.yaml settings (to change a compiled run, which never changes itself); it copies settings only, so parent_run stays empty and no training state carries over; `kura run resume` continues training")
     new.add_argument("--experiment", help="Name that groups runs answering one question (e.g. vivi-sdxl); its runs are listed together. Required unless --from")
     new.add_argument("--slug", required=True, help="A few words for this run; the run ID becomes <date>-<time>_<slug>_<4 hex>")
     new.add_argument("--backend", choices=backend_names(), help="Trainer (default ai-toolkit); `kura run capabilities <backend>` lists its settings")
