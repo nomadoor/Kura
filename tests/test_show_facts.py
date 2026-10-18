@@ -443,3 +443,43 @@ class SdScriptsProblemsTogetherTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlanTrainingRowsTests(unittest.TestCase):
+    """`kura run plan` training rows: a value that does not apply is a placeholder or no row."""
+
+    def _training(self, backend: str, config: dict[str, Any]) -> dict[str, Any]:
+        from kura.run_commands.plan import _resources_payload  # noqa: PLC0415
+
+        run = {
+            "id": "plan-rows", "type": "train", "model": {"base": "custom"},
+            "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+            "backend": {"name": backend, "config": config},
+        }
+        with patch("kura.run_commands.plan._local_gpu_payload", return_value={"name": "unknown", "vram_total_mb": "unknown"}):
+            return _resources_payload(run, {}, {})["training"]
+
+    def test_empty_container_is_not_set(self) -> None:
+        from kura.run_commands.plan import NOT_SET, _plan_value  # noqa: PLC0415
+
+        for value in ({}, [], None, ""):
+            with self.subTest(value=value):
+                self.assertEqual(_plan_value(value), NOT_SET)
+        for value in (0, False, {"a": 1}, ["x"]):
+            with self.subTest(value=value):
+                self.assertEqual(_plan_value(value), value)
+
+    def test_ai_toolkit_plan_has_no_dataset_row(self) -> None:
+        training = self._training("ai-toolkit", {"model_arch": "moss_image:base"})
+        self.assertNotIn("dataset", training)
+
+    def test_musubi_plan_shows_selector_only_where_a_task_applies(self) -> None:
+        training = self._training("musubi-tuner", {"architecture": "flux_kontext"})
+        self.assertNotIn("selector", training)
+        self.assertNotIn("precision", training)
+        self.assertEqual(training["save_precision"], "(not set)")
+        training = self._training("musubi-tuner", {"architecture": "flux_kontext", "save_precision": "fp16"})
+        self.assertEqual(training["save_precision"], "fp16")
+        training = self._training("musubi-tuner", {"architecture": "wan", "task": "t2v-14B"})
+        self.assertEqual(training["selector"], "t2v-14B")
+        self.assertEqual(self._training("musubi-tuner", {"architecture": "wan"})["selector"], "(not set)")

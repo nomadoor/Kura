@@ -77,7 +77,8 @@ def _count_dataset_items(path: Path | None) -> int | None:
 
 
 def _plan_value(value: Any) -> Any:
-    if value is None or value == "":
+    """What a plan row shows: nothing written (None, "", or an empty container) is NOT_SET."""
+    if value is None or value == "" or value == {} or value == []:
         return NOT_SET
     return value
 

@@ -19,7 +19,7 @@ from kura.backends.musubi_datasets import (
     _write_musubi_dataset_config,
 )
 from kura.backends.musubi_models import _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
-from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
+from kura.backends.musubi_native_selectors import MUSUBI_NATIVE_TASKS, musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.secrets import is_secret_name
@@ -293,9 +293,11 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         )
     }
     memory["blocks_to_swap"] = native.get("blocks_to_swap")
+    # The task row only for an architecture with a task table; elsewhere `task` is refused.
+    selector = {"selector": native.get("task")} if native.get("architecture") in MUSUBI_NATIVE_TASKS else {}
     return {
         "architecture": native.get("architecture"),
-        "selector": native.get("task"),
+        **selector,
         "rank": native.get("network_dim"),
         "alpha": native.get("network_alpha"),
         "learning_rate": native.get("learning_rate"),
@@ -304,7 +306,8 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         "gradient_accumulation_steps": gradient_accumulation,
         "resolution": native.get("resolution"),
         "optimizer": native.get("optimizer_type"),
-        "precision": native.get("save_precision"),
+        # The saved checkpoint dtype; Musubi trains in bf16 whatever this says.
+        "save_precision": native.get("save_precision"),
         "memory": memory,
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
