@@ -84,7 +84,9 @@ The classes:
   not only Kura's; say so when other projects use Docker.
 - **download**: comes back as a download the next time a run needs it.
   Models in the Hugging Face cache (one item per repository, or per file in
-  `ai-toolkit-models/`), the legacy `cache/ai-toolkit` directory, and old Kura
+  `ai-toolkit-models/`; a repository's size is what removing it frees, and a
+  file it shares with another repository is named and freed only with both;
+  `hub/blobs` lists shared files no repository uses), the legacy `cache/ai-toolkit` directory, and old Kura
   Docker images (not the current pin, not an `images.<name>` override, not
   frozen in an unfinished or compiled run). A cache outside the workspace
   (`docker.hf_cache`) is listed too; it may be shared with other workspaces,

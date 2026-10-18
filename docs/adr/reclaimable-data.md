@@ -43,7 +43,9 @@ the user.** One owner decides the class.
   (one item per repository, or per file AI-Toolkit resolved into
   `ai-toolkit-models/`), and a Kura Docker image that is old: not the current
   pin, not a workspace override, and not frozen in an unfinished run. Removed
-  only for the items the user picks.
+  only for the items the user picks. A repository's size is what removing it
+  frees; a payload in huggingface_hub's shared blob store goes only when no
+  other repository links to it, and payloads none links to are one item.
 - **resume**: deleting it loses the ability to resume that run, and every
   LoRA stays. The training states of a finished run: the trainer's state
   folders in `outputs/` and Kura's copies in `artifacts/training-state/`,
