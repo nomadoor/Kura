@@ -38,6 +38,20 @@ class ProgressParityTests(unittest.TestCase):
                 _apply_stdout_progress(run_dir, status, state="completed")
                 self.assertEqual((status.get("last_step"), status.get("total_steps")), (10, 10))
 
+    def test_a_completed_run_whose_log_stopped_short_keeps_the_logged_step(self) -> None:
+        # The recipe is what was asked for; the log is what the trainer did. A run that ended
+        # early is never recorded, or written to progress.jsonl, as having reached its total.
+        from kura.executors.common import _apply_stdout_progress
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _run(directory, "steps:  50%|#####     | 5/10 [00:05<00:05, 1.0it/s, avr_loss=0.5]\n")
+            (run_dir / "realizations").mkdir()
+            status = {"state": "completed", "last_realization": "realizations/r1.json"}
+            _apply_stdout_progress(run_dir, status, state="completed")
+            self.assertEqual((status.get("last_step"), status.get("total_steps")), (5, 10))
+            progress = (run_dir / "realizations" / "r1.progress.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(json.loads(progress[-1])["last_step"], 5)
+
 
     def test_speed_comes_only_from_training_progress_lines(self) -> None:
         # Model downloads and latent caching print their own it/s; they are not training speed.
