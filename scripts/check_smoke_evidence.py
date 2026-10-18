@@ -1,108 +1,23 @@
 #!/usr/bin/env python3
-"""Validate identity-bound smoke observations without inferring capability."""
+"""Validate the append-only ledger of real-run observations without inferring capability."""
 
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import date, datetime
 from pathlib import Path
 
-from kura.provenance import adapter_source_identity, executor_source_identity
 from kura.yamlio import load_yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = ROOT / "docs" / "backend-smoke-evidence.yaml"
-SUPPORT_PATH = ROOT / "docs" / "backend-support.md"
-MIGRATIONS_PATH = ROOT / "docs" / "adapter-source-identity-migrations.yaml"
 IDENTITY_KEYS = {"kind", "value"}
 EVIDENCE_KINDS = {"parser", "compile", "real-runtime", "real-optimizer-step"}
-EVIDENCE_REFERENCE_RE = re.compile(r"`([^`]+)`")
-
-
-def _normalized_backend(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", value.lower())
-
-
-def _historical_record_is_retired(record: dict[str, object], invalidation_ids: set[str]) -> bool:
-    superseded_by = record.get("superseded_by")
-    invalidated_by = record.get("invalidated_by")
-    return (
-        isinstance(superseded_by, str) and bool(superseded_by)
-    ) or (
-        isinstance(invalidated_by, str) and invalidated_by in invalidation_ids
-    )
-
-
-def _support_evidence_claims(text: str) -> list[tuple[int, str, str, list[str]]]:
-    claims: list[tuple[int, str, str, list[str]]] = []
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) != 5 or cells[0] in ("Backend", "---"):
-            continue
-        backend, _model_family, _adapter, status, notes = cells
-        marker = "Evidence:"
-        references = EVIDENCE_REFERENCE_RE.findall(notes.split(marker, 1)[1]) if marker in notes else []
-        if status == "✅" or references:
-            claims.append((line_number, backend, status, references))
-    return claims
-
-
-RUNPOD_TRANSFERS = {"selected-files", "legacy-upload"}
-
-
-def _requires_executor_identity(record: dict[str, object]) -> str | None:
-    """Selected-file RunPod evidence proves executor code, so it binds that executor's identity.
-
-    Every RunPod record must name its transfer, so a record cannot leave the
-    identity requirement by omitting or misspelling the key.
-    """
-    native = record.get("native_path")
-    if not isinstance(native, dict) or native.get("executor") != "runpod":
-        return None
-    if native.get("transfer") not in RUNPOD_TRANSFERS:
-        raise ValueError(f"RunPod evidence must declare native_path.transfer as one of {sorted(RUNPOD_TRANSFERS)}")
-    return "runpod" if native["transfer"] == "selected-files" else None
-
-
-def _chain_reaches_current(record_id: str, key: str, owner: str, value: str, current: str, migrations: list[object]) -> bool:
-    """Follow behavior-preserving migrations scoped to one owner and one evidence record."""
-    seen: set[str] = set()
-    while value != current and value not in seen:
-        seen.add(value)
-        candidates = [
-            item for item in migrations
-            if isinstance(item, dict)
-            and item.get(key) == owner
-            and item.get("behavior_changed") is False
-            and isinstance(item.get("evidence_ids"), list)
-            and record_id in item["evidence_ids"]
-            and isinstance(item.get("previous"), dict)
-            and item["previous"].get("value") == value
-            and isinstance(item.get("replacement"), dict)
-            and isinstance(item["replacement"].get("value"), str)
-        ]
-        if len(candidates) != 1:
-            return False
-        value = candidates[0]["replacement"]["value"]
-    return value == current
-
-
-def _identity_reaches_current(record_id: str, backend: str, value: str, migrations: list[object]) -> bool:
-    return _chain_reaches_current(record_id, "backend", backend, value, adapter_source_identity(backend)["value"], migrations)
-
-
-def _executor_identity_reaches_current(record_id: str, executor: str, value: str, migrations: list[object]) -> bool:
-    return _chain_reaches_current(record_id, "executor", executor, value, executor_source_identity(executor)["value"], migrations)
 
 
 def main() -> int:
     payload = load_yaml(PATH)
-    migrations_payload = load_yaml(MIGRATIONS_PATH)
-    migrations = migrations_payload.get("records", []) if isinstance(migrations_payload, dict) else []
     failures: list[str] = []
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         failures.append("schema_version must be 1")
@@ -111,7 +26,6 @@ def main() -> int:
         failures.append("records must be a list")
         records = []
     seen: set[str] = set()
-    records_by_id: dict[str, dict[str, object]] = {}
     invalidations = payload.get("invalidations", []) if isinstance(payload, dict) else []
     invalidation_ids: set[str] = set()
     if not isinstance(invalidations, list):
@@ -142,7 +56,6 @@ def main() -> int:
             failures.append(f"{label}.id must be a unique string")
         else:
             seen.add(record_id)
-            records_by_id[record_id] = record
         for key in ("backend", "outcome", "artifact"):
             if not isinstance(record.get(key), str) or not record[key]:
                 failures.append(f"{label}.{key} must be a non-empty string")
@@ -152,21 +65,6 @@ def main() -> int:
                 failures.append(f"{label}.{key} requires kind and value")
         if not isinstance(record.get("native_path"), dict) or not record["native_path"]:
             failures.append(f"{label}.native_path must be a non-empty opaque mapping")
-        try:
-            executor = _requires_executor_identity(record)
-        except ValueError as exc:
-            failures.append(f"{label}: {exc}")
-            executor = None
-        if executor is not None and not _historical_record_is_retired(record, invalidation_ids):
-            identity = record.get("executor_source")
-            value = identity.get("value") if isinstance(identity, dict) else None
-            if not isinstance(identity, dict) or not IDENTITY_KEYS <= set(identity) or not isinstance(value, str):
-                failures.append(f"{label}.executor_source requires kind and value for {executor} transfer evidence")
-            elif not _executor_identity_reaches_current(str(record_id), executor, value, migrations):
-                failures.append(
-                    f"{label} executor identity does not reach the current {executor} executor through a "
-                    "behavior-preserving migration chain; re-smoke or retire the record"
-                )
         if record.get("evidence_kind") not in EVIDENCE_KINDS:
             failures.append(f"{label}.evidence_kind is unknown")
         if not isinstance(record.get("observed_at"), (str, date, datetime)):
@@ -202,36 +100,6 @@ def main() -> int:
                 if not isinstance(workflow_note, str) or not workflow_note:
                     failures.append(f"{label}.artifact render.workflow_note must explain the recorded workflow provenance")
 
-    referenced: set[str] = set()
-    support_text = SUPPORT_PATH.read_text(encoding="utf-8")
-    for line_number, backend, status, references in _support_evidence_claims(support_text):
-        label = f"{SUPPORT_PATH.relative_to(ROOT)}:{line_number}"
-        if status == "✅" and not references:
-            failures.append(f"{label} verified support requires identity-bound Evidence references")
-        for record_id in references:
-            referenced.add(record_id)
-            record = records_by_id.get(record_id)
-            if record is None:
-                failures.append(f"{label} references unknown evidence record: {record_id}")
-                continue
-            record_backend = record.get("backend")
-            canonical_backend = _normalized_backend(record_backend) if isinstance(record_backend, str) else ""
-            if canonical_backend != _normalized_backend(backend):
-                failures.append(f"{label} backend {backend!r} does not match evidence {record_id!r} backend {record_backend!r}")
-            if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and canonical_backend == _normalized_backend("sd-scripts"):
-                identity = record.get("adapter_source")
-                value = identity.get("value") if isinstance(identity, dict) else None
-                if not isinstance(value, str) or not _identity_reaches_current(record_id, "sd-scripts", value, migrations):
-                    failures.append(f"{label} evidence {record_id!r} adapter identity does not reach the current adapter through an evidence-scoped behavior-preserving migration chain")
-
-    for record_id, record in records_by_id.items():
-        if (
-            record.get("outcome") == "passed"
-            and record.get("evidence_kind") == "real-optimizer-step"
-            and record_id not in referenced
-            and not _historical_record_is_retired(record, invalidation_ids)
-        ):
-            failures.append(f"passed optimizer evidence is not referenced by backend-support.md: {record_id}")
     if failures:
         raise SystemExit("smoke evidence check failed:\n" + "\n".join(f"- {item}" for item in failures))
     return 0

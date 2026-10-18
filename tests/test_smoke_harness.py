@@ -227,7 +227,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
             self.assertEqual(record["adapter_source"]["value"], "a" * 64)
             self.assertEqual(record["runtime_image"]["value"], "sha256:" + "b" * 64)
             self.assertEqual(record["native_path"]["transfer"], "selected-files")
-            self.assertIn("executor_source", record)
+            self.assertNotIn("executor_source", record)
             self.assertEqual(summary["gpu"], "A40")
             (run_dir / "status.json").write_text(json.dumps({**status, "publication_state": "blocked"}), encoding="utf-8")
             with self.assertRaisesRegex(SystemExit, "did not pass verify"):

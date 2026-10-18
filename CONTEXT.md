@@ -224,15 +224,15 @@ A deliberately tiny run that proves a path works end to end, never a quality
 claim.
 
 **Smoke evidence**:
-A recorded smoke result tied to the source identity and image it ran with.
+A recorded real-run result in `docs/backend-smoke-evidence.yaml`, tied to the
+date, the Kura adapter source identity, and the trainer image it ran with; its
+artifact names the Kura version or commit. Append-only history, not a support
+claim.
 
 **Source identity**:
-The hash of the backend adapter or executor sources a piece of evidence was
-produced with.
-
-**Identity migration**:
-A record declaring that a source identity changed without changing behavior,
-so existing smoke evidence still applies.
+The hash of the backend adapter sources a run was compiled with. Runs and
+smoke evidence record it, and Resume refuses training state saved under a
+different one.
 
 ## UI
 

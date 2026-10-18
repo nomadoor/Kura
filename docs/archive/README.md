@@ -11,6 +11,7 @@ lives in the code, `docs/`, and the skills.
 | `dataset-handoff-projection-classification.md` | `docs/adr/dataset-projection-contract.md` |
 | `dataset-handoff-workspace-path-inventory.md` | `docs/adr/dataset-projection-contract.md` |
 | `training-continuation-design.md` | `docs/adr/resumable-training-state.md` |
+| `backend-validation/` | `docs/adr/evidence-ledger-replaces-support-table.md` |
 
 Do not update an archived document to follow new behavior; record new
 decisions in an ADR instead.

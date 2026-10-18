@@ -589,10 +589,7 @@ def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, 
         "adapter_source": {"kind": realization["adapter_source"]["kind"], "value": realization["adapter_source"]["value"]},
     }
     if smoke.executor == "runpod":
-        from kura.provenance import executor_source_identity
-
         native["transfer"] = "selected-files"
-        record["executor_source"] = {"kind": "source-tree-sha256", "value": executor_source_identity("runpod")["value"]}
     native["optimizer_steps"] = 1
     record.update({
         "runtime_image": {"kind": "docker-image-digest", "value": image},

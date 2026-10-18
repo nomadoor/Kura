@@ -133,7 +133,7 @@ uv run kura cleanup plan   # what can be freed, and what each item costs to get 
 
 ## Supported models
 
-The main ones are below. How far each was actually verified by training is in the [support table](docs/backend-support.md).
+The main ones Kura can set up training for are below.
 
 | Training tool | Main models |
 | --- | --- |
@@ -141,7 +141,7 @@ The main ones are below. How far each was actually verified by training is in th
 | Musubi Tuner | Wan, FLUX.2, Krea 2, Qwen-Image, Z-Image, FLUX.1 Kontext, HiDream-O1, Ideogram 4, HunyuanVideo, FramePack, Kandinsky 5, MiniMax-H3, and more |
 | AI-Toolkit | SD 1.5, SDXL, FLUX.1 / Kontext / Flex.2, Chroma, Qwen-Image, FLUX.2, Krea 2, Z-Image, HiDream, Anima, MiniMax-H3, and more |
 
-"Supported" here means training runs and its outputs are saved. It does not promise a good LoRA from any data or settings.
+A model has actually been trained through Kura only where its [model family card](src/kura/shipped/knowledge/model-families/) or a record in the [real-run evidence ledger](docs/backend-smoke-evidence.yaml) says so; each record states when it ran and with which Kura adapter source and trainer image. Neither promises a good LoRA from any data or settings.
 
 ## Updating Kura
 
@@ -155,7 +155,7 @@ That is all. Anything else needed is set up the next time you run `uv run kura .
 
 - [Training a Krea 2 LoRA with Kura](https://comfyui.nomadoor.net/en/notes/kura-krea2-lora-training/): a worked example from preparing data to comparing in ComfyUI
 - [docs/commands.md](docs/commands.md): command reference
-- [docs/backend-support.md](docs/backend-support.md): the support table and what was verified
+- [src/kura/shipped/knowledge/model-families/](src/kura/shipped/knowledge/model-families/) and [docs/backend-smoke-evidence.yaml](docs/backend-smoke-evidence.yaml): what has actually run
 - [docs/agent-first-cli.md](docs/agent-first-cli.md): what the agent writes and what Kura guarantees
 - [AGENTS.md](AGENTS.md): rules for AI agents
 
