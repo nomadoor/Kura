@@ -1229,7 +1229,11 @@ class RunPodSessionLeaseTests(unittest.TestCase):
             import subprocess
 
             if shutil.which("sh"):
-                self.assertEqual(subprocess.run(["sh", "-n", "-c", script], capture_output=True).returncode, 0)
+                # From a file: a script passed as one argument meets the Windows argument conversion.
+                script_path = root / "start.sh"
+                script_path.write_text(script, encoding="utf-8", newline="\n")
+                checked = subprocess.run(["sh", "-n", str(script_path)], capture_output=True, text=True)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
             self.assertNotIn('sleep "$KURA_MAX_LEASE_SEC"', script)
             realization = json.loads(next(p for p in (run_dir / "realizations").glob("*.json") if "." not in p.stem).read_text(encoding="utf-8"))
             self.assertEqual((realization["lease_guard"], realization["controlled_by"]), ("deadline_file", {"request": "r.launch.json"}))
