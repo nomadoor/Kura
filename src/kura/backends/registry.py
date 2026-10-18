@@ -237,14 +237,14 @@ MUSUBI_SURFACE = BackendSurface(
     }),
     integer_minimums=(("save_every_n_steps", 1), ("gradient_accumulation_steps", 1), ("prune_checkpoints_before_step", 1)),
     decided=(("lr_scheduler", LR_SCHEDULER_DECIDED),),
-    # Generic defaults of the pinned trainer (v0.3.5), shared by every architecture.
+    # Generic defaults of the pinned trainer (v0.3.6), shared by every architecture.
     required=(
         _required("learning_rate", "2e-6 (training/parser_common.py:323)"),
         _required("optimizer_type", "'', read as AdamW (training/parser_common.py:310)"),
-        _required("network_dim", "4 (networks/lora.py:420)"),
+        _required("network_dim", "4 (networks/lora.py:428)"),
         _required("network_alpha", "1 (training/parser_common.py:561)"),
         # timestep_sampling, discrete_flow_shift, and weighting_scheme are shared flags every
-        # Musubi trainer reads (training/parser_common.py, trainer_base.py:646), so they are
+        # Musubi trainer reads (training/parser_common.py, trainer_base.py:648), so they are
         # declared for every architecture. Upstream's guides train these architectures with
         # shift, flux_shift, or the model's own sampling and a model-specific shift
         # (docs/<architecture>.md), not the generic sigma and 1.0. Ideogram 4 sets its own

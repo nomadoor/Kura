@@ -1,0 +1,56 @@
+schema_version: 1
+observed_at: '2026-10-18'
+executor: docker
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  One-step real smokes on local Docker of the two Musubi Tuner families whose text-encoder
+  loading changed in v0.3.6 (FLUX.1 Kontext T5 eval() and SDPA, Ideogram 4 rotary
+  initialization). Run fields are the scripts/real_smoke.py smokes musubi-ideogram4 and
+  musubi-flux-kontext with the executor set to docker. The first v0.3.6 build
+  (sha256:fa80acc5..., never pinned on main) had no protobuf and failed FLUX.1 Kontext; the
+  pinned build adds protobuf and passed both.
+records:
+  - id: musubi-ideogram4-2026-10-18-2300
+    run_id: 20261018-2300_musubi-ideogram4_1ef3
+    model: Comfy-Org/Ideogram-4
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    outcome: passed
+    losses: [0.0793, 0.0793]
+    outputs:
+      - outputs/20261018-2300_musubi-ideogram4_1ef3-step00000001.safetensors
+      - outputs/20261018-2300_musubi-ideogram4_1ef3.safetensors
+    input_postflight: matched
+    publication: completed
+  - id: musubi-flux-kontext-2026-10-18-2300
+    run_id: 20261018-2300_musubi-flux-kontext_ee86
+    model: black-forest-labs/FLUX.1-Kontext-dev
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-musubi-tuner@sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    outcome: passed
+    losses: [0.0867, 0.0867]
+    outputs:
+      - outputs/20261018-2300_musubi-flux-kontext_ee86-step00000001.safetensors
+      - outputs/20261018-2300_musubi-flux-kontext_ee86.safetensors
+    input_postflight: matched
+    publication: completed
+  - id: musubi-flux-kontext-tokenizer-failure-2026-10-18
+    run_id: 20261018-2136_musubi-flux-kontext_185a
+    model: black-forest-labs/FLUX.1-Kontext-dev
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-musubi-tuner@sha256:fa80acc552a1740387f26f6d1956a5bc38a0837739929312557a57abbd6ec66d
+    outcome: failed-before-training
+    exit_code: 1
+    optimizer_steps: 0
+    failing_phase: flux_kontext_cache_text_encoder_outputs.py
+    error: >-
+      flux_utils.load_t5xxl -> T5Tokenizer.from_pretrained("google/t5-v1_1-xxl") under
+      transformers 5.17.0: the repository has only spiece.model; extracting it needs protobuf,
+      which that build lacked, and the TikToken fallback needs tiktoken, also absent:
+      "ValueError: `tiktoken` is required to read a `tiktoken` file."
+    note: >-
+      Upstream v0.3.6 pins transformers 5.17.0 and sentencepiece 0.2.1 but declares no protobuf;
+      the v0.3.5 image (transformers 4.57.6) loaded the slow sentencepiece tokenizer directly.
+      The Dockerfile now installs protobuf after the upstream install.

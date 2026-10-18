@@ -19,9 +19,9 @@ Musubi Tuner and Kura's Musubi backend are not the same layer.
   that adapter. If this has not been done, call the adapter experimental or
   unverified rather than simply "done."
 
-As of 2026-09-21, all adapters listed below passed image smoke on
-`nomadoor/kura-musubi-tuner:dev`, a development build of the image Kura now
-pins by digest: the image contains the
+As of 2026-10-18, all adapters listed below passed image smoke on the v0.3.6
+build of the image Kura pins by digest
+(`smoke-evidence/2026-10-18-musubi-v0.3.6-entrypoints.yaml`): the image contains the
 39 expected Musubi scripts and each script can start its `--help` path. Earlier
 Docker launch smoke also proved that Kura can compile and start adapter commands
 against the Musubi entrypoints, but dummy-path launch smoke is not a real
@@ -42,7 +42,7 @@ generator for it.
 
 | Architecture | Kura built-in adapter | Image smoke | Real smoke | Notes |
 | --- | --- | --- | --- | --- |
-| MiniMax-H3 | yes | passed `kura doctor musubi` on the pinned v0.3.5 image | T2VA guidance loss and plain one-frame image guidance loss passed A40 1-step with output/state recovery (`musubi-minimax-h3-runpod-2026-09-22`, `musubi-minimax-h3-image-runpod-2026-09-22`); other modes remain pending | `architecture: minimax_h3`; typed dataset and command coverage includes `task: t2va`, `fl2va`, and `ref2va`, `one_frame`, timed controls, ordered references, and `h3_loss_method: guidance`, `training_adapter`, or `teacher_matching`. |
+| MiniMax-H3 | yes | passed `kura doctor musubi` on the pinned v0.3.6 image | T2VA guidance loss and plain one-frame image guidance loss passed A40 1-step with output/state recovery (`musubi-minimax-h3-runpod-2026-09-22`, `musubi-minimax-h3-image-runpod-2026-09-22`); other modes remain pending | `architecture: minimax_h3`; typed dataset and command coverage includes `task: t2va`, `fl2va`, and `ref2va`, `one_frame`, timed controls, ordered references, and `h3_loss_method: guidance`, `training_adapter`, or `teacher_matching`. |
 | FLUX.2 / FLUX.2 klein | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | verified in prior local/RunPod runs | `architecture: flux2` |
 | Wan | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker and RunPod 1-step paths; identity-bound records: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12` | `architecture: wan` |
 | Krea 2 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | base path passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py krea2`); v0.3.5 ConvRot/offload paths remain compile-only | `architecture: krea2`; typed `convrot_int8`, `convrot_int8_bwd`, and `gradient_checkpointing_cpu_offload` accommodations |
@@ -147,7 +147,7 @@ Every JSONL caption applies the pinned directory loader's `str.strip()` rule.
 Target video audio is either an explicit manifest `audio` role or embedded
 audio. The pinned `resolve_audio_source` first resolves the JSONL video path
 before looking for a same-stem sidecar (`musubi_tuner/dataset/audio_utils.py`,
-lines 71-101 at `4e7c714`), so a local symlink view would otherwise expose an
+lines 120-161 at `f8a1b03`), so a local symlink view would otherwise expose an
 undeclared sidecar beside the original video. Kura's container preflight rejects
 that case and requires the sidecar to be selected as the manifest `audio` role.
 Ordered references preserve manifest order: video references use embedded audio
@@ -162,18 +162,32 @@ Unmatched architecture/shape/mode combinations stop instead of falling back to
 folder inference. Before model acquisition, H3 video JSONL targets are measured
 with the pinned loader's timestamp-resampling path: `load_video(...,
 target_fps=24, fps_resample_mode="timestamps")`, which delegates to
-`_load_video_timestamp_resampled` (`dataset/datasources.py`, lines 520-528, and
-`dataset/media_utils.py`, lines 181-246 at `4e7c714`). H3 therefore does not
+`_load_video_timestamp_resampled` (`dataset/datasources.py`, lines 519-527, and
+`dataset/media_utils.py`, lines 237-304 at `f8a1b03`). H3 therefore does not
 accept `source_fps`; the measured result must satisfy `max(target_frames)`.
 Plans warn when requested frames are outside the released 124-345 frame range.
 Pinned H3 reference loading raises an error, rather than silently skipping, for
 video references outside 2-15 seconds (`minimax_h3/media.py`, lines 231-237 at
-`4e7c714`). `uv run kura run capabilities musubi-tuner` lists the complete
+`f8a1b03`). `uv run kura run capabilities musubi-tuner` lists the complete
 authored field surface.
 
+From v0.3.6 the pinned loaders repair what earlier versions refused, and refuse
+a few things they accepted. Embedded audio is placed on the timeline of the
+first video frame, and missing audio at either end counts as silence. Audio
+timestamp jumps up to 50 ms are concatenated, zero-filled, or trimmed, and
+larger ones fail; a training window with more than 0.2 s of missing audio in total fails
+(`dataset/audio_utils.py`, lines 20-37 at `f8a1b03`). Video frames whose
+timestamps step back by at most four source frames are reordered with a
+warning; a larger step back fails (`dataset/media_utils.py`, lines 143-185).
+Kura's preflight measures frames with the same video loader, so it follows the
+video rule; the audio rules apply when the latent cache runs. Kura emits neither
+the cache scripts' tolerance overrides (`--audio_max_discontinuity`,
+`--audio_max_missing`) nor `--skip_broken`, which would drop an item and make
+the recorded dataset differ from what was trained.
+
 Krea 2 exposes `convrot_int8` and `convrot_int8_bwd` (`bf16` or `int8`) as
-typed v0.3.5 memory accommodations. ConvRot cannot be combined with FP8 or the
-Turbo sampling DiT. `gradient_checkpointing_cpu_offload` is also typed and
+typed memory accommodations (added at v0.3.5). ConvRot cannot be combined with
+FP8 or the Turbo sampling DiT. `gradient_checkpointing_cpu_offload` is also typed and
 requires `gradient_checkpointing: true`; Kura rejects invalid combinations
 during compile rather than leaving them for a paid runtime to discover.
 

@@ -14,6 +14,90 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: musubi-ideogram4-2026-10-18-2300
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 98c99667cfeda6349ea842ed0167501c463eba009a239111ccb252b5dc29d238
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    native_path:
+      architecture: ideogram4
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-musubi-v0.3.6-real-smokes.yaml
+  - id: musubi-flux-kontext-2026-10-18-2300
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 98c99667cfeda6349ea842ed0167501c463eba009a239111ccb252b5dc29d238
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    native_path:
+      architecture: flux_kontext
+      executor: docker
+      dataset: real-smoke-image-control
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-musubi-v0.3.6-real-smokes.yaml
+  - id: musubi-flux-kontext-tokenizer-failure-2026-10-18
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 98c99667cfeda6349ea842ed0167501c463eba009a239111ccb252b5dc29d238
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:fa80acc552a1740387f26f6d1956a5bc38a0837739929312557a57abbd6ec66d
+    native_path:
+      architecture: flux_kontext
+      executor: docker
+      dataset: real-smoke-image-control
+      phase: cache_text_encoder_outputs
+    evidence_kind: real-runtime
+    outcome: failed-before-training
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-musubi-v0.3.6-real-smokes.yaml
+  - id: musubi-tuner-v0.3.6-conformance-docker-2026-10-18
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 98c99667cfeda6349ea842ed0167501c463eba009a239111ccb252b5dc29d238
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    native_path:
+      architecture: wan
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-musubi-v0.3.6-conformance.yaml
+  - id: musubi-v0.3.6-entrypoints-2026-10-18
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 98c99667cfeda6349ea842ed0167501c463eba009a239111ccb252b5dc29d238
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    native_path:
+      probe: registered-entrypoint-help
+      passed_entrypoints: 39/39
+    evidence_kind: parser
+    outcome: passed
+    observed_at: 2026-10-18
+    artifact: smoke-evidence/2026-10-18-musubi-v0.3.6-entrypoints.yaml
   - id: ai-toolkit-0.13.32-conformance-runpod-2026-10-18
     backend: ai-toolkit
     adapter_source:

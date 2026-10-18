@@ -524,7 +524,7 @@ class ImageCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-            self.assertIn("MUSUBI_TUNER_REF=v0.3.5", commands[0])
+            self.assertIn("MUSUBI_TUNER_REF=v0.3.6", commands[0])
 
     def test_image_build_reads_the_checkout_from_a_nested_workspace_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

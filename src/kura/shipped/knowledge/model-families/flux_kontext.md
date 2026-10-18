@@ -1,6 +1,11 @@
 # flux_kontext
 
 
+- Recorded: a 1-step Musubi Tuner v0.3.6 LoRA smoke on Docker ran on a 12 GB
+  RTX 4070 Ti at 256px, batch 1, dim 1, fp8 DiT (`fp8_base`, `fp8_scaled`),
+  fp8 T5 file, 24 swapped blocks, gradient checkpointing, AdamW8bit; peak VRAM
+  was not recorded.
+  source: run 20261018-2300_musubi-flux-kontext_ee86 (Kura smoke evidence, 2026-10-18)
 - Artifacts: owner baseline is fp8 DiT + fp8 T5 (`t5xxl_fp8_e4m3fn` with
   `fp8_t5: true`) for local/consumer-GPU LoRA training. Full-precision T5 is
   not worth the download for normal LoRA use unless a run has a specific reason
