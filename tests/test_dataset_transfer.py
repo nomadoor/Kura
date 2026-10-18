@@ -552,6 +552,38 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 ssh.assert_not_called()
 
 
+    def test_a_command_env_the_job_script_cannot_carry_is_refused_before_upload(self) -> None:
+        from kura.dataset_transfer import TransferRefused, pin_transfer_manifest
+        from kura.run_commands.runpod_ssh import _prepare_remote_upload
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, run = self._compiled(root)
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            pinned = "realizations/real-1.transfer-manifest.json"
+            digest = pin_transfer_manifest(root, run_dir, run, record, run_dir / pinned)
+            (run_dir / "realizations" / "real-1.json").write_text(json.dumps({
+                "id": "real-1",
+                "request": {"env": {"KURA_WORKSPACE": "/workspace"}},
+                "container_cwd": "/opt/tool",
+                "backend_command": ["python", "train.py"],
+                "transfer": {"stage": status["last_stage"], "pinned_manifest": pinned, "manifest_sha256": digest},
+            }), encoding="utf-8")
+            status["last_realization"] = "realizations/real-1.json"
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+
+            def frozen(env: dict) -> dict:
+                return {"backend": "musubi-tuner", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": env, "adapter_source": {}}
+
+            with patch("kura.run_commands.runpod_ssh._load_frozen_command", return_value=frozen({"KURA_MUSUBI_X": "1"})):
+                self.assertEqual(_prepare_remote_upload(run_dir)["command_env"], {"KURA_MUSUBI_X": "1"})
+            # A name compile refuses today, frozen by an older Kura: refused while the Pod can still be stopped unused.
+            with patch("kura.run_commands.runpod_ssh._load_frozen_command", return_value=frozen({"HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"})):
+                with self.assertRaisesRegex(TransferRefused, "secret"):
+                    _prepare_remote_upload(run_dir)
+
+
 @posix_only(DATASET_IO)
 class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
     """The Pod-side receive path, exercised through the generated job script."""

@@ -1133,10 +1133,10 @@ def launch_runpod(
     workspace_path = settings["workspace_path"]
     # The job over SSH creates and checks these roots; a malformed declaration is refused here first, before any Pod exists.
     validated_write_roots(spec, workspace_path=workspace_path)
-    log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_training_env(
         spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
     )
+    log_path = runtime_env["KURA_LOG_PATH"]
     secret_keys = [key for key in runtime_env if _is_secret(key)]
     if secret_keys:
         raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))
@@ -1175,8 +1175,6 @@ def launch_runpod(
         "KURA_UPLOAD_CODE": upload_code,
         "KURA_DOWNLOAD_CODE": download_code,
         "KURA_UPLOAD_ARCHIVE_NAME": stage["archive_name"],
-        "KURA_WORKSPACE": workspace_path,
-        "KURA_RUN_ID": run_dir.name,
     })
     upload_script = r'''
 set -u
@@ -1541,8 +1539,8 @@ def launch_runpod_session(
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
-    log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name, max_lease_sec=max_lease_sec)
+    log_path = runtime_env["KURA_LOG_PATH"]
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"

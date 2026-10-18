@@ -40,7 +40,7 @@ from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import training_state_policy
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, kura_env_exports, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import local_reserve_gib
 from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
@@ -1866,13 +1866,9 @@ def _runpod_remote_job_script(
 ) -> str:
     declared_roots = write_roots or []
     # An SSH session does not inherit the Pod's create-time environment, so
-    # the frozen command's env is exported here; Kura's own values below win.
-    command_exports = []
-    for key, value in sorted((command_env or {}).items()):
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str):
-            raise ValueError(f"frozen command env has an invalid entry: {key!r}")
-        command_exports.append(f"export {key}={shlex.quote(value)}")
-    command_env_block = "\n".join(command_exports)
+    # the frozen command's env is exported here; Kura's own values below win
+    # (kura_container_env, the same values the Pod was created with).
+    command_env_block = kura_env_exports(command_env or {})
     if transfer_manifest is None:
         receive_inputs = (
             f'tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?'
@@ -1930,14 +1926,9 @@ if [ -f "$secret_file" ]; then
 fi
 {command_env_block}
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
-export KURA_WORKSPACE={shlex.quote(workspace)}
-export KURA_RUN_ID={shlex.quote(run_id)}
-export KURA_REALIZATION_ID={shlex.quote(realization_id)}
-export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
+{kura_env_exports(kura_container_env(workspace_path=workspace, run_id=run_id, realization_id=realization_id))}
 export KURA_JOB_STARTED_EPOCH=$(date +%s)
 {POD_SELF_DELETE_FUNCTION}
-export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
-export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
 mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"
@@ -2132,6 +2123,9 @@ def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
         )
     frozen = _load_frozen_command(run_dir, _load_yaml(run_dir / "resolved" / "manifest.lock.yaml"))
     command_env = frozen.get("env") if isinstance(frozen.get("env"), dict) else {}
+    # The job script exports this env; refuse it here, before the first SSH
+    # action, so the caller stops the unused Pod instead of leaving it billing.
+    kura_env_exports(command_env)
     return {
         "command_env": command_env,
         "stage": stage, "archive_path": archive_path, "archive_name": archive_name, "status": status,

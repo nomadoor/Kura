@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -590,6 +591,25 @@ def append_run_event(run_dir: Path, event: dict[str, Any], *, best_effort: bool 
 
 def _is_secret(name: str) -> bool:
     return is_secret_name(name)
+
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def kura_env_exports(env: dict[str, str]) -> str:
+    """Shell `export` lines that set `env` in an SSH session, which does not inherit the Pod's env.
+
+    The script travels as an SSH argument or on stdin, so a secret never goes
+    into one (secrets reach the Pod only through the session's secret file).
+    """
+    lines = []
+    for name in sorted(env):
+        if not isinstance(name, str) or not _ENV_NAME.fullmatch(name) or not isinstance(env[name], str):
+            raise ValueError(f"not an environment variable name and text value for a remote script: {name!r}")
+        if _is_secret(name):
+            raise ValueError(f"refusing to write secret {name} into a remote script")
+        lines.append(f"export {name}={shlex.quote(env[name])}")
+    return "\n".join(lines)
 
 
 def kura_container_env(*, workspace_path: str, run_id: str, realization_id: str | None = None) -> dict[str, str]:

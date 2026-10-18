@@ -12,7 +12,7 @@ from typing import Any
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
 from kura.yamlio import YAMLError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop, kura_container_env, kura_env_exports
 from kura.executors.runpod import confirm_runpod_billing, format_cost_ceiling, runpod_cost_ceiling, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
@@ -197,9 +197,7 @@ chmod 600 {shlex.quote(remote_secret_path)}
     script = f"""
 set -euo pipefail
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
-export KURA_WORKSPACE={shlex.quote(workspace)}
-export KURA_RUN_ID={shlex.quote(run_id)}
-export KURA_LOG_PATH={shlex.quote(workspace.rstrip('/') + '/runs/' + run_id + '/logs/stdout.log')}
+{kura_env_exports(kura_container_env(workspace_path=workspace, run_id=run_id))}
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 touch "$KURA_LOG_PATH"
 secret_file={shlex.quote(remote_secret_path)}

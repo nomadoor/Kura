@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +20,10 @@ from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, local_do
 from kura.container_scripts import script_source
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
 from kura.run_commands.common import _load_frozen_command
+from kura.executors.common import kura_container_env, kura_env_exports
+from kura.run_commands.render_runpod import _start_runpod_comfyui
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+from unittest.mock import patch
 from kura.media_types import frozen_suffixes
 
 
@@ -347,6 +351,50 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         self.assertIn("KURA_MAX_LEASE_SEC", session_env)
         self.assertTrue(required_env_names([COMFYUI_PREPARE_PATH]) <= set(session_env))
 
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "a Pod runs these scripts under Linux bash")
+    def test_runpod_ssh_sessions_export_kura_container_env(self) -> None:
+        """An SSH session does not inherit the Pod's create-time env, so each script sets Kura's own values."""
+
+        def session_values(script: str) -> dict[str, str]:
+            # Run only the export lines, in an empty environment, as the Pod's shell would.
+            exports = "\n".join(line for line in script.splitlines() if line.startswith("export "))
+            names = sorted(kura_container_env(workspace_path="/workspace", run_id="x", realization_id="r"))
+            printed = subprocess.run(
+                ["env", "-i", "bash", "-c", exports + "\n" + "".join(f'printf "%s=%s\\n" {name} "${{{name}-}}"\n' for name in names)],
+                text=True, capture_output=True, check=True,
+            ).stdout
+            return dict(line.split("=", 1) for line in printed.splitlines() if line.split("=", 1)[1])
+
+        training = _runpod_remote_job_script(
+            workspace="/workspace", run_id="contract-run", realization_id="r1",
+            remote_secret_path="/tmp/kura-secrets/contract-run.env", archive_name="bundle.tar.gz",
+            remote_archive="/workspace/bundle.tar.gz", cwd="/opt/musubi", command="true",
+        )
+        self.assertEqual(session_values(training), kura_container_env(workspace_path="/workspace", run_id="contract-run", realization_id="r1"))
+
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.render_runpod.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run, \
+                patch("kura.run_commands.render_runpod._runpod_secret_env_payload", return_value=None):
+            _start_runpod_comfyui(
+                details, workspace="/workspace", run_id="render-1",
+                models_remote="/workspace/runs/render-1/resolved/comfyui_models.json",
+                lora_remote_name=None, lora_remote_path=None,
+            )
+        render = run.call_args.args[0][-1]
+        render_env = session_values(render)
+        self.assertEqual(render_env, kura_container_env(workspace_path="/workspace", run_id="render-1"))
+        # The model prepare step reads these; they must be set before it runs.
+        self.assertTrue(required_env_names([COMFYUI_PREPARE_PATH]) <= set(render_env))
+        self.assertLess(render.index("export HF_HUB_CACHE="), render.index("kura_comfy_prepare.py"))
+
+    def test_kura_env_exports_refuse_a_secret_or_an_unsafe_name(self) -> None:
+        # The scripts travel as SSH arguments or stdin; a secret never goes into one.
+        with self.assertRaisesRegex(ValueError, "secret"):
+            kura_env_exports({"HF_TOKEN": "x"})
+        with self.assertRaisesRegex(ValueError, "name"):
+            kura_env_exports({"A; rm -rf /": "x"})
+        self.assertEqual(kura_env_exports({"B": "it's", "A": "1"}), "export A=1\nexport B='it'\"'\"'s'")
+
     def test_runpod_ssh_remote_job_exports_cache_contract_before_work(self) -> None:
         script = _runpod_remote_job_script(
             workspace="/workspace",
@@ -366,9 +414,9 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
                     return index
             self.fail(f"missing line containing {needle!r}")
 
-        export_hf = line_index('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"')
+        export_hf = line_index("export HF_HOME=/workspace/cache/huggingface")
         self.assertIn("export KURA_REALIZATION_ID=r1", script)
-        export_hub = line_index('export HF_HUB_CACHE="$HF_HOME/hub"')
+        export_hub = line_index("export HF_HUB_CACHE=/workspace/cache/huggingface/hub")
         mkdir_hf = line_index('mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"')
         contract_check = line_index("HF_HOME must be under KURA_WORKSPACE before remote job start")
         unpack = line_index("tar -xzf")
