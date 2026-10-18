@@ -730,6 +730,12 @@ def read_resume_lock(run_dir: Path) -> dict[str, Any] | None:
     return loaded
 
 
+class ResumeSourceMismatch(ValueError):
+    """The saved state was made by another trainer image or Kura adapter than this Resume would run.
+
+    `kura run compile` says how to go on for these, as for refused settings."""
+
+
 def resume_artifact_directory(workspace: Path, run: dict[str, Any]) -> Path | None:
     if verified_resume_source(workspace, run) is None:
         return None
@@ -771,7 +777,11 @@ def compile_resume_lock(
         return None
     source = continuation["source"]
     if not _recorded_recipe_matches(workspace, run, source["recipe_sha256"]):
-        raise ValueError("Resume training recipe changed after the derived run was created; create a Fork from Weight instead")
+        raise ValueError(
+            "Resume training recipe changed after the derived run was created; a Resume keeps its source's recipe, "
+            "so undo the change, or create a new run with "
+            f"`kura run new --from {run.get('parent_run') or '<source run>'}` and change it there, which trains from the start"
+        )
     manifest = verified_resume_source(workspace, run)
     if manifest.get("source_run") != run.get("parent_run"):
         raise ValueError("Resume artifact source run does not match parent_run")
@@ -810,7 +820,7 @@ def compile_resume_lock(
         source_adapter = source_runtime.get("adapter_source")
         target_adapter = target_runtime_identity.get("adapter_source")
         if source_adapter is not None and source_adapter != target_adapter:
-            raise ValueError("Resume backend adapter identity differs from the source training state")
+            raise ResumeSourceMismatch("Resume backend adapter identity differs from the source training state")
         source_executor = source_runtime.get("actual_executor")
         target_executor = target_runtime_identity.get("declared_executor")
         source_image = source_runtime.get("actual_image_identity")
@@ -819,7 +829,7 @@ def compile_resume_lock(
         target_pinning = target_image.get("pinning") if isinstance(target_image, dict) else None
         if source_executor == target_executor:
             if source_image is not None and source_image != target_image:
-                raise ValueError("Resume runtime image identity differs from the source training state")
+                raise ResumeSourceMismatch("Resume runtime image identity differs from the source training state")
         elif source_executor is not None:
             if not isinstance(target_pinning, dict) or target_pinning.get("strength") != "content-hash":
                 raise ValueError("cross-executor Resume target runtime image must have an observed or declared content hash")
@@ -975,7 +985,7 @@ def require_constant_scheduler_for_resume(backend_label: str, scheduler: Any) ->
     if scheduler is not None and scheduler != RESUME_LR_SCHEDULER:
         raise ValueError(
             f"{backend_label} State Resume initially requires lr_scheduler: {RESUME_LR_SCHEDULER}, not {scheduler!r}; "
-            "create a Fork from Weight to change the schedule"
+            "to train with another schedule, create a new run with `kura run new --from <source run>`, which trains from the start"
         )
 
 

@@ -50,14 +50,22 @@ class TrainingLeftoverTests(unittest.TestCase):
         frozen = {"backend": {"name": "musubi-tuner", "config": {"architecture": "qwen_image", "extra_args": ["--discrete_flow_shift", "2.2"], "learning_rate": True}}}
         validate_backend_config(frozen, frozen=True)
 
-    def test_only_a_settings_refusal_sends_a_resume_to_fork_from_weight(self) -> None:
+    def test_only_settings_and_source_mismatch_refusals_tell_a_resume_how_to_go_on(self) -> None:
         from kura.cli import _compile_refusal
         from kura.run_envelope import SettingsRefused
+        from kura.training_artifacts import ResumeSourceMismatch
 
-        resume = {"continuation": {"mode": "resume"}}
-        self.assertIn("Fork from Weight", _compile_refusal(resume, SettingsRefused("run.yaml: x is not a training run setting.")))
-        self.assertNotIn("..", _compile_refusal(resume, SettingsRefused("run.yaml: x is not a training run setting.")))
-        self.assertNotIn("Fork from Weight", _compile_refusal(resume, ValueError("dataset 'tiny' digest does not match the current dataset files")))
+        resume = {"continuation": {"mode": "resume"}, "parent_run": "source-run"}
+        settings = _compile_refusal(resume, SettingsRefused("run.yaml: x is not a training run setting."))
+        self.assertIn("`kura run new --from source-run`", settings)
+        self.assertIn("runs/source-run/resolved/env.lock", settings)
+        self.assertNotIn("..", settings)
+        # After a Kura update moves a trainer, the saved state's image or adapter differs.
+        mismatch = _compile_refusal(resume, ResumeSourceMismatch("Resume runtime image identity differs from the source training state"))
+        self.assertIn("`kura run new --from source-run`", mismatch)
+        self.assertIn("runs/source-run/resolved/env.lock", mismatch)
+        self.assertNotIn("fix the settings", mismatch)
+        self.assertNotIn("kura run new", _compile_refusal(resume, ValueError("dataset 'tiny' digest does not match the current dataset files")))
 
     def test_krea2_fp8_base_without_fp8_scaled_is_refused_at_compile(self) -> None:
         run = _musubi({"architecture": "krea2", "model_bundle": "krea2-raw", "fp8_base": True})
