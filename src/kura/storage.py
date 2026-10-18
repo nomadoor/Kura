@@ -226,11 +226,16 @@ def _windows_drive_free_bytes(drive: str) -> int | None:
         return None
 
 
+# The `drive_memo` key of the drive detected behind the WSL virtual disk; a drive letter never looks like this.
+_AUTO_DRIVE = "auto-detected"
+
+
 def probe_storage(
-    path: Path, config: dict[str, Any] | None = None, *, role: str | None = None, drive_memo: dict[str, int | None] | None = None,
+    path: Path, config: dict[str, Any] | None = None, *, role: str | None = None, drive_memo: dict[str, Any] | None = None,
 ) -> StorageStatus:
-    """The effective free space behind `path`. `drive_memo` keeps each Windows drive's free space for
-    one round of probes, so stores on one drive ask PowerShell once."""
+    """The effective free space behind `path`. `drive_memo` keeps, for one round of probes, the
+    detected drive behind the WSL virtual disk (under `_AUTO_DRIVE`, a failed lookup included) and
+    each Windows drive's free space, so stores on one drive start PowerShell once per round."""
     probe = _existing_probe(path)
     usage = shutil.disk_usage(probe)
     mount = _findmnt_for(probe)
@@ -252,7 +257,14 @@ def probe_storage(
             confidence = "exact"
         elif fstype == "ext4":
             backing_kind = "wsl2_vhdx"
-            drive = _config_drive(config, "host_drive") or _auto_wsl_host_drive()
+            drive = _config_drive(config, "host_drive")
+            if drive is None:
+                if drive_memo is not None and _AUTO_DRIVE in drive_memo:
+                    drive = drive_memo[_AUTO_DRIVE]
+                else:
+                    drive = _auto_wsl_host_drive()
+                    if drive_memo is not None:
+                        drive_memo[_AUTO_DRIVE] = drive
             backing_id = drive or str(mount.get("source") or "wsl2-vhdx")
             if drive and drive_memo is not None and drive in drive_memo:
                 host_free = drive_memo[drive]

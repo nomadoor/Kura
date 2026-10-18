@@ -917,7 +917,7 @@ def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str
     reserve_gib, setting = local_reserve_gib(run, docker_config)
     checked: set[tuple[str, str]] = set()
     unmeasured: list[str] = []
-    drive_memo: dict[str, int | None] = {}
+    drive_memo: dict[str, Any] = {}
     for name, path in local_write_paths(workspace, config).items():
         status = probe_storage(path, config, role=name, drive_memo=drive_memo)
         backing = (status.backing_kind, status.backing_id)

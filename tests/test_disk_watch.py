@@ -147,13 +147,16 @@ class ReserveOwnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
             stack.enter_context(patch("kura.storage.is_wsl", return_value=True))
             stack.enter_context(patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}))
-            stack.enter_context(patch("kura.storage._auto_wsl_host_drive", return_value="D:"))
             drive = stack.enter_context(patch("kura.storage._windows_drive_free_bytes", return_value=1600 * GIB))
+            # The drive behind the virtual disk is looked up once per check too, even when the lookup fails.
+            auto = patch("kura.storage._auto_wsl_host_drive", side_effect=["D:", None]).start()
+            stack.callback(patch.stopall)
             stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * GIB, used=100 * GIB, free=900 * GIB)))
             self.assertEqual(local_reserve_problem(Path(directory).resolve(), {}, {}), (None, []))
-            self.assertEqual(drive.call_count, 1)
-            local_reserve_problem(Path(directory).resolve(), {}, {})
-            self.assertEqual(drive.call_count, 2)
+            self.assertEqual((drive.call_count, auto.call_count), (1, 1))
+            _, unmeasured = local_reserve_problem(Path(directory).resolve(), {}, {})
+            self.assertEqual((drive.call_count, auto.call_count), (1, 2))
+            self.assertEqual(len(unmeasured), 1)
 
     def test_a_failed_powershell_answer_is_not_kept(self) -> None:
         from kura import storage
