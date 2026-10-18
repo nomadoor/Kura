@@ -15,6 +15,8 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-19 | tests | The moved-lease-during-retry test stubs `kura_pod_self_delete`, so the real `kura_lease_moved` check never runs in a test, and it runs under bash, not sh; drive the real self-delete against the 503 sandbox with a stubbed sleep that moves the deadline | review of the self-delete retry | P6
+- 2026-10-19 | RunPod lease | A delete attempt already in flight when `kura run lease` moves the deadline can still delete the Pod (a window of one attempt, at most about 60 s) | review of the self-delete retry | P6
 - 2026-10-19 | render cost | `kura render launch` has no way to shorten the RunPod lease, so the cost ceiling of a render that takes minutes is computed over the 12 h default lease (about $7 on an A40) | ComfyUI v0.41.3 upgrade | -
 - 2026-10-19 | HF cache | A file that vanishes mid-scan (a concurrent download's `.shared` or `.incomplete` file) marks the scan incomplete, so a freeable payload is kept; ignore FileNotFoundError in `_scan_entry` (a link to the locked payload cannot change meanwhile) | re-check of the shared HF blob store fix | -
 - 2026-10-19 | HF cache | `_store_payloads` lets an OSError from listing a prefix directory escape, which crashes `kura cleanup plan`; and a lock file Kura creates is 0644 under the umask (huggingface_hub fchmods 0o666), so another uid sharing the cache falls back to a private copy | re-check of the shared HF blob store fix | -

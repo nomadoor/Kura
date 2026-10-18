@@ -7,8 +7,20 @@
 # uses (podTerminate), then podStop if termination is refused. It avoids the
 # Pod's preinstalled runpodctl, whose command syntax follows the version RunPod
 # ships, and sends its own User-Agent because RunPod's edge rejects Python's.
+#
+# It keeps trying until RunPod accepts one of the mutations: a guard that gave
+# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod
+# billing with no end. The wait between attempts doubles from
+# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.
+#
+# The optional second argument names a shell function the caller defines; it is
+# asked before every retry, and when it succeeds the Pod is to be kept (a
+# controller started collecting, or the lease was moved), so trying stops.
+# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the
+# Pod, and 1 only when credentials are missing, since no retry can supply them.
 kura_pod_self_delete() {
   kura_log="$1"
+  kura_keep="${2:-}"
   kura_env_file="${KURA_POD_ENV_FILE:-/proc/1/environ}"
   if [ -z "${RUNPOD_API_KEY:-}" ] && [ -r "$kura_env_file" ]; then
     RUNPOD_API_KEY=$(tr '\000' '\n' < "$kura_env_file" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)
@@ -23,7 +35,24 @@ kura_pod_self_delete() {
     echo "[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing" >> "$kura_log" 2>&1 || true
     return 1
   fi
-  "$kura_python" - "$RUNPOD_POD_ID" >> "$kura_log" 2>&1 <<'KURA_POD_SELF_DELETE'
+  kura_retry="${KURA_POD_SELF_DELETE_RETRY_SEC:-30}"
+  case "$kura_retry" in ''|*[!0-9]*) kura_retry=30 ;; esac
+  while ! kura_pod_self_delete_once "$kura_python" "$kura_log"; do
+    echo "[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s" >> "$kura_log" 2>&1 || true
+    sleep "$kura_retry"
+    if [ -n "$kura_keep" ] && "$kura_keep"; then
+      echo "[kura] Pod self-delete stopped: the Pod is to be kept now" >> "$kura_log" 2>&1 || true
+      return 2
+    fi
+    kura_retry=$(( kura_retry * 2 ))
+    if [ "$kura_retry" -gt 300 ]; then kura_retry=300; fi
+  done
+  return 0
+}
+
+# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.
+kura_pod_self_delete_once() {
+  "$1" - "$RUNPOD_POD_ID" >> "$2" 2>&1 <<'KURA_POD_SELF_DELETE'
 import json, os, sys, urllib.request
 
 pod_id = sys.argv[1]

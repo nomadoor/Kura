@@ -1496,16 +1496,25 @@ kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
 (
   set +e
   {pod_export}
-  while :; do
+  kura_lease_deadline_now() {{
     kura_lease_deadline=$(cat {deadline_file} 2>/dev/null)
     # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.
     case "$kura_lease_deadline" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac
-    [ "$(date +%s)" -ge "$kura_lease_deadline" ] && break
-    sleep 30
+  }}
+  # `kura run lease` may move the deadline while a delete is being retried.
+  kura_lease_moved() {{ kura_lease_deadline_now; [ "$(date +%s)" -lt "$kura_lease_deadline" ]; }}
+  while :; do
+    while :; do
+      kura_lease_deadline_now
+      [ "$(date +%s)" -ge "$kura_lease_deadline" ] && break
+      sleep 30
+    done
+    mkdir -p "$(dirname {shlex.quote(log_path)})" || true
+    echo "[kura] the maximum lease ended; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
+    kura_pod_self_delete {shlex.quote(log_path)} kura_lease_moved
+    # 2: the lease was moved meanwhile; wait for the new deadline.
+    [ "$?" -eq 2 ] || break
   done
-  mkdir -p "$(dirname {shlex.quote(log_path)})" || true
-  echo "[kura] the maximum lease ended; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
-  kura_pod_self_delete {shlex.quote(log_path)} || true
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
 
