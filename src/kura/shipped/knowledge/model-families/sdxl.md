@@ -5,6 +5,10 @@
   with latents and text-encoder outputs cached to disk; peak VRAM was not
   recorded, and 1024px is unmeasured.
   source: run 20260801-0932_sd-scripts-smoke-sdxl_4d96 (Kura smoke evidence, 2026-08-01)
+- Recorded: on the sd-scripts v0.12.0 image a 1-step LoRA smoke on Docker ran on
+  the same GPU at 512px, batch 1, dim 4, U-Net only, bf16, AdamW8bit, with
+  latents and text-encoder outputs cached to disk.
+  source: real smoke sd-scripts-sdxl (evidence sd-scripts-sdxl-2026-10-18-2229)
 
 - Disk: sd-scripts reads the single file `sd_xl_base_1.0.safetensors` (6.9 GB,
   fp16); AI-Toolkit's `sdxl` loads the diffusers tree of

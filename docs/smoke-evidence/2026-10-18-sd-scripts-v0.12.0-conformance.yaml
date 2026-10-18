@@ -1,0 +1,30 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-18'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend sd-scripts --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on sd-scripts
+  after the image moved from commit 37a1cbbc5725ed2a3575506e7bd2001c9908ac92 to v0.12.0
+  (690ea7f96c23182352ec63def76d431c6120bd2f; transformers 5.17.0, diffusers 0.40.0,
+  accelerate 1.15.0, huggingface-hub 1.32.0, torch 2.8.0+cu128) with Kura's patches 0001 and
+  0002 applied. The upstream delta is in 2026-10-18-sd-scripts-v0.12.0-inventory.md.
+backends:
+  sd-scripts:
+    model: Comfy-Org/stable-diffusion-v1-5-archive (sd15)
+    runtime_image: nomadoor/kura-sd-scripts:v0.12.0-20261018
+    runtime_image_digest: sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8
+    adapter_source: 47bd4634d9a17b72deb4571245a371189367da043d722d2394bcf2fd1d71709c
+    runs: [20261018-2301_conf-sd-one-control_5184, 20261018-2303_conf-sd-one-control-2_a4a8, 20261018-2304_conf-sd-one-split_4a30, 20261018-2305_conf-sd-one-resume_1b8b, 20261018-2306_conf-sd-multi-fresh_a5a9, 20261018-2307_conf-sd-multi-split_054e, 20261018-2308_conf-sd-multi-resume_8283, 20261018-2309_conf-sd-multi-accum-2_da6e]
+    p3: the two controls were equal, and the Resume equalled them in step counts, scheduler, weights, and optimizer
+results:
+  P1: pass
+  P2: pass
+  P3: pass
+  P4: pass
+  P6: not checked (local Docker; the harness checks it on RunPod only)
+  P7: pass
+  P8: pass

@@ -23,7 +23,7 @@ from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
 
 
-# Pinned sd-scripts 6721028, library/dataset.py:70-93. AVIF and JXL are
+# Pinned sd-scripts v0.12.0, library/dataset.py:78-103. AVIF and JXL are
 # conditional on pillow_avif / jxlpy / pillow_jxl imports. Kura's pinned image
 # installs that revision's requirements.txt and editable setup.py; neither
 # declares those optional plugins, so only the unconditional loader entries are

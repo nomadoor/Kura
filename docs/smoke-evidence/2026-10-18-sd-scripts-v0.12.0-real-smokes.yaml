@@ -1,0 +1,69 @@
+schema_version: 1
+kind: real-smoke-campaign
+observed_at: '2026-10-18'
+executor: docker
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  One-step local Docker smokes of the real_smoke.py sd-scripts entries on the v0.12.0 image
+  (690ea7f96c23182352ec63def76d431c6120bd2f; transformers 5.17.0, diffusers 0.40.0,
+  accelerate 1.15.0, huggingface-hub 1.32.0, safetensors 0.8.0, torch 2.8.0+cu128). Each run
+  was created with the harness's run fields and the Docker executor; the FLUX.1 runs add
+  blocks_to_swap 16 to fit 12 GB, as the 2026-08-01 local FLUX.1 smoke did. The upstream delta is
+  in 2026-10-18-sd-scripts-v0.12.0-inventory.md.
+runtime_image: nomadoor/kura-sd-scripts:v0.12.0-20261018
+runtime_image_digest: sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8
+adapter_source: 47bd4634d9a17b72deb4571245a371189367da043d722d2394bcf2fd1d71709c
+runs:
+  sd-scripts-sdxl-2026-10-18-2229:
+    run_id: 20261018-2229_sd-scripts-sdxl_8bb6
+    smoke: sd-scripts-sdxl
+    model: stabilityai/stable-diffusion-xl-base-1.0 (sd_xl_base_1.0.safetensors)
+    entrypoint: sdxl_train_network.py
+    outcome: passed
+    losses: [0.00705]
+    output: outputs/20261018-2229_sd-scripts-sdxl_8bb6.safetensors (42865960 bytes)
+    input_postflight: matched
+    publication: completed
+  sd-scripts-anima-lora-2026-10-18-2229:
+    run_id: 20261018-2229_sd-scripts-anima-lora_9d0b
+    smoke: sd-scripts-anima-lora
+    model: circlestone-labs/Anima (DiT, Qwen3 0.6B, Qwen-Image VAE)
+    entrypoint: anima_train_network.py
+    outcome: passed
+    losses: [0.00551]
+    output: outputs/20261018-2229_sd-scripts-anima-lora_9d0b.safetensors (45982552 bytes; converted by convert_anima_lora_to_comfy.py)
+    input_postflight: matched
+    publication: completed
+  sd-scripts-flux1-2026-10-18-2229:
+    run_id: 20261018-2229_sd-scripts-flux1_691a
+    smoke: sd-scripts-flux1
+    model: Comfy-Org/flux1-dev (flux1-dev-fp8.safetensors, a checkpoint holding the DiT under model.diffusion_model. plus text encoders and VAE)
+    entrypoint: flux_train_network.py
+    outcome: failed
+    failure: >-
+      NotImplementedError "Cannot copy out of meta tensor" at unet.to("cpu") before text-encoder
+      caching. flux_utils.load_flow_model strips the model.diffusion_model. prefix in a loop that
+      stops at the first key without it. safetensors 0.8.0 (pinned by v0.12.0) returns
+      load_file's keys in the file's own order, where this file lists text_encoders.* first;
+      safetensors 0.4.5 (the old image) returned them sorted, model.diffusion_model.* first. So
+      no DiT key is renamed, load_state_dict(strict=False, assign=True) leaves every DiT
+      parameter on the meta device, and the first move fails. Checked in both images with
+      safetensors.torch.load_file on the same file. Upstream main and dev have the same loop.
+  sd-scripts-flux1-diag-2026-10-18-2344:
+    run_id: 20261018-2344_sd-scripts-flux1-diag_e872
+    smoke: diagnostic, not a FLUX.1-dev record
+    model: black-forest-labs/FLUX.1-Kontext-dev (flux1-kontext-dev.safetensors, a DiT-only file without the prefix) as dit; clip_l, t5xxl_fp16, and ae as in sd-scripts-flux1
+    entrypoint: flux_train_network.py
+    outcome: passed (one optimizer step)
+    purpose: >-
+      Exercise the T5-XXL tokenizer (google/t5-v1_1-xxl, sentencepiece) and encoder under
+      transformers 5.17 on the FLUX.1 path. Both loaded ("All keys matched"), text-encoder
+      outputs were cached, and one step trained. protobuf is in the image through tensorboard,
+      so the Musubi Tuner protobuf remedy is not needed here.
+    losses: [0.0709]
+    output: outputs/20261018-2344_sd-scripts-flux1-diag_e872.safetensors (76691912 bytes, 912 tensors)
+not_run:
+  sd-scripts-anima-lllite: not re-run on the new image
+  runpod: no RunPod run on the new image
