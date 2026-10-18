@@ -41,15 +41,18 @@ def _launched(run_dir: Path, request: Path, **status) -> None:
 
 
 _DISK_WATCH = patch("kura.run_commands.plan.local_reserve_problem", return_value=(None, []))
+_DOCKER_DATA = patch("kura.executors.docker.docker_data_location", return_value=(None, "not measured in tests"))
 
 
 def setUpModule() -> None:
-    # The disk watch reads this host's free space; its own tests are in test_disk_watch.
+    # The disk watch reads this host's free space and asks Docker; its own tests are in test_disk_watch.
     _DISK_WATCH.start()
+    _DOCKER_DATA.start()
 
 
 def tearDownModule() -> None:
     _DISK_WATCH.stop()
+    _DOCKER_DATA.stop()
 
 
 class Child:

@@ -29,7 +29,7 @@ from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, runpod_cost_ceiling, unresolved_create_intents
-from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
+from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_data_location
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements, requirement_source
@@ -848,7 +848,7 @@ def _local_disk_preflight_report(
     tightest = min(paths, key=lambda item: item["effective_free_bytes"] - item["required_bytes"]) if paths else None
     if tightest is None:
         return []
-    return [
+    records = [
         _preflight_record(
             "disk",
             "info",
@@ -858,6 +858,9 @@ def _local_disk_preflight_report(
             "workspace.yaml",
         )
     ]
+    if payload["docker_data_unwatched"]:
+        records.append(_preflight_record("disk", "info", payload["docker_data_unwatched"]))
+    return records
 
 
 def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
@@ -919,15 +922,25 @@ def local_min_free_gib(docker_config: dict[str, Any]) -> int:
     return _configured_gib(docker_config.get("min_free_gb"), default=20)
 
 
-def local_write_paths(workspace: Path, config: dict[str, Any]) -> dict[str, Path]:
-    """Every store a local Docker run writes to: the workspace, the Hugging Face cache, and each writable mount."""
+def local_write_paths(workspace: Path, config: dict[str, Any], docker_data: Path | None) -> dict[str, Path]:
+    """Every store a local Docker run writes to: the workspace, the Hugging Face cache, each writable
+    mount, and Docker's data root, where the container's writable layer grows (`docker_data`, from
+    `docker_data_location`; None when this host cannot measure it)."""
     paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
     for mount in local_docker_mounts(workspace, config):
         if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
             source = _resolve_local_path(workspace, mount["source"])
             if source not in paths.values():
                 paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    if docker_data is not None and docker_data not in paths.values():
+        paths["docker_data"] = docker_data
     return paths
+
+
+def docker_data_unwatched_text(reason: str) -> str:
+    """What the launch and the disk watch say when Docker's data root cannot be measured from here."""
+    return (f"Docker's data root is not watched ({reason}): what the trainer writes outside the mounts "
+            "(its writable layer) is not checked against the reserve")
 
 
 def local_reserve_gib(run: dict[str, Any], docker_config: dict[str, Any]) -> tuple[float, str]:
@@ -944,7 +957,9 @@ def local_reserve_gib(run: dict[str, Any], docker_config: dict[str, Any]) -> tup
     return reserve, setting
 
 
-def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str, Any]) -> tuple[str | None, list[str]]:
+def local_reserve_problem(
+    workspace: Path, run: dict[str, Any], config: dict[str, Any], docker_data: Path | None,
+) -> tuple[str | None, list[str]]:
     """The runner's disk watch: the first store a running local run writes to that is below the reserve
     (None when every store keeps it), checked once per backing store, and the stores whose WSL backing
     drive could not be measured. Those are judged by Linux free space, as the RunPod stage and pull gate
@@ -955,7 +970,7 @@ def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str
     checked: set[tuple[str, str]] = set()
     unmeasured: list[str] = []
     drive_memo: dict[str, Any] = {}
-    for name, path in local_write_paths(workspace, config).items():
+    for name, path in local_write_paths(workspace, config, docker_data).items():
         status = probe_storage(path, config, role=name, drive_memo=drive_memo)
         backing = (status.backing_kind, status.backing_id)
         if backing in checked:
@@ -984,7 +999,9 @@ def _local_launch_disk_preflight(
     required_gib, required_setting = local_reserve_gib(run, docker_config)
     minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
-    paths = local_write_paths(workspace, config)
+    # Kura cannot bound the container's writable layer: its store keeps the reserve (an estimate of 0), the watch covers it.
+    docker_data, docker_data_unseen = docker_data_location()
+    paths = local_write_paths(workspace, config, docker_data)
     estimate = run_write_estimate(run, config, executor="docker", workspace=workspace, download_estimate=download_estimate)
     download_estimate = estimate["downloads"]
     if enforce_model_download_safety:
@@ -1053,6 +1070,7 @@ def _local_launch_disk_preflight(
             "model_downloads": download_estimate, "musubi_downloads": download_estimate, "own_writes": estimate["own_writes"],
         },
         "paths": checked,
+        "docker_data_unwatched": docker_data_unwatched_text(docker_data_unseen) if docker_data is None else None,
         "docker_storage": docker_storage,
     }
 

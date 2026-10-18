@@ -1940,7 +1940,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 # The host's real free space must not decide this test.
                 with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
-                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}, "docker_data_unwatched": None}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1985,7 +1985,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}, "docker_data_unwatched": None}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
@@ -6038,7 +6038,9 @@ class DockerLifecycleTests(unittest.TestCase):
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), \
                     patch("kura.run_commands.plan.subprocess.run", side_effect=FileNotFoundError("docker")):
                 records = _local_disk_preflight_report(run, Path(directory), {}, {})
-        self.assertEqual([item["severity"] for item in records], ["info"])
+        self.assertEqual([item["severity"] for item in records], ["info", "info"])
+        # Without docker, where its data root is cannot be asked: said, not refused.
+        self.assertIn("Docker's data root is not watched", records[1]["fact"])
 
     def test_plan_reports_the_local_disk_verdict_launch_will_reach(self) -> None:
         from kura.run_commands.plan import _local_disk_preflight_report, collect_run_preflight
@@ -6055,8 +6057,9 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertEqual(shared, [])
         self.assertEqual([item["severity"] for item in short], ["error"])
         self.assertIn("requires at least 20 GiB", short[0]["fact"])
-        self.assertEqual([item["severity"] for item in enough], ["info"])
+        self.assertEqual([item["severity"] for item in enough], ["info", "info"])
         self.assertIn("passes", enough[0]["fact"])
+        self.assertIn("Docker's data root is not watched (`docker info` did not report it)", enough[1]["fact"])
 
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

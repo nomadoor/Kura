@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura import runner
-from kura.run_commands.plan import local_min_free_gib, local_reserve_problem
+from kura.run_commands.plan import local_min_free_gib, local_reserve_problem, local_write_paths
 from kura.storage import StorageStatus
 from kura.workspace import validate_workspace_config, workspace_config
 
@@ -49,7 +49,8 @@ def _launched_run(*, safety: dict | None = None, workspace_config: dict | None =
 
 
 class DiskWatchTests(unittest.TestCase):
-    def _work(self, root: Path, request: Path, free_gib: float, *, confidence: str = "exact", states=None, clock=None, sleep=None):
+    def _work(self, root: Path, request: Path, free_gib: float, *, confidence: str = "exact", states=None, clock=None, sleep=None,
+              docker_data=(None, "not measured in tests"), probe=None):
         states = iter(states or [{"state": "running"}, {"state": "running"}, {"state": "interrupted", "publication_state": "not-required"}])
         seen_at_stop: list[dict] = []
 
@@ -60,7 +61,9 @@ class DiskWatchTests(unittest.TestCase):
             return {}
 
         # runner.work sets KURA_RUNNER_EPOCH for its process; keep it out of later tests.
-        with patch.dict(os.environ), patch("kura.run_commands.plan.probe_storage", return_value=_status_of(free_gib, confidence=confidence)) as probe, \
+        probe_kwargs = {"side_effect": probe} if probe else {"return_value": _status_of(free_gib, confidence=confidence)}
+        with patch.dict(os.environ), patch("kura.run_commands.plan.probe_storage", **probe_kwargs) as probe, \
+                patch("kura.executors.docker.docker_data_location", return_value=docker_data) as self.located, \
                 patch("kura.executors.docker.stop_docker", side_effect=stop) as stopped, \
                 patch("kura.executors.docker.reconcile_docker", side_effect=lambda *_a, **_k: next(states)):
             code = runner.work(root, "example", request.name, sleep=sleep or (lambda _: None), **({"clock": clock} if clock else {}))
@@ -160,6 +163,32 @@ class DiskWatchTests(unittest.TestCase):
         # Seven running polls 10 s apart: checked at 0, 30, and 60 s, each time the workspace and the HF cache.
         self.assertEqual([call.kwargs["role"] for call in probe.call_args_list], ["workspace", "hf_cache"] * 3)
 
+    def test_docker_data_root_below_the_reserve_stops_the_run_with_its_name(self) -> None:
+        # The container's writable layer (/tmp, caches outside the mounts) lands in Docker's data root.
+        def probe(path, _config=None, *, role=None, drive_memo=None):
+            return _status_of(5 if role == "docker_data" else 50, backing="D:" if role == "docker_data" else "C:")
+
+        with _launched_run() as (root, _run_dir, request):
+            _, stopped, seen, _ = self._work(root, request, 0, docker_data=(Path("/srv/docker"), ""), probe=probe)
+        stopped.assert_called_once()
+        self.assertIn(f"{Path('/srv/docker')} has only 5 GiB effective free on D:", seen[0]["reason"])
+        self.assertIn("stopped by the disk watch", seen[0]["reason"])
+
+    def test_an_unknown_docker_data_root_is_said_once_resolved_once_and_stops_nothing(self) -> None:
+        polls = [{"state": "running"}] * 3 + [{"state": "completed", "publication_state": "completed"}]
+        logged: list[str] = []
+        now = [0.0]
+        with _launched_run() as (root, _run_dir, request), patch.object(runner, "_log", side_effect=logged.append):
+            _, stopped, _, probe = self._work(root, request, 900, states=polls, clock=lambda: now[0],
+                                              sleep=lambda _: now.__setitem__(0, now[0] + 31),
+                                              docker_data=(None, "Docker Desktop keeps /var/lib/docker inside its own VM"))
+        stopped.assert_not_called()
+        self.located.assert_called_once()
+        self.assertEqual([call.kwargs["role"] for call in probe.call_args_list], ["workspace", "hf_cache"] * 3)
+        said = [line for line in logged if "Docker Desktop keeps /var/lib/docker inside its own VM" in line]
+        self.assertEqual(len(said), 1)
+        self.assertIn("not watched", said[0])
+
     def test_a_user_stop_already_asked_for_keeps_its_own_record(self) -> None:
         with _launched_run() as (root, run_dir, request):
             runner.write_stop_request(run_dir)
@@ -178,9 +207,9 @@ class ReserveOwnerTests(unittest.TestCase):
             auto = patch("kura.storage._auto_wsl_host_drive", side_effect=["D:", None]).start()
             stack.callback(patch.stopall)
             stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * GIB, used=100 * GIB, free=900 * GIB)))
-            self.assertEqual(local_reserve_problem(Path(directory).resolve(), {}, {}), (None, []))
+            self.assertEqual(local_reserve_problem(Path(directory).resolve(), {}, {}, None), (None, []))
             self.assertEqual((drive.call_count, auto.call_count), (1, 1))
-            _, unmeasured = local_reserve_problem(Path(directory).resolve(), {}, {})
+            _, unmeasured = local_reserve_problem(Path(directory).resolve(), {}, {}, None)
             self.assertEqual((drive.call_count, auto.call_count), (1, 2))
             self.assertEqual(len(unmeasured), 1)
 
@@ -212,9 +241,68 @@ class ReserveOwnerTests(unittest.TestCase):
                 return _status_of(5 if role == "mount:/extra" else 50, backing="D:" if role == "mount:/extra" else "C:")
 
             with patch("kura.run_commands.plan.probe_storage", side_effect=probe):
-                problem, _ = local_reserve_problem(root, {}, config)
+                problem, _ = local_reserve_problem(root, {}, config, None)
         self.assertEqual(probed, ["workspace", "hf_cache", "mount:/extra"])
         self.assertIn(f"{root / 'extra'} has only 5 GiB effective free on D:", problem)
+
+    def test_a_docker_data_root_on_the_workspace_backing_costs_no_extra_drive_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as data_root, contextlib.ExitStack() as stack:
+            stack.enter_context(patch("kura.storage.is_wsl", return_value=True))
+            stack.enter_context(patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}))
+            drive = stack.enter_context(patch("kura.storage._windows_drive_free_bytes", return_value=1600 * GIB))
+            auto = stack.enter_context(patch("kura.storage._auto_wsl_host_drive", return_value="D:"))
+            stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * GIB, used=100 * GIB, free=900 * GIB)))
+            root = Path(directory).resolve()
+            self.assertIn("docker_data", local_write_paths(root, {}, Path(data_root)))
+            self.assertEqual(local_reserve_problem(root, {}, {}, Path(data_root)), (None, []))
+        self.assertEqual((drive.call_count, auto.call_count), (1, 1))
+
+    def test_the_launch_and_the_watch_ask_about_the_same_stores(self) -> None:
+        from kura.run_commands import plan
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            data_root = root.parent / (root.name + "-docker")
+            watched: list[str] = []
+
+            def probe(path, _config=None, *, role=None, drive_memo=None):
+                watched.append(role)
+                return _status_of(50)
+
+            def probes(paths, _config=None):
+                return {name: probe(path, role=name) for name, path in paths.items()}
+
+            with patch.object(plan, "docker_data_location", return_value=(data_root, "")), \
+                    patch.object(plan, "probe_storages", side_effect=probes), patch.object(plan, "probe_storage", side_effect=probe), \
+                    patch.object(plan, "local_write_paths", wraps=plan.local_write_paths) as owner, \
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                launch = plan._local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": 1}},
+                                                           enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                launched = list(watched)
+                watched.clear()
+                plan.local_reserve_problem(root, {}, {}, data_root)
+            self.assertEqual(owner.call_count, 2)
+        self.assertEqual(launched, ["workspace", "hf_cache", "docker_data"])
+        self.assertEqual(watched, launched)
+        # Kura cannot bound the writable layer: the launch keeps the reserve there and the watch covers the rest.
+        self.assertEqual(launch["paths"]["docker_data"]["estimated_write_bytes"], 0)
+        self.assertIsNone(launch["docker_data_unwatched"])
+
+    def test_the_launch_says_when_docker_data_root_is_not_watched(self) -> None:
+        from kura.run_commands import plan
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.object(plan, "docker_data_location", return_value=(None, "the Docker engine is at tcp://x:2375, not on this host")), \
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                run = {"type": "train", "safety": {"allow_storage_risk": True}}
+                launch = plan._local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 1}},
+                                                           enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                report = plan._local_disk_preflight_report(run, root, {"docker": {"min_free_gb": 1}}, {"bytes": 0})
+        self.assertNotIn("docker_data", launch["paths"])
+        self.assertIn("tcp://x:2375", launch["docker_data_unwatched"])
+        notes = [record for record in report if "tcp://x:2375" in record["fact"]]
+        self.assertEqual([record["severity"] for record in notes], ["info"])
 
     def test_the_watch_says_when_the_wsl_virtual_disk_is_the_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
@@ -224,7 +312,7 @@ class ReserveOwnerTests(unittest.TestCase):
             stack.enter_context(patch("kura.storage._windows_drive_free_bytes", return_value=1600 * GIB))
             stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * GIB, used=990 * GIB, free=10 * GIB)))
             stack.enter_context(patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}))
-            problem, _ = local_reserve_problem(Path(directory).resolve(), {}, {})
+            problem, _ = local_reserve_problem(Path(directory).resolve(), {}, {}, None)
         self.assertIn("the WSL virtual disk is the limit", problem)
 
 

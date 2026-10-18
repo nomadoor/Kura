@@ -718,6 +718,7 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
     failures = 0
     next_disk_check = clock()
     unmeasured_said: set[str] = set()
+    docker_data: dict[str, Path | None] = {}
     while True:
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             _carry_out_stop(run_dir, request)
@@ -736,20 +737,23 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             return 0
         if status.get("state") == "running" and clock() >= next_disk_check:
             next_disk_check = clock() + DISK_WATCH_SEC
-            if _disk_watch(workspace, run_dir, request, unmeasured_said):
+            if _disk_watch(workspace, run_dir, request, unmeasured_said, docker_data):
                 continue  # the stop it asked for is carried out at once
         sleep(poll_sec)
 
 
-def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -> bool:
+def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str], docker_data: dict[str, Path | None]) -> bool:
     """Ask for the run's stop, with the reason, when a store it writes to is below the reserve.
 
     The stop request holds the reason before `docker stop` runs (run-records ADR, decision 1);
     a stop already asked for keeps its own record. Settings that cannot be read or are not valid
     (workspace.yaml is checked as every command checks it), or a probe that fails, stop nothing:
     the watch tries again at its next check. `said` keeps a store whose backing could not be
-    measured, or the same reason it could not check, from being logged at every check."""
-    from kura.run_commands.plan import local_reserve_problem
+    measured, or the same reason it could not check, from being logged at every check. `docker_data`
+    keeps where Docker keeps its data, asked once per follower: `docker_data_location` runs
+    `docker info`, too slow for every check."""
+    from kura.executors.docker import docker_data_location
+    from kura.run_commands.plan import docker_data_unwatched_text, local_reserve_problem
     from kura.storage import RECLAIM_POINTER
     from kura.workspace import workspace_config
     from kura.yamlio import YAMLError, load_yaml
@@ -757,9 +761,13 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
     if _sibling(request, ".stop.json").exists():
         return False
     try:
+        if "root" not in docker_data:
+            docker_data["root"], unseen = docker_data_location()
+            if docker_data["root"] is None:
+                _log(f"{run_dir.name}: {docker_data_unwatched_text(unseen)}")
         config = workspace_config(workspace)
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml") or {}
-        problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config)
+        problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config, docker_data["root"])
     except (OSError, ValueError, YAMLError) as exc:
         message = f"{run_dir.name}: the disk watch could not check free space ({exc}); trying again"
         if message not in said:
