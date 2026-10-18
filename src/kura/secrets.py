@@ -117,6 +117,20 @@ def declared_secret(name: str) -> str | None:
     return os.environ.get(name) or None
 
 
+# The declared secrets a training or render container gets, under the names it reads them by.
+# The Hugging Face libraries read the token as `HF_TOKEN`, the one name it is sent under.
+CONTAINER_SECRETS = ("HF_TOKEN",)
+
+
+def container_secret_env() -> dict[str, str]:
+    """The set ones of CONTAINER_SECRETS and their values.
+
+    Every executor sends a container exactly these, so a trainer sees the same variables
+    locally and on RunPod.
+    """
+    return {name: value for name in CONTAINER_SECRETS if (value := declared_secret(name))}
+
+
 def known_names() -> list[str]:
     """Names `kura secrets set` accepts: the declared variables."""
     return [variable.name for variable in USER_VARIABLES]
