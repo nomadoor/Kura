@@ -645,6 +645,17 @@ class RealSmokeHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "no scenario run"):
                 MODULE.conformance(workspace, ["musubi-tuner"], runpod=False, gpu="x", yes=False, runs=["multi-accum-2"])
 
+    def test_conformance_without_a_backend_runs_the_backends_that_have_the_selected_runs(self) -> None:
+        self.assertEqual(MODULE.conformance_backends(None, None), list(MODULE.CONFORMANCE_BACKENDS))
+        accum = MODULE.conformance_backends(None, ["multi-accum-2"])
+        self.assertTrue(accum)
+        self.assertNotIn("musubi-tuner", accum)
+        self.assertTrue(all(MODULE.scenario_runs(backend, ["multi-accum-2"]) for backend in accum))
+        # A named backend is kept as named, so conformance refuses one without the runs.
+        self.assertEqual(MODULE.conformance_backends(["musubi-tuner"], ["multi-accum-2"]), ["musubi-tuner"])
+        with patch.object(MODULE, "scenario_runs", return_value=[]), self.assertRaisesRegex(SystemExit, "no backend has scenario run"):
+            MODULE.conformance_backends(None, ["multi-accum-2"])
+
     def test_conformance_refuses_this_checkout_and_launches_nothing_without_yes(self) -> None:
         with self.assertRaisesRegex(SystemExit, "separate workspace"):
             MODULE.conformance(ROOT, ["sd-scripts"], runpod=False, gpu="x", yes=False)
