@@ -68,7 +68,7 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
 # field is refused in extra_args by validate_backend_config wherever the field applies, and a
 # flag Kura emits for some architectures only by _reject_emitted_duplicates.
 # --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps, both
-# decided by Kura (trainer_base.py:373 and :1771 at v0.3.5), so they are owned too.
+# decided by Kura (trainer_base.py:375 and :1777 at v0.3.6), so they are owned too.
 # --save_state_on_train_end is no longer emitted (the trainer saves the end state under
 # --save_state alone) but stays owned: written without --save_state, where Kura manages no state,
 # it would save a state Kura neither publishes nor counts in the disk estimate.

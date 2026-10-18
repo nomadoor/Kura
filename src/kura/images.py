@@ -13,7 +13,7 @@ from typing import Any
 
 PINNED_IMAGES: dict[str, str] = {
     "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f",
-    "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472",
+    "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173",
     "sd-scripts": "nomadoor/kura-sd-scripts@sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06",
     "comfyui": "nomadoor/kura-comfyui@sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9",
 }
@@ -22,7 +22,7 @@ PINNED_IMAGES: dict[str, str] = {
 # the pinned image was built with. AI-Toolkit builds on the upstream image.
 BUILD_SOURCES: dict[str, tuple[str, str]] = {
     "ai-toolkit": ("AI_TOOLKIT_IMAGE", "ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0"),
-    "musubi-tuner": ("MUSUBI_TUNER_REF", "v0.3.5"),
+    "musubi-tuner": ("MUSUBI_TUNER_REF", "v0.3.6"),
     "sd-scripts": ("SD_SCRIPTS_REF", "37a1cbbc5725ed2a3575506e7bd2001c9908ac92"),
     "comfyui": ("COMFYUI_REF", "8713616fcc321624e306bbd36be5906203dcb0dc"),
 }
@@ -45,6 +45,7 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f": "13.0",
     "sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472": "13.0",
     "sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9": "13.0",
+    "sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173": "13.0",
 }
 
 # The newest CUDA version seen on RunPod hosts (2026-10-07). A newer driver

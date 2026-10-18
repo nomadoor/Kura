@@ -14,8 +14,8 @@ MUSUBI_ARCHITECTURES = frozenset({
     "kandinsky5", "krea2", "minimax_h3", "qwen_image", "wan", "zimage",
 })
 
-# Pinned Musubi v0.3.5 dataset helpers use these short names
-# (dataset/architectures.py at 4e7c714, lines 1-35).
+# Pinned Musubi v0.3.6 dataset helpers use these short names
+# (dataset/architectures.py at f8a1b03, lines 1-35).
 MUSUBI_NATIVE_DATASET_ARCHITECTURES = {
     "hunyuan_video": "hv",
     "wan": "wan",

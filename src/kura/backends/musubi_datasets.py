@@ -23,8 +23,8 @@ from kura.backends.musubi_models import _musubi_model_version
 from kura.backends.musubi_native_selectors import musubi_native_task, musubi_native_task_profile
 from kura.backends.shared import _datasets, _toml_scalar, _truthy
 from kura.fsio import atomic_write_text
-# Pinned Musubi 4e7c714: dataset/media_utils.py:22-54 and
-# dataset/audio_utils.py:15. JXL remains excluded because its loader entries
+# Pinned Musubi f8a1b03: dataset/media_utils.py:23-58 and
+# dataset/audio_utils.py:18. JXL remains excluded because its loader entries
 # are conditional on optional plugins not installed by Kura's pinned image.
 MUSUBI_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"})
 MUSUBI_VIDEO_SUFFIXES = frozenset({

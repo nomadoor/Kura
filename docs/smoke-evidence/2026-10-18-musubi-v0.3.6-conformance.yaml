@@ -1,0 +1,29 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-18'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend musubi-tuner --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on Musubi Tuner
+  after the image moved from v0.3.5 (4e7c7149249e7715e9168920feb4c420423abba7) to v0.3.6
+  (f8a1b03794a49239a3539015075f5123d6c07d66) with Kura's Resume patch rebased (inserted after
+  upstream's new `last_sampled_step = None`), the Flux2 Diffusers VAE patch applied, and
+  protobuf installed.
+backends:
+  musubi-tuner:
+    model: Comfy-Org/Wan_2.1_ComfyUI_repackaged (wan 2.1 t2v 1.3B)
+    runtime_image_digest: sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+    adapter_source: 98c99667cfeda6349ea842ed0167501c463eba009a239111ccb252b5dc29d238
+    runs: [20261018-2245_conf-musubi-one-control_44cb, 20261018-2248_conf-musubi-one-control-2_f55a, 20261018-2251_conf-musubi-one-split_e968, 20261018-2252_conf-musubi-one-resume_beae, 20261018-2254_conf-musubi-multi-fresh_fe27, 20261018-2256_conf-musubi-multi-split_b8c6, 20261018-2258_conf-musubi-multi-resume_fdff]
+    p3: step count and scheduler equal the controls; the two one-item controls differ, so exact learned-state equality is not checkable (informational)
+results:
+  P1: pass
+  P2: pass
+  P3: pass, as noted
+  P4: pass
+  P6: not checked (local Docker; the harness checks it on RunPod only)
+  P7: pass
+  P8: pass

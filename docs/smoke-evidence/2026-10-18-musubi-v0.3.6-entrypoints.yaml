@@ -1,0 +1,19 @@
+schema_version: 1
+backend: musubi-tuner
+observed_at: 2026-10-18
+runtime:
+  image: nomadoor/kura-musubi-tuner@sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+  source_commit: f8a1b03794a49239a3539015075f5123d6c07d66
+  packages: {python: 3.11.14, torch: 2.9.1+cu130, transformers: 5.17.0, diffusers: 0.40.0, accelerate: 1.15.0, huggingface-hub: 1.32.0, safetensors: 0.8.0, av: 17.1.0, protobuf: 7.36.2}
+probe:
+  kind: registered-entrypoint-help
+  command: uv run kura doctor musubi --image <the digest above>
+observed:
+  passed_entrypoints: 39
+  expected_entrypoints: 39
+  exit_code: 0
+scope: >-
+  Proves that every Kura-registered Musubi v0.3.6 script exists in the image
+  and completes its help/parser path, imports included, under transformers 5.17
+  and diffusers 0.40. It is not launch or optimizer-step evidence for a model,
+  mode, or dataset shape.

@@ -5,7 +5,7 @@ FROM ${PYTORCH_BASE}
 ARG KURA_CUDA=13.0
 LABEL io.kura.cuda="${KURA_CUDA}"
 
-ARG MUSUBI_TUNER_REF=v0.3.5
+ARG MUSUBI_TUNER_REF=v0.3.6
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_DEFAULT_TIMEOUT=180
 ENV PIP_RETRIES=5
@@ -19,7 +19,12 @@ RUN git clone https://github.com/kohya-ss/musubi-tuner.git /opt/musubi-tuner \
     && git checkout "$MUSUBI_TUNER_REF" \
     && pip install --no-cache-dir -e .
 
-# Upstream trainer_base.py (v0.3.5, lines 2050-2054) restarts global_step at zero after
+# Upstream v0.3.6 pins transformers 5.17 but does not declare protobuf, which transformers 5
+# needs to convert a sentencepiece-only T5 tokenizer (FLUX.1 Kontext's google/t5-v1_1-xxl).
+# Remove this line once upstream declares it.
+RUN pip install --no-cache-dir protobuf
+
+# Upstream trainer_base.py (v0.3.6, lines 2056-2060) restarts global_step at zero after
 # --resume; 0001 continues the logical step the restored scheduler counted, which Kura's
 # Musubi Tuner training-state contract reads. See the patch header.
 COPY docker/musubi-tuner/patches/0001-resume-continues-the-logical-step.patch /tmp/kura-musubi-tuner-patches/0001-resume-continues-the-logical-step.patch
