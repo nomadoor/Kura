@@ -21,7 +21,7 @@ from kura.install_source import kura_provenance
 from kura.yamlio import YAMLError, load_run_yaml, load_yaml, load_yaml_mapping
 from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
-from kura.records import record as as_record
+from kura.records import realization_reference, record as as_record
 from kura.fsio import atomic_write_yaml as dump_yaml
 from kura.run_envelope import gpu_choice_problem
 from kura.workspace import plain_relative_folder, validate_workspace_config
@@ -195,7 +195,7 @@ def _write_realization_file(run_dir: Path, *, timestamp: str | None = None, **de
     path = run_dir / "realizations" / f"{realization_id}.json"
     path.parent.mkdir(exist_ok=True)
     atomic_write_json(path, as_record("realization", {"id": realization_id, "timestamp": timestamp or now(), **details}))
-    return path.relative_to(run_dir).as_posix()
+    return realization_reference(realization_id)
 
 
 def write_realization(run_dir: Path, *, status_changes: dict[str, Any] | None = None, **details: Any) -> None:

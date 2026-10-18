@@ -814,6 +814,14 @@ def cmd_run_status(args: argparse.Namespace) -> int:
 def cmd_run_reconcile(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
+        if not (run_dir / "status.json").is_file():
+            # Status is not projected from the records yet (run-records ADR, decision 5: shadow mode), so
+            # nothing here could settle or follow the run; its records stay as they are.
+            raise ValueError(
+                f"runs/{args.run_id}/status.json is missing, and Kura does not rebuild it from the run's records yet; "
+                f"restore it (from a backup or a copy of the workspace) and run `kura run reconcile {args.run_id}` again. "
+                "A Pod this run created stops itself at its maximum lease"
+            )
         if unresolved_create_intents(run_dir, "docker"):
             try:
                 with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):

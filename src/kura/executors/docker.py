@@ -30,7 +30,7 @@ from kura.executors.common import (
     host_time,
     kura_container_env,
     CREATE_INTENT_SUFFIX,
-    PROGRESS_FIELDS,
+    point_status_at_launch,
     settle_status_from_realization,
     _event_exists,
     unresolved_create_intents,
@@ -56,7 +56,7 @@ from kura.executors.common import (
     _write_observation,
 )
 from kura.fsio import file_lock
-from kura.records import record as as_record
+from kura.records import realization_reference, record as as_record
 from kura.paths import to_host_path, workspace_mount_mappings
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX, models_root, write_models_record
 from kura.runtime_io import validated_write_roots
@@ -592,15 +592,7 @@ def _record_container_started(run_dir: Path, draft: dict[str, Any], container_id
     }
     _write_json(realization_path, as_record("realization", realization))
 
-    def mutate(latest: dict[str, Any]) -> None:
-        latest.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": realization.get("host"),
-                       "last_realization": str(realization_path.relative_to(run_dir)), "container_id": container_id, "container_name": draft["container"]["name"]})
-        latest.pop("last_observation", None)
-        # A new realization starts its own progress; an earlier one's step is not its.
-        for key in PROGRESS_FIELDS:
-            latest.pop(key, None)
-
-    _mutate_run_status(run_dir, mutate)
+    _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id,
                                **({"recovered_from_intent": recovered_from} if recovered_from else {})})
 
@@ -619,7 +611,7 @@ def _record_container_launch_failed(run_dir: Path, draft: dict[str, Any], contai
 
     def mutate(latest: dict[str, Any]) -> None:
         latest.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None,
-                       "last_realization": str(realization_path.relative_to(run_dir))})
+                       "last_realization": realization_reference(realization_id)})
         latest.pop("last_observation", None)
 
     _mutate_run_status(run_dir, mutate)

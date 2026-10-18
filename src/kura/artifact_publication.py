@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.fsio import atomic_write_json
-from kura.records import record, without_record_fields
+from kura.records import names_realization, record, without_record_fields
 from kura.training_artifacts import is_training_state_output, validate_safetensors_file
 
 
@@ -89,7 +89,7 @@ def existing_publication(run_dir: Path, realization_id: str) -> tuple[str, list[
     except (OSError, json.JSONDecodeError):
         return None
     if not (
-        isinstance(status, dict) and status.get("last_realization") == f"realizations/{realization_id}.json"
+        isinstance(status, dict) and names_realization(status.get("last_realization"), realization_id)
         and status.get("publication_state") == "completed" and status.get("publication_manifest") == manifest_ref
     ):
         return None
