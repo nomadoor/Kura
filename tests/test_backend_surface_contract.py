@@ -791,7 +791,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
         self.assertIn("--max_train_steps 3000", script)
         self.assertIn("--save_every_n_steps 2000", script)
-        self.assertIn("--save_state_on_train_end", script)
+        self.assertNotIn("--save_state_on_train_end", script)
         self.assertIn("--save_last_n_steps_state 2000", script)
         self.assertIn("/workspace/runs/derived/resolved/musubi/state-runner.py musubi-tuner train.py ", script)
 

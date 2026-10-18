@@ -81,9 +81,12 @@ two complete locally published generations so a corrupt or interrupted newest
 save leaves one fallback generation. A candidate does not evict an older
 generation until publication succeeds.
 
-Retention counts distinct logical steps, not artifact IDs. Multiple complete
-save events at one logical step occupy one generation and cannot evict the
-previous-step fallback. An unsuffixed final state is eligible only when a
+Retention counts distinct logical steps, not artifact IDs. When more than one
+complete save reaches one logical step, the first complete one is kept: the
+unsuffixed final state that sd-scripts and Musubi Tuner write at the end is not
+published when a verified state of the run at its step already exists (it is
+the last step state again, with a different RNG file). A save at a step already
+kept cannot evict the previous-step fallback. An unsuffixed final state is eligible only when a
 backend-owned embedded marker proves its logical step; the configured target is
 not a substitute for observation.
 

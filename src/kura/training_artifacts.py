@@ -951,8 +951,9 @@ def managed_state_save_args(
     """The save flags of an accelerate trainer (Musubi Tuner, sd-scripts) whose state Kura manages.
 
     The trainer saves state at `checkpoint_save_cadence` (named only when there is one) and at
-    the end, and keeps the states of the last cadence, or of the recipe's steps when none is
-    set (two generations), or only the newest (one generation). `configured_cadence` is the
+    the end (both trainers save the end state under `--save_state` alone), and keeps the states
+    of the last cadence, or of the recipe's steps when none is set (two generations), or only
+    the newest (one generation). `configured_cadence` is the
     backend's validated `save_every_n_steps`; a backend building its own command passes its
     training-state contract.
     """
@@ -960,7 +961,7 @@ def managed_state_save_args(
     if not isinstance(cadence, int):
         cadence = None
     every = [] if cadence is None else ["--save_every_n_steps", str(cadence)]
-    return [*every, "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_retention_window(run, cadence))]
+    return [*every, "--save_state", "--save_last_n_steps_state", str(state_retention_window(run, cadence))]
 
 
 def state_retention_window(run: dict[str, Any], cadence: int | None) -> int:
@@ -1121,7 +1122,10 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
 
     `observed_step` is the native step its name gives (`state_directory_step`). A backend's
     verified step marker decides the step when it has one, and is the only way to place the
-    final state directory (FINAL_STATE_STEP), whose name carries no step.
+    final state directory (FINAL_STATE_STEP), whose name carries no step. A final state at a
+    step that already has a verified state of this run is the same save again (sd-scripts and
+    Musubi Tuner write one at the end under `--save_state`), so it is not published: the first
+    complete save at a step is kept.
     """
     run, status, runtime_identity = _published_run_context(run_dir)
     policy = training_state_policy(run)
@@ -1140,6 +1144,9 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     native_step = marked_step if observed_step == FINAL_STATE_STEP else observed_step
     step = state_logical_step(run_dir, run, contract, native_step, marked_step)
     if step is None:
+        return None
+    if observed_step == FINAL_STATE_STEP and training_state_at_step(workspace, run_dir.name, step) is not None:
+        # The trainer's end-of-training state repeats the save already published at its step.
         return None
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = str(backend.get("name"))
@@ -1210,10 +1217,13 @@ def publish_completed_training_states(
     output_name = run_output_name(run)
     published: list[dict[str, Any]] = []
     outputs = run_dir / "outputs"
+    candidates = []
     for candidate in sorted(outputs.glob("*-state")) if outputs.is_dir() else []:
         observed_step = state_directory_step(candidate.name, output_name, allow_final=allow_final_state)
-        if observed_step is None or not candidate.is_dir():
-            continue
+        if observed_step is not None and candidate.is_dir():
+            candidates.append((candidate, observed_step))
+    # Step states first, so the final state meets the save it repeats already published.
+    for candidate, observed_step in sorted(candidates, key=lambda item: item[1] == FINAL_STATE_STEP):
         manifest = publish_training_state_candidate(workspace, run_dir, candidate, observed_step)
         if manifest is not None:
             published.append(manifest)
