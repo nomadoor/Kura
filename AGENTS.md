@@ -77,8 +77,9 @@ where it showed.
 
 **5. Records are a contract.** Run records, status fields, and frozen manifests
 are read by later versions of Kura. Change their meaning only with a reader for
-the old form; never rewrite a record to migrate it. Source identity changes are
-declared in `docs/adapter-source-identity-migrations.yaml`.
+the old form; never rewrite a record to migrate it. Whether a change makes
+recorded real runs stale is a review question, answered from the evidence
+ledger (`docs/adr/evidence-ledger-replaces-support-table.md`).
 
 **6. Verified by someone without your context.** Reviews and acceptance checks
 are done by an agent (or person) that has not seen your reasoning: give a

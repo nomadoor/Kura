@@ -300,48 +300,6 @@ def _adapter_source_parts(backend_name: str) -> tuple[list[tuple[str, bytes]], s
     return sorted(parts.items()), reached
 
 
-# Source files whose behavior an executor's transport and lifecycle evidence
-# depends on, including the shared modules they consume (handoff inventory,
-# media suffixes, event and file durability, executor selection). RunPod
-# evidence proves these, not the adapter, so it is bound to this identity
-# separately. A change to a shared module therefore needs a re-smoke or a
-# declared behavior-preserving executor migration.
-EXECUTOR_SOURCE_FILES: dict[str, tuple[str, ...]] = {
-    "runpod": (
-        "container_scripts/ai_toolkit_models.py",
-        "container_scripts/pod_self_delete.sh",
-        "container_scripts/runpod_input_verify.py",
-        "dataset_handoff.py",
-        "dataset_transfer.py",
-        "executors/common.py",
-        "executors/runpod.py",
-        "fsio.py",
-        "media_types.py",
-        "run_commands/launch.py",
-        "run_commands/runpod_ssh.py",
-        "run_envelope.py",
-    ),
-}
-
-
-def executor_source_identity(executor: str, *, read: Any = None) -> dict[str, str]:
-    """Hash the executor transport and lifecycle sources.
-
-    ``read`` maps a package-relative path to its bytes; it defaults to the
-    installed package and lets tooling hash a historical tree.
-    """
-    files = EXECUTOR_SOURCE_FILES.get(executor)
-    if files is None:
-        raise ValueError(f"unsupported executor for source identity: {executor}")
-    package_root = Path(__file__).resolve().parent
-    reader = read or (lambda relative: (package_root / relative).read_bytes())
-    parts = [(relative, reader(relative)) for relative in files]
-    identity = _hash_source_parts(parts, executor, scope="executor-v1")
-    identity.pop("backend")
-    identity["executor"] = executor
-    return identity
-
-
 def adapter_source_identity(backend_name: str) -> dict[str, str]:
     """Hash the selected adapter's registry entry and the kura code it reaches."""
     from dataclasses import fields

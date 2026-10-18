@@ -133,7 +133,7 @@ uv run kura cleanup plan   # 空けられるものと、それぞれ消すと何
 
 ## 対応しているモデル
 
-主な対応は次のとおりです。どこまで実際に学習を通して確かめたかの詳細は、[対応表](docs/backend-support.md)にあります。
+Kura が学習を組み立てられる主なモデルは次のとおりです。
 
 | 学習ツール | 主なモデル |
 | --- | --- |
@@ -141,7 +141,7 @@ uv run kura cleanup plan   # 空けられるものと、それぞれ消すと何
 | Musubi Tuner | Wan、FLUX.2、Krea 2、Qwen-Image、Z-Image、FLUX.1 Kontext、HiDream-O1、Ideogram 4、HunyuanVideo、FramePack、Kandinsky 5、MiniMax-H3 など |
 | AI-Toolkit | SD 1.5、SDXL、FLUX.1 / Kontext / Flex.2、Chroma、Qwen-Image、FLUX.2、Krea 2、Z-Image、HiDream、Anima、MiniMax-H3 など |
 
-ここでの「対応」は、学習が動き、成果物が保存されるところまで確かめたという意味です。どんなデータや設定でも良い LoRA ができる、という保証ではありません。
+実際に Kura で学習が動いたと言えるのは、その[モデルファミリーのカード](src/kura/shipped/knowledge/model-families/)か[実行の記録](docs/backend-smoke-evidence.yaml)にそう書かれているものだけです。記録には、いつ、どの Kura のアダプターと学習ツールのイメージで動かしたかが残っています。どちらも、どんなデータや設定でも良い LoRA ができる、という保証ではありません。
 
 ## Kura の更新
 
@@ -155,7 +155,7 @@ git pull
 
 - [Kura で Krea 2 の LoRA を学習する](https://comfyui.nomadoor.net/ja/notes/kura-krea2-lora-training/)：データの準備から ComfyUI での比較までの実例
 - [docs/commands.md](docs/commands.md)：コマンド一覧
-- [docs/backend-support.md](docs/backend-support.md)：対応表と、確かめた範囲
+- [src/kura/shipped/knowledge/model-families/](src/kura/shipped/knowledge/model-families/) と [docs/backend-smoke-evidence.yaml](docs/backend-smoke-evidence.yaml)：実際に動いたもの
 - [docs/agent-first-cli.md](docs/agent-first-cli.md)：AI が書くものと、Kura が保証するもの
 - [AGENTS.md](AGENTS.md)：AI エージェント向けのルール
 

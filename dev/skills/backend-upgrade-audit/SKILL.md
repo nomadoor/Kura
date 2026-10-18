@@ -44,32 +44,32 @@ registrations instead of sampling notable files.
 
 ## Build the Kura impact matrix
 
-Before implementation or smoke selection, create or update the upgrade plan in
-`docs/backend-validation/` following `docs/backend-validation.md`. Run
-`uv run python scripts/check_backend_validation.py` after every material edit.
-The plan, rather than the model requested for one smoke, owns the complete
-inventory and all open gaps.
+Before implementation or smoke selection, write the inventory in the pull
+request body, or, when it is too long for that, in a note under
+`docs/smoke-evidence/` that the pull request links. The inventory, rather than
+the model requested for one smoke, owns the complete delta and all open gaps.
 
 For every added family, variant, and changed execution contract, record:
 
 | Upstream delta | Kura status | Required action | Evidence |
 | --- | --- | --- | --- |
-| exact feature or model | built-in, generic, escape hatch, unsupported | code, docs, or none | source, compile, image, or real smoke |
+| exact feature or model | built-in, generic, escape hatch, unsupported | code, docs, or none | source, compile, image, or real run |
 
 `Generic` is not automatically `supported`: confirm that Kura can represent the
 dataset, model roles, native fields, outputs, and executor lifecycle without an
 undeclared bypass. Explicitly classify capabilities outside Kura's current
 image/video training contract instead of silently omitting them.
 
-Complete this matrix before choosing representative real-smoke runs. If the
-matrix reveals missing Kura behavior, either implement it through the selected
+Complete this matrix before choosing representative real runs. If the matrix
+reveals missing Kura behavior, either implement it through the selected
 `training-backends` reference or mark it unsupported with the exact missing
 capability.
 
 Do not collapse image-only, video, audio-video, edit/control, reference,
 teacher/student, or materially different cache paths into one model-family
-row. These are separate execution contracts unless every contract field named
-in `docs/backend-validation.md` is identical.
+row. These are separate execution contracts: entrypoint, dataset shape, model
+roles, cache stages, and outputs all have to be the same before one run speaks
+for another.
 
 ## Verification levels
 
@@ -85,35 +85,32 @@ Keep these claims distinct:
 5. **Operationally verified** — recovery, download, and executor cleanup are
    confirmed where that scope is claimed.
 
-A representative real smoke does not promote untested families, modes, or
-dataset shapes. Conversely, exhaustive real smokes are not required when
-several checkpoints share an unchanged execution contract; link them with
-`covered_by` and record the exact equivalence rationale. The validation checker
-rejects cross-contract coverage and cycles.
+A representative real run does not promote untested families, modes, or
+dataset shapes. Conversely, exhaustive real runs are not required when several
+checkpoints share an unchanged execution contract; say which run covers which
+checkpoint, and why, in the inventory.
 
 ## Completion gate
 
 Do not report an upgrade complete until:
 
-- old/new identities and provenance are recorded;
-- the full upstream delta and Kura impact matrix are documented;
-- affected built-in adapters, generic projections, and support claims agree;
-- focused tests, backend doctor/image smoke, and the repository release gate
-  pass at the evidence level being claimed;
-- requested real smokes reach a terminal state with artifacts and executor
-  cleanup verified;
-- unsupported or unverified additions remain visibly classified.
-- every supported contract has source, compile, and pinned-image evidence;
-  contracts without optimizer evidence retain an explicit `runtime_note`;
-- changed executor lifecycle paths have runtime evidence;
-- the plan status is `complete`, contains no implementation `gap`, and
-  `scripts/check_backend_validation.py` passes.
+- the old and new pins (version or tag, image digest, source commit) are stated
+  in the pull request;
+- the full upstream delta and Kura impact matrix are written down, in the pull
+  request body or a linked `docs/smoke-evidence/` note;
+- affected built-in adapters, generic projections, and family cards agree;
+- every family the pull request calls runnable has one real run on the new
+  image, recorded in `docs/backend-smoke-evidence.yaml` (with
+  `uv run python scripts/real_smoke.py evidence`) and in a `Recorded:` line of
+  that family's card under `src/kura/shipped/knowledge/model-families/`; a
+  family called supported has run on both local Docker and RunPod (`AGENTS.md`);
+- a family Kura only compiles is called untested in its card, or not listed;
+- requested real runs reach a terminal state with artifacts and executor
+  cleanup verified, and changed executor lifecycle paths have runtime evidence;
+- `uv run python scripts/check_release.py` passes.
 
-An `in_progress` plan is the required truthful state while Kura cannot yet
-faithfully validate or compile a supported contract, the pinned image cannot
-start its entrypoint, or a changed lifecycle path lacks runtime evidence. Do
-not turn a compile-verified row into a claim that real training or output
-quality was observed; the generated table must preserve that distinction.
+Do not turn a compile-verified family into a claim that real training or output
+quality was observed.
 
 When cost-bearing validation is needed, finish the no-cost audit first, then
 show the concrete `kura run plan` and obtain the approval required by

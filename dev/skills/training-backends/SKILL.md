@@ -12,10 +12,14 @@ images those adapters execute.
 
 1. Run `uv run kura run capabilities <backend>` before authoring or changing
    `backend.config`.
-2. Read `docs/backend-support.md` for the current support and evidence boundary.
-3. When the work comes from an upstream upgrade or new support claim, read the
-   active plan in `docs/backend-validation/`. Do not implement or test only the
-   user-named model while other inventoried contracts remain unclassified.
+2. Read the family card in `src/kura/shipped/knowledge/model-families/` and
+   the records in `docs/backend-smoke-evidence.yaml` to see what has actually
+   run, when, and with which adapter source and trainer image. A family has run only
+   where a card or an evidence record says so.
+3. When the work comes from an upstream upgrade or new support claim, inventory
+   the upstream delta first (`backend-upgrade-audit`). Do not implement or test
+   only the user-named model while other inventoried contracts remain
+   unclassified.
 4. Read only the selected backend reference:
    - [AI-Toolkit](references/ai-toolkit.md)
    - [Musubi Tuner](references/musubi-tuner.md)
@@ -24,8 +28,8 @@ images those adapters execute.
    use `backend-upgrade-audit` before implementation.
 
 Do not put architecture-specific facts in this skill. Current selectors,
-fields, limits, and support belong in the capability output, adapter code,
-support matrix, or sourced repository knowledge.
+fields, limits, and what has run belong in the capability output, adapter
+code, family cards, the evidence ledger, or sourced repository knowledge.
 
 ## Shared contract
 
@@ -63,9 +67,10 @@ actually observed. A family is presented to users as supported only after one
 optimizer step completed on both local Docker and RunPod: the two executors
 differ in transfer, collection, and state handling. One
 representative smoke covers another selector only when their execution
-contracts are demonstrably the same under `docs/backend-validation.md` and the
-upgrade plan records that relationship. A shared Python entrypoint alone is not
-equivalence.
+contracts (entrypoint, dataset shape, model roles, cache stages, outputs) are
+demonstrably the same and the upgrade inventory records that relationship. A
+shared Python entrypoint alone is not equivalence. Record each real run in the
+evidence ledger and in the family card.
 
 ## Resource and Resume boundaries
 
@@ -86,7 +91,6 @@ contract:
 uv run kura run capabilities <backend>
 uv run kura run compile <run-id>
 uv run kura doctor <backend>
-uv run python scripts/check_backend_validation.py
 uv run python -m unittest discover -s tests
 ```
 

@@ -1,8 +1,9 @@
 # Musubi Tuner adapters
 
-For the cross-backend version, adapter, and real-hardware summary, see
-[backend-support.md](backend-support.md). This document keeps the detailed
-Musubi adapter mechanics and historical smoke commands.
+What has actually run is in the family cards
+(`src/kura/shipped/knowledge/model-families/`) and the evidence ledger
+([backend-smoke-evidence.yaml](backend-smoke-evidence.yaml)). This document
+keeps the detailed Musubi adapter mechanics and historical smoke commands.
 
 Musubi Tuner and Kura's Musubi backend are not the same layer.
 
@@ -74,8 +75,8 @@ paths identified at v0.3.4 for Wan 2.2
 dual-noise training, Wan Single Frame, FramePack Single Frame, Qwen-Image
 Edit/Layered model versions, HunyuanVideo 1.5 I2V, HiDream-O1 I2I, and
 Kandinsky 5 I2V. These are not marked real-smoke verified until an actual model
-finishes one optimizer step through Kura. The evidence boundary is defined in
-the support-status vocabulary in [backend-support.md](backend-support.md).
+finishes one optimizer step through Kura and the run is recorded in
+[backend-smoke-evidence.yaml](backend-smoke-evidence.yaml).
 
 MiniMax-H3 `training_adapter` requires a BF16 DiT because upstream must merge
 `base_weights` before any ConvRot quantization. Kura rejects its known

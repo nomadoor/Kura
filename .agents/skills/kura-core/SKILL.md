@@ -68,9 +68,8 @@ by `kura.secrets.is_secret_name` and declared values read through
 ## RunPod lifecycle
 
 Pod-side deletion, shared by training and render Pods, lives in
-`src/kura/container_scripts/pod_self_delete.sh`. A change to a RunPod executor
-source needs a new entry in `docs/adapter-source-identity-migrations.yaml`.
-Usage guidance stays in the shipped `runpod-lifecycle` skill.
+`src/kura/container_scripts/pod_self_delete.sh`. Usage guidance stays in the
+shipped `runpod-lifecycle` skill.
 
 ## Local disk
 

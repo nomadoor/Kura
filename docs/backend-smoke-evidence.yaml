@@ -1,9 +1,9 @@
 schema_version: 1
 description: >-
-  Historical execution observations. Records are evidence for the stated
-  identity tuple, not declarations of backend capability. RunPod records
-  declare native_path.transfer; selected-files records also bind
-  executor_source to the RunPod executor identity.
+  Append-only history of real runs. Records are evidence for the stated
+  identity tuple, not declarations of backend capability. Some older RunPod
+  records carry executor_source, a retired executor identity kept as history
+  (docs/adr/evidence-ledger-replaces-support-table.md).
 invalidations:
   - id: sd-scripts-default-training-state-contract-2026-08-27
     backend: sd-scripts

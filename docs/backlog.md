@@ -23,7 +23,6 @@ why, so it is not raised again.
 - 2026-10-18 | one owner | runner `_validated_workspace_config` repeats `workspace_config()`; give `workspace_config` a path argument and call it from `local_slot_wait` and `_disk_watch` | review of the backlog batch | -
 - 2026-10-18 | disk watch | An invalid workspace.yaml is logged at every disk watch check, with no dedupe as unmeasured stores have | review of the backlog batch | -
 - 2026-10-18 | tests | The huggingface_hub parity test for `hf_cached_file` always skips, because huggingface_hub is not a dev dependency | review of the backlog batch | -
-- 2026-10-18 | evidence check | scripts/check_smoke_evidence.py enforces identity chains only for sd-scripts and RunPod evidence, so a broken musubi-tuner or ai-toolkit chain passes the gate (this hid a corrupted musubi-tuner chain on 2026-10-18) | review of the backlog batch | P11
 - 2026-10-18 | AI-Toolkit legacy lock | `own_write_bound` uses the current training-state contract, so an old AI-Toolkit lock with accumulation 2 counts states it never saved (an over-estimate, so safe) | review of the backlog batch | P8
 
 ## Rejected
