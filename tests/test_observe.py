@@ -145,8 +145,8 @@ class ObserveRunTests(unittest.TestCase):
             )
             snapshot = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             with patch("kura.executors.observe.reconcile_runpod", return_value=snapshot) as reconcile:
-                self.assertEqual(observe_run(run_dir, config={}), snapshot)
-            reconcile.assert_called_once_with(run_dir, {}, timeout=2.0, blocking=False, source="automatic")
+                self.assertEqual(observe_run(run_dir), snapshot)
+            reconcile.assert_called_once_with(run_dir, timeout=2.0, blocking=False, source="automatic")
 
     def test_missing_or_malformed_status_is_not_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

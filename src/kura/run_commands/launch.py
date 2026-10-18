@@ -226,12 +226,7 @@ def _run_remote_locked(
             # Stop the Pod directly: this command, or the runner's follower running it,
             # is the one that would otherwise receive a stop request for its own run.
             try:
-                runpod_config = _workspace_config().get("runpod", {})
-            except (OSError, ValueError):
-                # An unreadable workspace.yaml must not keep a collected Pod billing.
-                runpod_config = {}
-            try:
-                print(json.dumps(stop_runpod(run_dir, runpod_config), indent=2))
+                print(json.dumps(stop_runpod(run_dir), indent=2))
             except (OSError, ValueError) as exc:
                 print(f"cannot stop the RunPod pod: {_safe_error(exc)}; run `kura run stop {run_id}`", file=sys.stderr)
         elif launched:
@@ -254,7 +249,7 @@ def _running_remote_job(run_id: str) -> bool:
     try:
         # An automatic observation never records a missing Pod: one 404 can be
         # transient, and recording it would let a later execute launch anew.
-        status = reconcile_runpod(run_dir, _workspace_config().get("runpod", {}), source="automatic")
+        status = reconcile_runpod(run_dir, source="automatic")
     except _OperationBusy as exc:
         raise ValueError(f"cannot check the Pod of {run_id} right now ({exc}); try again") from exc
     except RunPodAPIError as exc:
@@ -439,7 +434,7 @@ def launch_run(
             )
         if (recovered := unstopped_recovered_pod(run_dir)) is not None:
             raise ValueError(f"Pod {recovered} from an earlier launch may still be billing; run `kura run stop {run_id}` before starting a new run from it")
-        status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
+        status = observe_run(run_dir)
         if status.get("state") == "running":
             raise ValueError("run already has a running realization; reconcile or stop it first")
         if status.get("state") == "launching":

@@ -1900,7 +1900,7 @@ def stop_run(run_id: str, *, yes: bool = False) -> int:
             raise ValueError("run has no realization to stop")
         realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
         if realization.get("executor") == "runpod":
-            print(json.dumps(stop_runpod(run_dir, _workspace_config().get("runpod", {})), indent=2))
+            print(json.dumps(stop_runpod(run_dir), indent=2))
         else:
             print(json.dumps(stop_docker(run_dir), indent=2))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -1962,7 +1962,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
             raise ValueError(
                 f"an earlier launch stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` first"
             )
-        status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
+        status = observe_run(run_dir)
         if status.get("state") == "running":
             raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")
         if not can_start(status):

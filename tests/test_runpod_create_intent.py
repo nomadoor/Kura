@@ -63,7 +63,7 @@ class CreateIntentRecoveryTests(unittest.TestCase):
         with _crashed_launch(previous_pod="pod-old") as run_dir:
             pods = [{"id": "pod-b", "name": NAME, "runtime": {"uptimeInSeconds": 5}}, {"id": "pod-a", "name": NAME, "runtime": {"uptimeInSeconds": 90}}]
             with patch("kura.executors.runpod._runpod_pods_named", return_value=pods), patch("kura.executors.runpod._runpod_request") as request:
-                lines = resolve_runpod_create_intents(run_dir, CONFIG)
+                lines = resolve_runpod_create_intents(run_dir)
                 request.assert_not_called()
                 self.assertIn("kura run stop", lines[0])
                 self.assertEqual(unresolved_create_intents(run_dir), [])
@@ -71,14 +71,14 @@ class CreateIntentRecoveryTests(unittest.TestCase):
                 self.assertEqual((status["state"], status["pod_id"]), ("interrupted", "pod-a"))
                 realization = json.loads((run_dir / "realizations" / f"{RID}.json").read_text(encoding="utf-8"))
                 self.assertEqual(realization["duplicate_pod_ids"], ["pod-b"])
-                stop_runpod(run_dir, CONFIG)
+                stop_runpod(run_dir)
             deleted = [call.args[1] for call in request.call_args_list]
             self.assertEqual(deleted, ["/pods/pod-a", "/pods/pod-b"])
 
     def test_no_pod_found_records_a_failed_launch(self) -> None:
         with _crashed_launch() as run_dir:
             with patch("kura.executors.runpod._runpod_pods_named", return_value=[]) as listed:
-                resolve_runpod_create_intents(run_dir, CONFIG)
+                resolve_runpod_create_intents(run_dir)
             self.assertEqual(listed.call_count, 2)
             self.assertEqual(_status(run_dir)["state"], "launch_failed")
             self.assertNotIn("pod_id", _status(run_dir))
@@ -110,24 +110,24 @@ class CreateIntentRecoveryTests(unittest.TestCase):
                 request.assert_not_called()
             self.assertIn("kura run reconcile", stderr.getvalue())
             with self.assertRaisesRegex(ValueError, "kura run reconcile"):
-                stop_runpod(run_dir, CONFIG)
+                stop_runpod(run_dir)
 
     def test_a_recovered_live_pod_blocks_relaunch_until_stopped(self) -> None:
         from kura.executors.runpod import unstopped_recovered_pod
 
         with _crashed_launch() as run_dir:
             with patch("kura.executors.runpod._runpod_pods_named", return_value=[{"id": "pod-a", "name": NAME, "runtime": None}]):
-                resolve_runpod_create_intents(run_dir, CONFIG)
+                resolve_runpod_create_intents(run_dir)
             self.assertEqual(unstopped_recovered_pod(run_dir), "pod-a")
             with patch("kura.executors.runpod._runpod_request"):
-                stop_runpod(run_dir, CONFIG)
+                stop_runpod(run_dir)
             self.assertIsNone(unstopped_recovered_pod(run_dir))
 
     def test_a_null_uptime_does_not_break_recovery(self) -> None:
         with _crashed_launch() as run_dir:
             pods = [{"id": "pod-a", "name": NAME, "runtime": {"uptimeInSeconds": None}}, {"id": "pod-b", "name": NAME, "runtime": {"uptimeInSeconds": 7}}]
             with patch("kura.executors.runpod._runpod_pods_named", return_value=pods):
-                resolve_runpod_create_intents(run_dir, CONFIG)
+                resolve_runpod_create_intents(run_dir)
             self.assertEqual(_status(run_dir)["pod_id"], "pod-b")
 
 
@@ -196,14 +196,14 @@ class CrashAfterCapacityWaitTests(unittest.TestCase):
             self.assertEqual(json.loads(realization.read_text(encoding="utf-8"))["pod"]["id"], "pod-1")
             self.assertIsNotNone(pod_may_still_bill(run_dir, status))
             with patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.runpod._runpod_request") as request:
-                lines = resolve_runpod_create_intents(run_dir, CONFIG)
+                lines = resolve_runpod_create_intents(run_dir)
                 listed.assert_not_called()
                 self.assertIn("status now does", lines[0])
                 self.assertEqual(unresolved_create_intents(run_dir), [])
                 settled = _status(run_dir)
                 self.assertEqual((settled["pod_id"], settled["last_realization"]), ("pod-1", f"realizations/{realization.name}"))
                 self.assertNotIn("capacity_wait", settled)
-                stop_runpod(run_dir, CONFIG)
+                stop_runpod(run_dir)
             self.assertEqual([call.args[:2] for call in request.call_args_list], [("DELETE", "/pods/pod-1")])
 
     def test_stop_and_launch_refuse_until_reconcile_instead_of_creating_a_second_pod(self) -> None:
@@ -219,7 +219,7 @@ class CrashAfterCapacityWaitTests(unittest.TestCase):
                 self.assertEqual(stage_run("example"), 1)
                 self.assertEqual(launch_run("example", executor="runpod", dry_run=False, image=None, yes=True), 1)
                 with self.assertRaisesRegex(ValueError, "kura run reconcile"):
-                    stop_runpod(run_dir, CONFIG)
+                    stop_runpod(run_dir)
             request.assert_not_called()
             stage.assert_not_called()
             launch.assert_not_called()
@@ -295,7 +295,7 @@ class CreateIntentRuleTests(unittest.TestCase):
         self.assertIs(docker.unresolved_create_intents, common.unresolved_create_intents)
         self.assertIs(runpod.unresolved_create_intents, common.unresolved_create_intents)
         outcomes = {}
-        for executor, resolve in (("docker", resolve_docker_create_intents), ("runpod", lambda run_dir: resolve_runpod_create_intents(run_dir, CONFIG))):
+        for executor, resolve in (("docker", resolve_docker_create_intents), ("runpod", lambda run_dir: resolve_runpod_create_intents(run_dir))):
             with tempfile.TemporaryDirectory() as directory:
                 run_dir = Path(directory) / "example"
                 _intent(run_dir, RID, executor, recorded={"state": "running", "launched_at": "2026-10-04T10:10:11+09:00"})
@@ -409,7 +409,7 @@ class SettlingNeedsNoSecretTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "launching"}), encoding="utf-8")
             with patch("kura.executors.runpod.runpod_api_key", side_effect=ValueError("no RUNPOD_API_KEY")) as key, \
                     patch("kura.executors.runpod._runpod_pods_named") as listed:
-                lines = resolve_runpod_create_intents(run_dir, CONFIG)
+                lines = resolve_runpod_create_intents(run_dir)
             key.assert_not_called()
             listed.assert_not_called()
             self.assertIn("status now does", lines[0])
@@ -435,7 +435,7 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             self.assertEqual(len(unresolved_create_intents(run_dir)), 1)
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.runpod._runpod_request") as request:
-                self.assertTrue(runner._delete_pod(root, run_dir, {"runpod_config": CONFIG}, why="the render ended"))
+                self.assertTrue(runner._delete_pod(run_dir, why="the render ended"))
             listed.assert_not_called()
             self.assertEqual([call.args[:2] for call in request.call_args_list], [("DELETE", "/pods/pod-9")])
             self.assertTrue(_status(run_dir).get("pod_stopped_at"))
@@ -449,7 +449,7 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             })
             runner.claim_request(request, 1)
             with patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.runpod._runpod_request") as request_api:
-                self.assertTrue(runner._stop_runpod_on_request(root, run_dir, request, runner._read_json(request)))
+                self.assertTrue(runner._stop_runpod_on_request(run_dir, request, runner._read_json(request)))
             listed.assert_not_called()
             self.assertEqual([call.args[:2] for call in request_api.call_args_list], [("DELETE", "/pods/pod-1")])
             self.assertTrue(runner._sibling(request, ".stop-done.json").exists())

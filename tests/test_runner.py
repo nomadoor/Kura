@@ -728,15 +728,14 @@ class RunPodFollowerTests(unittest.TestCase):
             runner.claim_request(request, 1)
             _runpod_launched(run_dir, request, state="running")
 
-            def stopped(run_dir_arg, _config):
+            def stopped(run_dir_arg):
                 _status(run_dir_arg, **{**json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8")), "pod_stopped_at": "t"})
                 return {}
 
             with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
                  patch("kura.run_commands.launch._run_remote_locked") as remote:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            # The Pod is deleted with the settings the user confirmed, not workspace.yaml.
-            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
+            self.assertEqual(stop.call_args.args[1:], ())
             remote.assert_not_called()
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
 
@@ -748,13 +747,13 @@ class RunPodFollowerTests(unittest.TestCase):
             _runpod_launched(run_dir, request, state="interrupted")
             self.assertTrue(runner.run_unfinished(run_dir))
 
-            def stopped(run_dir_arg, _config):
+            def stopped(run_dir_arg):
                 _status(run_dir_arg, **{**json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8")), "pod_stopped_at": "t"})
                 return {}
 
             with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
+            self.assertEqual(stop.call_args.args[1:], ())
             self.assertFalse(runner.run_unfinished(run_dir))
 
     def test_a_finished_run_keeps_how_it_ended_however_often_its_pod_delete_fails(self) -> None:
@@ -828,7 +827,7 @@ class RunPodFollowerTests(unittest.TestCase):
                  patch("kura.executors.runpod.reconcile_runpod", side_effect=lambda run_dir_arg, *_a, **_k: json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8"))), \
                  patch("kura.executors.runpod.stop_runpod", return_value={}) as stop:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
+            self.assertEqual(stop.call_args.args[1:], ())
             self.assertTrue(runner.stop_done(run_dir))
 
     def test_a_stop_whose_delete_fails_is_retried_with_backoff(self) -> None:
@@ -865,7 +864,7 @@ class RunPodFollowerTests(unittest.TestCase):
             notify.assert_called_once()
             self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
 
-            def stopped(run_dir_arg, _config):
+            def stopped(run_dir_arg):
                 _status(run_dir_arg, **{**json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8")), "pod_stopped_at": "t"})
                 return {}
 
@@ -1151,7 +1150,7 @@ class RunPodRenderTests(unittest.TestCase):
             with patch("kura.run_commands.render_runpod.launch_render_runpod", side_effect=rendered), \
                     patch("kura.executors.runpod.stop_runpod") as stop:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["A"]})
+            self.assertEqual(stop.call_args.args[1:], ())
 
     def test_a_render_whose_follower_died_is_interrupted_and_its_pod_deleted_not_continued(self) -> None:
         with _workspace() as (root, run_dir):
@@ -1160,7 +1159,7 @@ class RunPodRenderTests(unittest.TestCase):
             runner._first_attempt(request)  # the follower that was rendering died
             _runpod_launched(run_dir, request, state="running", last_step=2, total_steps=5)
 
-            def stopped(run_dir, config):
+            def stopped(run_dir):
                 _mutate = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
                 _status(run_dir, **{**_mutate, "pod_stopped_at": "t"})
                 return {}
@@ -1302,7 +1301,7 @@ class RunPodRenderLaunchTests(unittest.TestCase):
             self.assertEqual(code, 130)
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
             stop.assert_called_once()
-            self.assertEqual((stop.call_args.args[0].resolve(), stop.call_args.args[1]), (run_dir.resolve(), {"gpu_type_ids": ["A"]}))
+            self.assertEqual(stop.call_args.args[0].resolve(), run_dir.resolve())
 
     def test_check_only_confirms_billing_and_creates_nothing(self) -> None:
         from kura.run_commands import render_runpod

@@ -696,7 +696,7 @@ def _discover_after_unconfirmed_create(run_dir: Path, realization_id: str, api_k
     return found
 
 
-def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list[str]:
+def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
     """Settle every unresolved create intent: from its realization when the launch recorded one
     (no secret, no lookup), otherwise by discovery only.
 
@@ -707,7 +707,6 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     intents = unresolved_create_intents(run_dir, "runpod")
     if not intents:
         return []
-    _runpod_settings(config)
     api_key: str | None = None  # only discovery needs it; settling from a realization reads no secret
     lines = []
     for intent_path in intents:
@@ -1669,14 +1668,12 @@ sleep infinity
 
 def reconcile_runpod(
     run_dir: Path,
-    config: dict[str, Any],
     *,
     timeout: float = 30.0,
     blocking: bool = True,
     source: str = "explicit",
 ) -> dict[str, Any]:
     with _run_operation_lock(run_dir, "observe", blocking=blocking):
-        _runpod_settings(config)
         api_key = runpod_api_key("needed to reconcile a RunPod run")
         status = _load_status(run_dir)
         realization_ref = status.get("last_realization")
@@ -1739,8 +1736,12 @@ def reconcile_runpod(
         return status
 
 
-def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
-    _runpod_settings(config)
+def stop_runpod(run_dir: Path) -> dict[str, Any]:
+    """Delete the run's Pod and any duplicate its records name.
+
+    Deleting needs only the API key and the records: no Pod-create setting is
+    read, so settings that could not create a Pod never keep one billing.
+    """
     status = _load_status(run_dir)
     if unresolved_create_intents(run_dir):
         raise ValueError(
