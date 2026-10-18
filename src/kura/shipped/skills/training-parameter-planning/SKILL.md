@@ -62,9 +62,11 @@ Where the weights come from depends on the backend:
   `backend.config.model_paths` and `backend.config.model_downloads`; musubi-tuner
   can instead name a `model_bundle`, which downloads its own listed files and is
   never combined with `model_downloads`. `model.base` is optional and only a
-  label. For musubi-tuner `architecture: flux2`, `model_version` alone picks the
-  variant; a bundle or a Klein name in `model.base` for another variant is
-  refused. `backend.config.architecture` says what the weights are. Kura keeps
+  label. For musubi-tuner `architecture: flux2`, `model_version` picks the
+  variant the trainer runs, and the weights are still named:
+  `model_bundle: flux2-<model_version>` downloads that variant's files, or list
+  them in `model_paths`/`model_downloads`. A bundle or a Klein name in
+  `model.base` for another variant is refused. `backend.config.architecture` says what the weights are. Kura keeps
   no list of default weights: a card's `Model files` section, when it has one,
   gives the `model_downloads` entries a recorded run trained from, and a
   refusal for a missing model role points there.

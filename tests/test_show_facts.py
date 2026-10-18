@@ -277,6 +277,34 @@ class MissingRoleRefusalNamesTheFamilyCardTests(unittest.TestCase):
             "the family card .kura/knowledge/model-families/zimage.md lists verified entries when one exists",
         )
 
+    def test_a_missing_model_source_names_the_bundles_kura_knows_for_the_architecture(self) -> None:
+        def musubi(config: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "id": "facts-mu", "type": "train", "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", config)},
+            }
+
+        with self.assertRaises(ValueError) as caught:
+            command_musubi_tuner(musubi({"architecture": "flux2", "model_version": "klein-base-4b", "timestep_sampling": "flux2_shift"}))
+        message = str(caught.exception)
+        self.assertIn("model_bundle flux2-klein-base-4b downloads this model_version's files", message)
+        self.assertIn("flux2-klein-4b, flux2-klein-base-9b, flux2-klein-9b", message)
+        with self.assertRaises(ValueError) as caught:
+            command_musubi_tuner(musubi({"architecture": "zimage"}))
+        self.assertNotIn("model_bundle flux", str(caught.exception))
+
+    def test_capabilities_show_model_bundle_as_a_model_source(self) -> None:
+        text = _capabilities_text("musubi-tuner", "flux2")
+        self.assertIn("model roles, each named in backend.config.model_paths or model_downloads, or downloaded by a model_bundle:", text)
+        self.assertIn(
+            "  model_bundle: one name that downloads every role's files, instead of model_downloads; "
+            "architecture=flux2: flux2-klein-base-4b, flux2-klein-4b, flux2-klein-base-9b, flux2-klein-9b",
+            text,
+        )
+        self.assertNotIn("krea2-raw", text.split("model entry shapes:")[1])
+        self.assertNotIn("model_bundle", _capabilities_text("sd-scripts").split("model entry shapes:")[1])
+        self.assertNotIn("model_bundle", _capabilities_text("musubi-tuner", "zimage").split("model entry shapes:")[1])
+
     def test_capabilities_say_where_verified_entries_are(self) -> None:
         for name in ("sd-scripts", "musubi-tuner"):
             with self.subTest(backend=name):
