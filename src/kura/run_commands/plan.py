@@ -563,7 +563,7 @@ def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
             # publishing it when a state of the run already holds its step, and publishing copies, never moves,
             # so the folder stays in outputs/ beside them either way and is counted, as the checkpoint peak
             # counts the final file.
-            _, window = managed_state_cadence(run, checkpoint.get("save_every_n_steps"), contract=training_state_contract(run))
+            _, window = managed_state_cadence(run, checkpoint.get("save_every_n_steps"))
             trainer_states = peak_checkpoints(run, {"save_every_n_steps": checkpoint.get("save_every_n_steps"), "retention_window_steps": window})["count"]
         if managed and executor == "docker":
             # publish_training_state copies a state into the artifact store, then prunes to `keep`.

@@ -593,7 +593,7 @@ class CheckpointCadenceParityTests(unittest.TestCase):
             (sd_scripts_run, training_artifacts, lambda run: command_sd_scripts(run)),
             (musubi_run, plan, lambda run: plan._training_state_cadence(run)),
             (musubi_run, training_artifacts, lambda run: plan._checkpoint_preflight_report(run)),
-            (musubi_run, plan, lambda run: plan.own_write_bound(run, executor="docker")),
+            (musubi_run, training_artifacts, lambda run: plan.own_write_bound(run, executor="docker")),
         ):
             run = build()
             with self.subTest(module=module.__name__, backend=run["backend"]["name"]), \

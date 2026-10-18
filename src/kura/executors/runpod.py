@@ -1033,8 +1033,8 @@ def bring_home_ai_toolkit_models(run_dir: Path, downloaded_run: Path, realizatio
 
     Any AI-Toolkit command that declares MODELS_PATH gets one, with or without
     a frozen dataset handoff, so this is apart from the handoff records. Only
-    this realization's name comes home, and a record already present is kept,
-    so it is written whole or not at all: an interrupted copy leaves no
+    this realization's name comes home, and a record already present is kept;
+    it is written whole or not at all, so an interrupted copy leaves no
     truncated record for a later collection to keep. A lost listing costs a
     record, never the download.
     """

@@ -742,8 +742,9 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
 
     The stop request holds the reason before `docker stop` runs (run-records ADR, decision 1);
     a stop already asked for keeps its own record. Settings that cannot be read or are not valid
-    (workspace.yaml is checked as every command checks it), or a probe that fails, stop nothing: the watch tries again at its next check. `said` keeps a store whose
-    backing could not be measured from being logged at every check."""
+    (workspace.yaml is checked as every command checks it), or a probe that fails, stop nothing:
+    the watch tries again at its next check. `said` keeps a store whose backing could not be
+    measured from being logged at every check."""
     from kura.run_commands.plan import local_reserve_problem
     from kura.yamlio import YAMLError, load_yaml
 
