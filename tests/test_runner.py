@@ -40,7 +40,7 @@ def _launched(run_dir: Path, request: Path, **status) -> None:
     _status(run_dir, last_realization="realizations/r1.json", **status)
 
 
-_DISK_WATCH = patch("kura.run_commands.plan.local_reserve_problem", return_value=None)
+_DISK_WATCH = patch("kura.run_commands.plan.local_reserve_problem", return_value=(None, []))
 
 
 def setUpModule() -> None:

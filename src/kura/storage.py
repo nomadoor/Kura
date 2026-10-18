@@ -14,7 +14,6 @@ import platform
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -138,8 +137,20 @@ def _windows_executable(name: str) -> str | None:
     return None
 
 
-@lru_cache(maxsize=16)
+# Answers PowerShell gave. A failure (a timeout, say) is not kept, so the next check asks again.
+_powershell_cache: dict[str, Any] = {}
+
+
 def _powershell_json(script: str) -> Any:
+    if script in _powershell_cache:
+        return _powershell_cache[script]
+    value = _powershell_json_uncached(script)
+    if value is not None:
+        _powershell_cache[script] = value
+    return value
+
+
+def _powershell_json_uncached(script: str) -> Any:
     powershell = _windows_executable("powershell.exe")
     if not powershell:
         return None
@@ -161,7 +172,6 @@ def _powershell_json(script: str) -> Any:
         return None
 
 
-@lru_cache(maxsize=1)
 def _auto_wsl_host_drive() -> str | None:
     distro = os.environ.get("WSL_DISTRO_NAME")
     if not distro:
@@ -216,7 +226,11 @@ def _windows_drive_free_bytes(drive: str) -> int | None:
         return None
 
 
-def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str | None = None) -> StorageStatus:
+def probe_storage(
+    path: Path, config: dict[str, Any] | None = None, *, role: str | None = None, drive_memo: dict[str, int | None] | None = None,
+) -> StorageStatus:
+    """The effective free space behind `path`. `drive_memo` keeps each Windows drive's free space for
+    one round of probes, so stores on one drive ask PowerShell once."""
     probe = _existing_probe(path)
     usage = shutil.disk_usage(probe)
     mount = _findmnt_for(probe)
@@ -240,7 +254,12 @@ def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str
             backing_kind = "wsl2_vhdx"
             drive = _config_drive(config, "host_drive") or _auto_wsl_host_drive()
             backing_id = drive or str(mount.get("source") or "wsl2-vhdx")
-            host_free = _windows_drive_free_bytes(drive) if drive else None
+            if drive and drive_memo is not None and drive in drive_memo:
+                host_free = drive_memo[drive]
+            else:
+                host_free = _windows_drive_free_bytes(drive) if drive else None
+                if drive and drive_memo is not None:
+                    drive_memo[drive] = host_free
             if host_free is None:
                 confidence = "unknown"
                 warning = (

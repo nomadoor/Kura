@@ -42,15 +42,29 @@ and its reason (the store, its free bytes, the reserve) before it stops the
 container, then ends the run as interrupted with that reason, and the
 notification says it. Checkpoints and training states already written stay;
 a run that kept training state can be resumed. A store whose WSL backing
-cannot be measured is treated as the launch treats it: the run is stopped
-unless the run sets `safety.allow_storage_risk: true`.
+drive cannot be measured (PowerShell timed out, or WSL interop is broken) is
+judged by Linux free space, as the RunPod stage and pull gate judges it, and
+the follower logs once that it could not measure it: one failed PowerShell
+call never stops a long run, and a full virtual disk is still caught. The
+launch keeps refusing an unmeasured backing unless the run sets
+`safety.allow_storage_risk: true`.
+
+The reserve must absorb what the fastest writer can write between two
+checks: it assumes reserve ≥ 30 s × the fastest write rate (20 GiB holds about
+680 MiB/s for 30 s, more than a model download or a trainer writes on the
+machines Kura targets). A machine that writes faster raises
+`docker.min_free_gb`.
 
 This guards the accident whatever wrote the bytes: the trainer, its own
 downloads, or another program.
 
-**2. The reserve is 20 GiB.** `docker.min_free_gb` defaults to 20. One
-function, `kura.storage.storage_floor_problem`, decides "below the reserve"
-for the launch, the watch, `kura image build`, and `kura doctor disk`.
+**2. The reserve is 20 GiB.** `docker.min_free_gb` defaults to 20; a run may
+raise its own reserve with `safety.max_run_disk_gb`, and one function,
+`local_reserve_gib`, gives the launch and the watch the larger of the two
+(image builds and `kura doctor disk`, which have no run, keep
+`docker.min_free_gb`). One function, `kura.storage.storage_floor_problem`,
+decides "below the reserve" for the launch, the watch, `kura image build`,
+and `kura doctor disk`.
 
 **3. The launch checks one bound.** One function, `run_write_estimate`,
 returns per store what a run will write: the downloads Kura makes, measured
@@ -61,7 +75,9 @@ state folders, and Kura's copies of them; a state counts its optimizer
 moments too). There is no per-architecture size table. The launch refuses a
 run when a store's free space minus the estimate is below the reserve; the
 plan shows the same numbers. The bound uses only measured facts and the
-rank, so it is never a size the user declares.
+rank, so it is never a size the user declares. It assumes linear LoRA
+modules, whose size grows with the rank; conv LoRA, LoKr, full-matrix
+training, and very large models can exceed it, and the watch covers them.
 
 **4. AI-Toolkit's own downloads are measured data per pin.** At each pinned
 AI-Toolkit version's real smoke, the Hugging Face cache growth is recorded

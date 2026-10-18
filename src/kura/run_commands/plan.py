@@ -893,27 +893,45 @@ def local_write_paths(workspace: Path, config: dict[str, Any]) -> dict[str, Path
     return paths
 
 
-def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str, Any]) -> str | None:
-    """The runner's disk watch: the first store a running local run writes to that is below the reserve,
-    checked once per backing store; None when every store keeps it."""
-    docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+def local_reserve_gib(run: dict[str, Any], docker_config: dict[str, Any]) -> tuple[float, str]:
+    """The reserve a local run keeps, and the setting that sets it, for the launch and the disk watch:
+    `docker.min_free_gb`, raised for one run by `safety.max_run_disk_gb`. Image builds and doctor,
+    which have no run, keep `local_min_free_gib`."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    reserve_gib = local_min_free_gib(docker_config)
+    reserve = local_min_free_gib(docker_config)
+    setting = "docker.min_free_gb in workspace.yaml" + ("" if "min_free_gb" in docker_config else " (default)")
+    if safety.get("max_run_disk_gb") is not None:
+        run_reserve = _configured_gib(safety.get("max_run_disk_gb"), default=reserve)
+        if run_reserve > reserve:
+            return run_reserve, "safety.max_run_disk_gb in run.yaml"
+    return reserve, setting
+
+
+def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """The runner's disk watch: the first store a running local run writes to that is below the reserve
+    (None when every store keeps it), checked once per backing store, and the stores whose WSL backing
+    drive could not be measured. Those are judged by Linux free space, as the RunPod stage and pull gate
+    judges them, so one failed PowerShell call never stops a run while a full virtual disk still does;
+    the launch refuses an unmeasured backing unless the run accepts the risk."""
+    docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    reserve_gib, setting = local_reserve_gib(run, docker_config)
     checked: set[tuple[str, str]] = set()
+    unmeasured: list[str] = []
+    drive_memo: dict[str, int | None] = {}
     for name, path in local_write_paths(workspace, config).items():
-        status = probe_storage(path, config, role=name)
+        status = probe_storage(path, config, role=name, drive_memo=drive_memo)
         backing = (status.backing_kind, status.backing_id)
         if backing in checked:
             continue
         checked.add(backing)
+        if status.confidence == "unknown":
+            unmeasured.append(str(path))
         problem = storage_floor_problem(
-            status, path, reserve_gib * 1024**3, action="a running local Docker run",
-            minimum="docker.min_free_gb" + ("" if "min_free_gb" in docker_config else " default"),
-            risk_setting="safety.allow_storage_risk: true", risk_accepted=safety.get("allow_storage_risk") is True,
+            status, path, int(reserve_gib * 1024**3), action="a running local Docker run", minimum=setting, risk_accepted=True,
         )
         if problem:
-            return problem
-    return None
+            return problem, unmeasured
+    return None, unmeasured
 
 
 def _local_launch_disk_preflight(
@@ -926,12 +944,7 @@ def _local_launch_disk_preflight(
 ) -> dict[str, Any]:
     docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    required_gib = local_min_free_gib(docker_config)
-    required_setting = "docker.min_free_gb in workspace.yaml" + ("" if "min_free_gb" in docker_config else " (default)")
-    if safety.get("max_run_disk_gb") is not None:
-        run_floor_gib = _configured_gib(safety.get("max_run_disk_gb"), default=required_gib)
-        if run_floor_gib > required_gib:
-            required_gib, required_setting = run_floor_gib, "safety.max_run_disk_gb in run.yaml"
+    required_gib, required_setting = local_reserve_gib(run, docker_config)
     minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
     paths = local_write_paths(workspace, config)

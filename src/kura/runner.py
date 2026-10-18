@@ -704,6 +704,7 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             return 0
     failures = 0
     next_disk_check = clock()
+    unmeasured_said: set[str] = set()
     while True:
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             _carry_out_stop(run_dir, request)
@@ -722,16 +723,18 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             return 0
         if status.get("state") == "running" and clock() >= next_disk_check:
             next_disk_check = clock() + DISK_WATCH_SEC
-            if _disk_watch(workspace, run_dir, request):
+            if _disk_watch(workspace, run_dir, request, unmeasured_said):
                 continue  # the stop it asked for is carried out at once
         sleep(poll_sec)
 
 
-def _disk_watch(workspace: Path, run_dir: Path, request: Path) -> bool:
+def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -> bool:
     """Ask for the run's stop, with the reason, when a store it writes to is below the reserve.
 
     The stop request holds the reason before `docker stop` runs (run-records ADR, decision 1);
-    a stop already asked for keeps its own record."""
+    a stop already asked for keeps its own record. Settings that cannot be read, or a probe that
+    fails, stop nothing: the watch tries again at its next check. `said` keeps a store whose
+    backing could not be measured from being logged at every check."""
     from kura.run_commands.plan import local_reserve_problem
     from kura.yamlio import YAMLError, load_yaml
 
@@ -740,19 +743,20 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path) -> bool:
     try:
         config = load_yaml(workspace / "workspace.yaml") or {}
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml") or {}
-    except (OSError, YAMLError) as exc:
-        _log(f"{run_dir.name}: the disk watch could not read the run's settings ({exc}); checking with defaults")
-        config, run = {}, {}
-    try:
-        problem = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config if isinstance(config, dict) else {})
-    except (OSError, ValueError) as exc:
+        problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config if isinstance(config, dict) else {})
+    except (OSError, ValueError, YAMLError) as exc:
         _log(f"{run_dir.name}: the disk watch could not check free space ({exc}); trying again")
         return False
+    for path in unmeasured:
+        if path not in said:
+            said.add(path)
+            _log(f"{run_dir.name}: the Windows drive behind {path} could not be measured; "
+                 "the disk watch judges that store by Linux free space (set storage.host_drive in workspace.yaml)")
     if problem is None:
         return False
     reason = (f"stopped by the disk watch: {problem}. Saves and training states written so far are kept; free space "
-              f"(`kura doctor disk` lists what can be freed), then continue with `kura run resume {run_dir.name}` "
-              "if the run kept training state")
+              f"(`kura doctor disk` lists what can be freed), then, if the run kept training state, continue it with "
+              f"`kura run resume {run_dir.name} --additional-steps <steps>` (or `--to-step <step>`)")
     write_stop_request(run_dir, reason=reason)
     _log(f"{run_dir.name}: {reason}")
     return True

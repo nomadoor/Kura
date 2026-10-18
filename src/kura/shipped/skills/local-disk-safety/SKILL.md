@@ -125,12 +125,13 @@ or WSL/VHDX/Windows-side operations.
   hygiene that does not by itself make the operation unsafe.
 - A local run keeps a reserve free on every store it writes to (the workspace,
   the Hugging Face cache, writable mounts): `docker.min_free_gb`, default 20
-  GiB. While it trains, the job runner checks those stores about every 30
+  GiB, or the run's own `safety.max_run_disk_gb` when that is larger. While it trains, the job runner checks those stores about every 30
   seconds; when one falls below the reserve it records why, stops the
   container, and ends the run as `interrupted` with `stop_reason` in
   `kura run status <run-id>`. Saves and training states already written stay:
-  free space (`kura doctor disk`), then continue with `kura run resume` from
-  the kept training state, with the user's approval.
+  free space (`kura doctor disk`), then continue with
+  `kura run resume <run-id> --additional-steps <steps>` (or `--to-step <step>`)
+  from the kept training state, with the user's approval.
 - Local Docker launch and RunPod stage/download/pull checks use configurable
   disk gates, and `kura doctor disk` warns against the same local reserve.
   `kura image build` checks the disk where Docker keeps its data against that
@@ -157,9 +158,9 @@ or WSL/VHDX/Windows-side operations.
 - On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch
-  and the disk watch fail safe (refuse, or stop the run) unless the run
-  explicitly sets `safety.allow_storage_risk: true`;
-  RunPod stage, download, and pull fall back to Linux free space. Effective
+  fails safe unless the run explicitly sets `safety.allow_storage_risk: true`;
+  the disk watch, RunPod stage, download, and pull fall back to Linux free
+  space (the watch logs once that it could not measure the drive). Effective
   free space is the smaller of the two, so the WSL virtual disk can be the
   limit while the Windows drive has room; a refusal then says so and names
   `wsl --manage <distro> --resize <size>` (recent WSL). Resizing is a

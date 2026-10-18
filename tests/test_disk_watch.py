@@ -74,7 +74,7 @@ class DiskWatchTests(unittest.TestCase):
         reason = request_at_stop["reason"]
         self.assertIn("5 GiB effective free on C:", reason)
         self.assertIn("requires at least 20 GiB", reason)
-        self.assertIn("kura run resume example", reason)
+        self.assertIn("kura run resume example --additional-steps <steps>", reason)
         # The stop record is written with the reason.
         self.assertEqual(request_at_stop["passed"], {"reason": reason})
 
@@ -83,15 +83,40 @@ class DiskWatchTests(unittest.TestCase):
             _, stopped, _, _ = self._work(root, request, 25, states=[{"state": "running"}, {"state": "completed", "publication_state": "completed"}])
         stopped.assert_not_called()
 
-    def test_an_unmeasurable_backing_stops_the_run_unless_the_run_accepts_the_risk(self) -> None:
-        with _launched_run() as (root, _run_dir, request):
-            _, stopped, seen, _ = self._work(root, request, 900, confidence="unknown")
-        stopped.assert_called_once()
-        self.assertIn("unknown physical backing free space", seen[0]["reason"])
-        with _launched_run(safety={"allow_storage_risk": True}) as (root, _run_dir, request):
-            _, stopped, _, _ = self._work(root, request, 900, confidence="unknown",
-                                          states=[{"state": "running"}, {"state": "completed", "publication_state": "completed"}])
+    def test_an_unmeasurable_backing_is_judged_by_linux_free_space_and_said_once(self) -> None:
+        # A PowerShell call that times out must not stop a long run; a full virtual disk still does.
+        polls = [{"state": "running"}] * 3 + [{"state": "completed", "publication_state": "completed"}]
+        logged: list[str] = []
+        now = [0.0]
+        with _launched_run() as (root, _run_dir, request), patch.object(runner, "_log", side_effect=logged.append):
+            # Every poll is 31 s apart, so every poll checks.
+            _, stopped, _, probe = self._work(root, request, 900, confidence="unknown", states=polls, clock=lambda: now[0],
+                                              sleep=lambda _: now.__setitem__(0, now[0] + 31))
+        self.assertEqual(len(probe.call_args_list), 3 * 2)
         stopped.assert_not_called()
+        self.assertEqual(sum("could not be measured" in line for line in logged), 1)
+        with _launched_run() as (root, _run_dir, request):
+            _, stopped, seen, _ = self._work(root, request, 5, confidence="unknown")
+        stopped.assert_called_once()
+        self.assertIn("5 GiB effective free", seen[0]["reason"])
+
+    def test_unreadable_settings_never_stop_the_run(self) -> None:
+        with _launched_run() as (root, run_dir, request):
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("{unclosed", encoding="utf-8")
+            _, stopped, _, probe = self._work(root, request, 5, states=[{"state": "running"}, {"state": "completed", "publication_state": "completed"}])
+        stopped.assert_not_called()
+        probe.assert_not_called()
+
+    def test_the_run_reserve_raises_the_watch_reserve_as_it_does_the_launch(self) -> None:
+        from kura.run_commands.plan import local_reserve_gib
+
+        self.assertEqual(local_reserve_gib({}, {}), (20, "docker.min_free_gb in workspace.yaml (default)"))
+        self.assertEqual(local_reserve_gib({"safety": {"max_run_disk_gb": 40}}, {"min_free_gb": 30}), (40, "safety.max_run_disk_gb in run.yaml"))
+        self.assertEqual(local_reserve_gib({"safety": {"max_run_disk_gb": 10}}, {"min_free_gb": 30}), (30, "docker.min_free_gb in workspace.yaml"))
+        with _launched_run(safety={"max_run_disk_gb": 40}) as (root, _run_dir, request):
+            _, stopped, seen, _ = self._work(root, request, 30)
+        stopped.assert_called_once()
+        self.assertIn("requires at least 40 GiB", seen[0]["reason"])
 
     def test_the_workspace_reserve_setting_applies(self) -> None:
         with _launched_run(workspace_config={"docker": {"min_free_gb": 30}}) as (root, _run_dir, request):
@@ -118,6 +143,31 @@ class DiskWatchTests(unittest.TestCase):
 
 
 class ReserveOwnerTests(unittest.TestCase):
+    def test_one_drive_behind_several_stores_is_asked_once_per_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            stack.enter_context(patch("kura.storage.is_wsl", return_value=True))
+            stack.enter_context(patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}))
+            stack.enter_context(patch("kura.storage._auto_wsl_host_drive", return_value="D:"))
+            drive = stack.enter_context(patch("kura.storage._windows_drive_free_bytes", return_value=1600 * GIB))
+            stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * GIB, used=100 * GIB, free=900 * GIB)))
+            self.assertEqual(local_reserve_problem(Path(directory).resolve(), {}, {}), (None, []))
+            self.assertEqual(drive.call_count, 1)
+            local_reserve_problem(Path(directory).resolve(), {}, {})
+            self.assertEqual(drive.call_count, 2)
+
+    def test_a_failed_powershell_answer_is_not_kept(self) -> None:
+        from kura import storage
+
+        storage._powershell_cache.clear()
+        with patch("kura.storage._windows_executable", return_value="powershell.exe"), \
+                patch("kura.storage.subprocess.run", side_effect=[subprocess.TimeoutExpired("ps", 10), subprocess.CompletedProcess([], 0, '{"a": 1}', "")]) as run:
+            self.assertIsNone(storage._powershell_json("x"))
+            self.assertEqual(storage._powershell_json("x"), {"a": 1})
+            self.assertEqual(storage._powershell_json("x"), {"a": 1})
+        self.assertEqual(run.call_count, 2)
+        storage._powershell_cache.clear()
+
+
     def test_the_reserve_defaults_to_20_gib(self) -> None:
         self.assertEqual(local_min_free_gib({}), 20)
 
@@ -128,12 +178,12 @@ class ReserveOwnerTests(unittest.TestCase):
             config = {"docker": {"hf_cache": str(outside), "mounts": [{"source": "data", "target": "/data", "mode": "ro"}, {"source": "extra", "target": "/extra", "mode": "rw"}]}}
             probed: list[str] = []
 
-            def probe(path, _config=None, *, role=None):
+            def probe(path, _config=None, *, role=None, drive_memo=None):
                 probed.append(role)
                 return _status_of(5 if role == "mount:/extra" else 50, backing="D:" if role == "mount:/extra" else "C:")
 
             with patch("kura.run_commands.plan.probe_storage", side_effect=probe):
-                problem = local_reserve_problem(root, {}, config)
+                problem, _ = local_reserve_problem(root, {}, config)
         self.assertEqual(probed, ["workspace", "hf_cache", "mount:/extra"])
         self.assertIn(f"{root / 'extra'} has only 5 GiB effective free on D:", problem)
 
@@ -145,7 +195,7 @@ class ReserveOwnerTests(unittest.TestCase):
             stack.enter_context(patch("kura.storage._windows_drive_free_bytes", return_value=1600 * GIB))
             stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * GIB, used=990 * GIB, free=10 * GIB)))
             stack.enter_context(patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}))
-            problem = local_reserve_problem(Path(directory).resolve(), {}, {})
+            problem, _ = local_reserve_problem(Path(directory).resolve(), {}, {})
         self.assertIn("the WSL virtual disk is the limit", problem)
 
 
@@ -164,8 +214,15 @@ class StopReasonRecordTests(unittest.TestCase):
             with _docker([subprocess.CompletedProcess([], 0, "container-1\n", ""), subprocess.CompletedProcess([], 0, stopped, "")]):
                 status = stop_docker(run_dir, reason="below the reserve")
             [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob(f"{realization_id}.stop-*.json")]
+            # status.json is a projection: deleted, its records alone give the reason back.
+            from kura.status_projection import COVERED_FIELDS, project_status
+
+            (run_dir / "status.json").unlink()
+            projected = project_status(run_dir)
         self.assertEqual(stop["reason"], "below the reserve")
         self.assertEqual((status["state"], status["stop_reason"]), ("interrupted", "below the reserve"))
+        self.assertIn("stop_reason", COVERED_FIELDS)
+        self.assertEqual((projected["state"], projected["stop_reason"]), ("interrupted", "below the reserve"))
 
     def test_following_the_run_says_why_it_stopped(self) -> None:
         import io
