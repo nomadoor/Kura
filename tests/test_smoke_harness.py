@@ -413,21 +413,31 @@ class RealSmokeHarnessTests(unittest.TestCase):
             _torch_archive(payload / "scheduler.bin", {"last_epoch": Path("x")})
             self.assertTrue(str(MODULE.state_counters(payload)["scheduler.bin:last_epoch"]).startswith("unreadable"))
 
-    def test_disk_problems_compare_the_peak_count_with_the_launch_estimate(self) -> None:
-        self.assertEqual(MODULE.disk_problems({"count": 3}, {"count": 3, "bytes": 3 * 1024**3}), [])
-        self.assertEqual(len(MODULE.disk_problems({"count": 4}, {"count": 3, "bytes": 3 * 1024**3})), 1)
+    def test_disk_problems_compare_the_peak_bytes_with_the_bound_and_the_watch(self) -> None:
+        bound = {"rank": 4, "bytes": 3 * 1024**3, "weights_files": 12}
+        self.assertEqual(MODULE.disk_problems({"bytes": 3 * 1024**3}, bound), [])
+        self.assertEqual(len(MODULE.disk_problems({"bytes": 3 * 1024**3 + 1}, bound)), 1)
+        self.assertIn("disk watch stopped", MODULE.disk_problems({"bytes": 1}, bound, "stopped by the disk watch: low")[0])
+        self.assertIn("no rank", MODULE.disk_problems({"bytes": 1}, {"rank": None, "bytes": 0, "weights_files": 3})[0])
 
-    def test_a_peak_sample_survives_a_folder_that_disappears_while_it_is_listed(self) -> None:
+    def test_a_peak_sample_counts_weights_sized_files_and_survives_a_folder_that_disappears(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "runs" / "r1"
-            (run_dir / "outputs").mkdir(parents=True)
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "r1"
+            (run_dir / "outputs" / "r1-step00000002-state").mkdir(parents=True)
             _safetensors(run_dir / "outputs" / "r1-step00000002.safetensors", b"\0\0\0\0")
-            peak = {"count": 0}
+            (run_dir / "outputs" / "r1-step00000002-state" / "optimizer.bin").write_bytes(b"x" * 100)
+            (run_dir / "outputs" / "sample.png").write_bytes(b"x" * 1000)
+            store = workspace / "artifacts" / "training-state" / "state-a" / "payload"
+            store.mkdir(parents=True)
+            (store / "optimizer.bin").write_bytes(b"x" * 50)
+            peak = {"bytes": 0, "store_baseline": 20}
             with patch.object(Path, "rglob", side_effect=FileNotFoundError("staging folder moved")):
                 MODULE._sample_peak(run_dir, peak)
-            self.assertEqual(peak, {"count": 0})
+            self.assertEqual(peak["bytes"], 0)
             MODULE._sample_peak(run_dir, peak)
-            self.assertEqual(peak, {"count": 1})
+            weights = (run_dir / "outputs" / "r1-step00000002.safetensors").stat().st_size
+            self.assertEqual(peak["bytes"], weights + 100 + 30)
 
     def test_the_ai_toolkit_model_is_held_to_its_pinned_revision(self) -> None:
         smoke = MODULE.conformance_smoke("ai-toolkit", "one")
@@ -525,8 +535,9 @@ class RealSmokeHarnessTests(unittest.TestCase):
                 patch.object(MODULE, "_create_run", side_effect=lambda workspace, experiment, slug, smoke, fields: slug),
                 patch.object(MODULE, "_kura", side_effect=lambda workspace, *args, **kwargs: subprocess.CompletedProcess(args, 0, args[args.index("--slug") + 1] + "\n", "")),
                 patch.object(MODULE, "_compile"),
-                patch.object(MODULE, "_execute", side_effect=lambda workspace, run_id, runpod: (1 if "resume" in run_id else 0, {"count": 1}, "trainer failed")),
-                patch.object(MODULE, "check_run", return_value=passing), patch.object(MODULE, "_checkpoint_estimate", return_value={"count": 5}),
+                patch.object(MODULE, "_execute", side_effect=lambda workspace, run_id, runpod: (1 if "resume" in run_id else 0, {"bytes": 1}, "trainer failed")),
+                patch.object(MODULE, "check_run", return_value=passing), patch.object(MODULE, "_own_write_bound", return_value={"rank": 4, "bytes": 5, "weights_files": 1}),
+                patch.object(MODULE, "_stop_reason", return_value=None),
                 contextlib.redirect_stdout(io.StringIO()) as out,
             ):
                 self.assertEqual(MODULE.conformance(workspace, ["sd-scripts"], runpod=False, gpu="x", yes=True), 1)
@@ -557,7 +568,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
                             # Every scenario run keeps training state; compile froze that with its command.
                             lock = json.loads((workspace / "runs" / run_id / "resolved" / "backend-command.lock.json").read_text(encoding="utf-8"))
                             self.assertIs(lock["training_state_managed"], True)
-                            self.assertGreater(MODULE._checkpoint_estimate(workspace / "runs" / run_id)["count"], 0)
+                            self.assertGreater(MODULE._own_write_bound(workspace / "runs" / run_id)["bytes"], 0)
 
     def test_the_accumulation_case_runs_on_ai_toolkit_and_sd_scripts_only(self) -> None:
         accumulated = [run for run in MODULE.SCENARIO if run.accumulation != 1]
@@ -618,8 +629,9 @@ class RealSmokeHarnessTests(unittest.TestCase):
             with (
                 patch.object(MODULE, "ensure_dataset"), patch.object(MODULE, "_tree_digest", return_value="d"),
                 patch.object(MODULE, "_create_run", side_effect=lambda workspace, experiment, slug, smoke, fields: created.append((slug, fields)) or slug),
-                patch.object(MODULE, "_execute", return_value=(0, {"count": 1}, "")),
-                patch.object(MODULE, "check_run", return_value=passing), patch.object(MODULE, "_checkpoint_estimate", return_value={"count": 5}),
+                patch.object(MODULE, "_execute", return_value=(0, {"bytes": 1}, "")),
+                patch.object(MODULE, "check_run", return_value=passing), patch.object(MODULE, "_own_write_bound", return_value={"rank": 4, "bytes": 5, "weights_files": 1}),
+                patch.object(MODULE, "_stop_reason", return_value=None),
                 patch.object(MODULE, "model_revision_problems", return_value=[]),
                 patch.object(MODULE, "accumulation_problems", return_value=["optimizer.bin holds [2] optimizer updates, recipe steps 4"]) as accumulation,
                 contextlib.redirect_stdout(io.StringIO()) as out,

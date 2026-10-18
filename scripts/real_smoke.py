@@ -498,8 +498,7 @@ def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None, ste
             # Wait for the recorded GPU instead of failing or silently switching it.
             **({"capacity": {"mode": "wait", "timeout": "30m", "poll_interval": "30s"}} if smoke.executor == "runpod" else {}),
         },
-        # Every smoke dataset is a few items, so a 1 GiB cache estimate covers any backend's disk cache.
-        "safety": {"allow_large_model_downloads": True, "disk_cache_estimate_gb": 1},
+        "safety": {"allow_large_model_downloads": True},
     }
 
 
@@ -972,41 +971,66 @@ def check_run(workspace: Path, run_id: str, start: int, end: int, cadence: int =
     return problems
 
 
-def disk_problems(peak: dict[str, int], estimate: dict[str, Any]) -> list[str]:
-    """P8 as the scenario can check it: the checkpoint files on disk at once never exceed the
-    count the launch estimate uses (`peak_checkpoints`). That count is Kura's decision; the
-    estimate's bytes are the count times `safety.checkpoint_estimate_gb`, a size the user sets,
-    which the small conformance models never approach, so bytes are not compared. No scenario
-    run prunes while it trains, so its files only accumulate and the sample taken after the run
-    ends sees the peak; pruning arithmetic is held by py tests (docs/adr/promises-and-verification.md)."""
-    if peak["count"] > estimate.get("count", 0):
-        return [f"{peak['count']} checkpoint files at once, estimated {estimate.get('count')}"]
-    return []
+def disk_problems(peak: dict[str, int], bound: dict[str, Any], stop_reason: str | None = None) -> list[str]:
+    """P8 as the scenario can check it (docs/adr/local-disk-protection.md): the bytes of the
+    weights-sized files the run had on local disk at once (its checkpoints, the trainer's training
+    states and optimizer file, and Kura's copies of the states) never exceed the bound the launch
+    estimate uses (`own_write_bound`), and the disk watch did not stop the run. The watch itself
+    and the retention arithmetic of pruning trainers are held by py tests."""
+    problems = []
+    if not bound.get("rank"):
+        problems.append("the run sets no rank, so the launch estimate does not bound its own writes")
+    elif peak["bytes"] > bound["bytes"]:
+        problems.append(f"{peak['bytes']} bytes of weights-sized files at once, bound {bound['bytes']} ({bound['weights_files']} files)")
+    if stop_reason:
+        problems.append(f"the disk watch stopped the run: {stop_reason}")
+    return problems
 
 
-def _checkpoint_estimate(run_dir: Path) -> dict[str, Any]:
-    from kura.run_commands.plan import _estimate_checkpoint_write_bytes
+def _own_write_bound(run_dir: Path) -> dict[str, Any]:
+    from kura.run_commands.plan import own_write_bound
 
-    return _estimate_checkpoint_write_bytes(load_yaml(run_dir / "resolved" / "manifest.lock.yaml"))
+    return own_write_bound(load_yaml(run_dir / "resolved" / "manifest.lock.yaml"), executor="docker")
+
+
+def _stop_reason(run_dir: Path) -> str | None:
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return status.get("stop_reason") if isinstance(status, dict) else None
+
+
+# The files a training run writes that grow with its weights: LoRA files, accelerate states
+# (model.safetensors, optimizer.bin, scheduler.bin), and AI-Toolkit's optimizer.pt and rng.pt.
+WEIGHTS_SUFFIXES = (".safetensors", ".bin", ".pt")
+
+
+def _weights_bytes(root: Path) -> int:
+    """The bytes of weights-sized files under `root`, staging folders included. A file that
+    disappears while it is listed (a training state being staged and moved) raises OSError."""
+    if not root.is_dir():
+        return 0
+    return sum(path.stat().st_size for path in root.rglob("*") if path.suffix in WEIGHTS_SUFFIXES and path.is_file())
 
 
 def _sample_peak(run_dir: Path, peak: dict[str, int]) -> None:
-    """Raise `peak["count"]` to the checkpoint files on disk now. A folder that disappears while
-    it is listed (a training state being staged and moved) skips this sample; the next one counts."""
-    outputs = run_dir / "outputs"
+    """Raise `peak["bytes"]` to the weights-sized files the run has on disk now: under its outputs,
+    and what the training-state store gained since the run started (`peak["store_baseline"]`). A
+    folder that disappears while it is listed skips this sample; the next one counts."""
     try:
-        paths = [path.relative_to(outputs) for path in outputs.rglob("*.safetensors")] if outputs.is_dir() else []
+        now = _weights_bytes(run_dir / "outputs") + max(
+            0, _weights_bytes(run_dir.parent.parent / "artifacts" / "training-state") - peak.get("store_baseline", 0))
     except OSError:
         return
-    # A hidden directory is a training state being staged, not a checkpoint.
-    weights = checkpoint_files([path for path in paths if not any(part.startswith(".") for part in path.parts)], run_dir.name)
-    peak["count"] = max(peak["count"], len(weights.stepped) + len(weights.final))
+    peak["bytes"] = max(peak["bytes"], now)
 
 
 def _execute(workspace: Path, run_id: str, *, runpod: bool) -> tuple[int, dict[str, int], str]:
-    """`kura run execute`, sampling the checkpoints on local disk while it runs."""
+    """`kura run execute`, sampling the weights-sized files on local disk while it runs."""
     run_dir = workspace / "runs" / run_id
-    peak = {"count": 0}
+    # Only one scenario run executes at a time, so what the training-state store gains is this run's.
+    peak = {"bytes": 0, "store_baseline": _weights_bytes(workspace / "artifacts" / "training-state")}
     env = {**os.environ, "KURA_NOTIFY": "none"}
     with tempfile.TemporaryFile("w+", encoding="utf-8") as log:
         runpod_args = ["--yes", "--max-lease", f"{CONFORMANCE_MAX_LEASE_SEC // 3600}h"] if runpod else []
@@ -1188,7 +1212,7 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
                 fail("P1", accumulation_problems(workspace, run_id, run.steps), run.key)
             if not runpod:
                 # The disk peak and the model cache are sampled on this machine, not on a Pod.
-                fail("P8", disk_problems(peak, _checkpoint_estimate(workspace / "runs" / run_id)), run.key)
+                fail("P8", disk_problems(peak, _own_write_bound(workspace / "runs" / run_id), _stop_reason(workspace / "runs" / run_id)), run.key)
                 fail("P4", model_revision_problems(hf_cache, smoke), run.key)
         for resumed, controls in COMPARISONS.items():
             if resumed not in {run.key for run in plans[backend]}:

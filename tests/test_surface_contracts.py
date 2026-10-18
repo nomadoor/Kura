@@ -229,7 +229,7 @@ class SurfaceContractTests(unittest.TestCase):
             run_datasets({"datasets": ["old-id", {"id": "new"}]})
 
     def test_run_envelope_values_have_one_form(self) -> None:
-        validate_train_run_fields({"compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]}, "safety": {"allow_storage_risk": True, "checkpoint_estimate_gb": 2.5}})
+        validate_train_run_fields({"compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]}, "safety": {"allow_storage_risk": True, "large_model_download_gb": 2.5}})
         for run, message in (
             ({"compute": {"executor": "runpod", "gpu": "NVIDIA A40"}}, "compute.gpu must be a list"),
             ({"compute": {"executor": "runpod", "gpu": "gpu"}}, "compute.gpu must be a list"),
@@ -237,8 +237,8 @@ class SurfaceContractTests(unittest.TestCase):
             ({"compute": {"executor": "docker", "gpu": ["NVIDIA A40"]}}, "a local run uses the local GPU"),
             ({"compute": {"gpu": ["NVIDIA A40"]}}, "a local run uses the local GPU"),
             ({"safety": {"allow_storage_risk": "yes"}}, "safety.allow_storage_risk must be true or false"),
-            ({"safety": {"checkpoint_estimate_gb": "25"}}, "safety.checkpoint_estimate_gb must be a positive number"),
-            ({"safety": {"checkpoint_estimate_gb": float("nan")}}, "safety.checkpoint_estimate_gb must be a positive number"),
+            ({"safety": {"large_model_download_gb": "25"}}, "safety.large_model_download_gb must be a positive number"),
+            ({"safety": {"large_model_download_gb": float("nan")}}, "safety.large_model_download_gb must be a positive number"),
             ({"compute": {"executor": "rnupod"}}, "compute.executor must be docker or runpod"),
         ):
             with self.subTest(run=run), self.assertRaisesRegex(ValueError, message):
@@ -249,7 +249,7 @@ class SurfaceContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "allow_many_checkpoints is not a training run setting.*allow_unknown_disk_cache is not a training run setting"):
             validate_train_run_fields({"safety": {"allow_many_checkpoints": True, "allow_unknown_disk_cache": True}})
-        self.assertEqual(without_retired_train_run_keys({"safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2}}), {"safety": {"checkpoint_estimate_gb": 2}})
+        self.assertEqual(without_retired_train_run_keys({"safety": {"allow_many_checkpoints": True, "allow_storage_risk": True}}), {"safety": {"allow_storage_risk": True}})
 
     def test_compile_names_a_misspelled_key_before_reporting_its_intended_key_missing(self) -> None:
         from kura.cli import _validate_train_compile_intent

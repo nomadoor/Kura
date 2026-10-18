@@ -139,22 +139,34 @@ or WSL/VHDX/Windows-side operations.
   there it only says so), and `kura doctor disk` reports build cache that
   cleanup can free. `kura doctor workspace` lists the settings and their
   accepted values.
-- Local Docker launch adds known write estimates to the reserve, and the RunPod check compares them with `runpod.container_disk_gb`.
-  Musubi Hugging Face downloads use HEAD metadata when available, and every
-  training run adds a conservative checkpoint budget of
-  `safety.checkpoint_estimate_gb` (default 1) GiB per checkpoint. The budget counts the
-  most checkpoint files on disk at once while training, the trainer's final
-  file included: retention that prunes during training (AI-Toolkit and
-  sd-scripts `save_last_n_steps`) bounds it near the kept count, while Musubi
-  Tuner's `prune_checkpoints_before_step` runs only after training and
-  AI-Toolkit's unset default is not assumed, so those count every save. Saves
-  are counted at the cadence the trainer is given. With `save_every_n_steps`
-  unset, sd-scripts writes only its final file, Musubi Tuner saves once at the
-  recipe's steps besides its final file, and AI-Toolkit saves at its own
-  default, which Kura does not know: only its final file is counted, and the
-  line says `trainer-default saves not counted`; set `save_every_n_steps` for
-  a full estimate. The disk lines in `kura run plan` and the disk refusals show
-  this part as `checkpoints: N × G GiB (safety.checkpoint_estimate_gb)`.
+- The launch checks one bounded estimate of what the run writes, per store,
+  and refuses when a store's free space minus it is below the reserve:
+  - the downloads Kura makes (sd-scripts and Musubi Tuner model files), sized
+    from Hugging Face metadata; a file already in the cache counts 0;
+  - the run's own weights-sized files on disk at once, each bounded by
+    `rank × 64 MiB` (the rank is `network_dim`): the most checkpoints at once,
+    the training states the trainer keeps, and Kura's copies of them, a state
+    counting as 3 such files (weights and the optimizer's moments). LoRA files
+    are far smaller than this bound (the measured runs wrote at most 163 MiB at
+    rank 16 and 267 MiB at rank 32), so it is a safe ceiling, not a prediction.
+    It assumes linear LoRA; conv LoRA, LoKr, full-matrix training, and very
+    large models can exceed it, and the disk watch covers them. A run with no
+    rank is not bounded, and the plan says so.
+  Checkpoints are counted at the cadence the trainer is given, the final file
+  included: retention that prunes during training (AI-Toolkit and sd-scripts
+  `save_last_n_steps`) bounds them near the kept count, while Musubi Tuner's
+  `prune_checkpoints_before_step` runs only after training and AI-Toolkit's
+  unset default is not assumed, so those count every save. With
+  `save_every_n_steps` unset, sd-scripts writes only its final file, Musubi
+  Tuner saves once at the recipe's steps besides its final file, and
+  AI-Toolkit saves at its own default, which Kura does not know: only its final
+  file is counted, and the line says `trainer-default saves not counted`. The
+  disk lines in `kura run plan` and the disk refusals show this part as
+  `own writes: N weights-sized files (...) at rank R × 64 MiB`.
+- The RunPod check shows the same estimate against `runpod.container_disk_gb`
+  and refuses only when the downloads Kura makes and the input transfer alone
+  do not fit. A full Pod disk fails the run and the maximum lease bounds the
+  bill; nothing on the user's machine is at risk.
 - On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch
@@ -176,24 +188,23 @@ or WSL/VHDX/Windows-side operations.
   errors.
 - The plan shows how many checkpoints a run leaves and warns at ten or more;
   it never refuses a run for the count, because the launch disk check above
-  already budgets every checkpoint. To keep fewer, set the backend's
+  already bounds every checkpoint. To keep fewer, set the backend's
   checkpoint retention (`kura run capabilities <backend>` lists it:
   `save_last_n_steps` for sd-scripts and AI-Toolkit,
   `prune_checkpoints_before_step` for Musubi Tuner).
-- Writes Kura cannot measure are covered locally by the disk watch until
-  their size is declared; then both disk checks (local launch and the RunPod
-  container disk) count them. None is refused. The RunPod container-disk check
-  has no floor, so on RunPod an undeclared write is not covered: declare it, or
-  leave headroom in `runpod.container_disk_gb`.
+- Writes Kura does not measure are shown, not counted, and never refused:
+  locally the disk watch covers them; on RunPod leave headroom in
+  `runpod.container_disk_gb`.
   - A run whose trainer writes a disk cache (a Musubi Tuner run unless `precache: false` or a custom command; sd-scripts
     or AI-Toolkit when the run caches latents or text encodings to disk) gets a
     plan info line that the cache is not counted (image caches are a few MB
-    per item); set `safety.disk_cache_estimate_gb` for large or video datasets.
+    per item).
   - AI-Toolkit downloads its models itself into the Hugging Face cache
     (diffusers repositories in `hub/`, single files in `ai-toolkit-models/`),
-    often 10–30 GB. The plan warns that this is not counted; set
-    `safety.model_download_estimate_gb` to count it under the Hugging Face
-    cache locally and in the RunPod container disk.
+    often 10–30 GB. The plan warns that this is not counted.
+- `safety.checkpoint_estimate_gb`, `safety.disk_cache_estimate_gb`, and
+  `safety.model_download_estimate_gb` are retired: a run that sets one is
+  refused; remove it.
 
 ## Safety map
 

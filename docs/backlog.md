@@ -15,6 +15,9 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-18 | one owner | The save cadence is computed twice with different arguments: `own_write_bound` asks `checkpoint_save_cadence` with the display's value, `managed_state_save_args` with the validated config value and the backend contract | review of the disk watch / bounded estimate change | P8
+- 2026-10-18 | conformance | real_smoke `_weights_bytes` counts every `.safetensors`/`.bin`/`.pt` under outputs, so a trainer cache written there would count against the bound | review of the disk watch / bounded estimate change | P8
+- 2026-10-18 | tests | No test covers: a frozen manifest holding the retired estimate keys planning and launching, an AI-Toolkit rank (`network.linear` in native_config) reaching `own_write_bound`, or the RunPod plan text matching Docker's | review of the disk watch / bounded estimate change | P8
 - 2026-10-18 | disk watch | The watch probes the workspace, the Hugging Face cache, and writable mounts, but not Docker's data root, where a container's writable layer grows | review of the disk watch / bounded estimate change | P8
 - 2026-10-18 | one owner | `runner._disk_watch` reads workspace.yaml with `load_yaml` instead of the workspace loader (`workspace_config()`), so it does not apply that loader's checks | review of the disk watch / bounded estimate change | -
 - 2026-10-18 | docs | The ADR `local-disk-protection.md` and P8 describe the bounded estimate that lands with the next change; merge the watch and the estimate in stack order | review of the disk watch / bounded estimate change | P8
@@ -31,7 +34,7 @@ why, so it is not raised again.
 - 2026-10-18 | one owner | `_trainer_download_estimate` calls `adapter.requirements` directly instead of `model_requirements(run)`, and a plan computes the requirements twice | review of the unmeasured-download change | -
 - 2026-10-18 | one owner | A GiB setting is interpreted in three places: `_declared_gib`, `_configured_gib`, and the `*_gb` check in `validate_train_run_fields` | review of the unmeasured-download change | -
 - 2026-10-18 | plan JSON | `trainer_downloads` appears only inside the disk payloads' `estimates`, while the disk cache has its own top-level plan section | review of the unmeasured-download change | P11
-- 2026-10-18 | tests | No test covers: a declared `safety.model_download_estimate_gb` actually refusing on local Docker and on RunPod, AI-Toolkit with a local-path `model.base` giving no download warning, and the RunPod plan output showing the same warning and info lines as Docker | review of the unmeasured-download change | P8
+- 2026-10-18 | tests | No test covers: AI-Toolkit with a local-path `model.base` giving no download warning, and the RunPod plan output showing the same warning and info lines as Docker | review of the unmeasured-download change | P8
 
 ## Rejected
 

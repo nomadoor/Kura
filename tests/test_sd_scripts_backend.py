@@ -21,7 +21,7 @@ from kura.backends.sd_scripts_datasets import (
 )
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.container_scripts import script_source
-from kura.run_commands.plan import _disk_cache_estimate as _sd_scripts_disk_cache_estimate, _disk_cache_preflight_report as _sd_scripts_cache_preflight_report
+from kura.run_commands.plan import _disk_cache_note as _sd_scripts_disk_cache_note, _disk_cache_preflight_report as _sd_scripts_cache_preflight_report
 from kura.backends.sd_scripts import compile_sd_scripts
 
 import sys
@@ -374,14 +374,6 @@ class SdScriptsBackendTests(unittest.TestCase):
 
         self.assertEqual([item["filename"] for item in specs], ["primary.safetensors", "companion.json"])
         self.assertTrue(paths["base"].endswith("/primary.safetensors"))
-
-    def test_disk_cache_estimate_rejects_boolean_and_non_finite_values(self) -> None:
-        for value in (True, float("nan"), float("inf")):
-            with self.subTest(value=value):
-                run = base_run()
-                run["backend"]["config"]["cache_latents_to_disk"] = True
-                run["safety"] = {"disk_cache_estimate_gb": value}
-                self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
 
     def test_tier1_entrypoints_and_model_roles(self) -> None:
         expected = {
@@ -834,18 +826,14 @@ class SdScriptsBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not contain secrets"):
             command_sd_scripts(secret)
 
-    def test_an_undeclared_disk_cache_is_information_and_never_refused(self) -> None:
-        # Every backend reads the same safety.disk_cache_estimate_gb (tests/test_disk_cache.py); none refuses a run for it.
+    def test_a_disk_cache_is_information_and_never_refused(self) -> None:
+        # Every backend's cache is shown and not counted (tests/test_disk_cache.py); none refuses a run for it.
         run = base_run()
         run["backend"]["config"]["cache_latents_to_disk"] = True
-        self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
+        self.assertIsNotNone(_sd_scripts_disk_cache_note(run))
         report = _sd_scripts_cache_preflight_report(run)
         self.assertEqual(report[0]["severity"], "info")
         self.assertIn("not counted in the disk estimate", report[0]["fact"])
-        run["safety"] = {"disk_cache_estimate_gb": 1.5}
-        estimate = _sd_scripts_disk_cache_estimate(run)
-        self.assertEqual(estimate["status"], "declared-estimate")
-        self.assertEqual(estimate["bytes"], int(1.5 * 1024**3))
 
     def test_checkpoint_retention_is_displayed_as_a_step_window(self) -> None:
         run = base_run()
@@ -877,7 +865,7 @@ class SdScriptsBackendTests(unittest.TestCase):
     def test_disk_cache_plan_does_not_treat_integer_as_boolean(self) -> None:
         run = base_run()
         run["backend"]["config"]["cache_latents_to_disk"] = 1
-        self.assertFalse(_sd_scripts_disk_cache_estimate(run)["enabled"])
+        self.assertIsNone(_sd_scripts_disk_cache_note(run))
 
     def test_real_lllite_validator_requires_version_two_metadata(self) -> None:
         namespace = {"__name__": "__test__"}

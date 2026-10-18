@@ -1941,7 +1941,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 # The host's real free space must not decide this test.
                 with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
-                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1986,7 +1986,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
@@ -1996,7 +1996,7 @@ class RunPlanTests(unittest.TestCase):
         self.assertIn("[warning] model-acquisition", output)
         self.assertIn("the trainer downloads example itself before the first step into the Hugging Face cache at ", output)
         self.assertIn(str((root / "cache" / "huggingface").resolve()) + " (diffusers repositories in hub/, single files in ai-toolkit-models/)", output)
-        self.assertIn("set safety.model_download_estimate_gb to count it", output)
+        self.assertIn("the disk watch stops the run before the store falls below the reserve", output)
         self.assertNotIn("estimated model downloads write 0 B", output)
         self.assertIn("[info] disk", output)
         self.assertNotIn("Disk warnings", output)
@@ -2171,19 +2171,20 @@ class RunPlanTests(unittest.TestCase):
         downloads = self._plan_cached_musubi_model(link_target=link, ref="release/v1", revision="release/v1")
         self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (0, 123), downloads)
 
-    def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
+    def test_runpod_disk_preflight_refuses_only_measured_downloads_above_the_container_disk(self) -> None:
         run = {
             "type": "train",
                         "recipe": {"steps": 20},
-            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 10}},
-            "safety": {"checkpoint_estimate_gb": 2},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 10, "network_dim": 16}},
         }
-        download_estimate = {"bytes": 8 * 1024**3}
+        # The own-write bound (3 checkpoints of 1 GiB at rank 16, and states) is above 10 GiB: shown, not refused.
+        result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, {"bytes": 8 * 1024**3})
+        self.assertGreater(result["estimated_write_bytes"], 10 * 1024**3)
         with self.assertRaisesRegex(ValueError, "container_disk_gb=10"):
-            _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
-        run["safety"]["allow_runpod_disk_risk"] = True
-        result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
-        self.assertEqual(result["estimated_write_bytes"], 14 * 1024**3)
+            _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, {"bytes": 11 * 1024**3})
+        run["safety"] = {"allow_runpod_disk_risk": True}
+        result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, {"bytes": 11 * 1024**3})
+        self.assertEqual(result["measured_write_bytes"], 11 * 1024**3)
 
     def test_launch_refuses_neither_many_checkpoints_nor_an_undeclared_disk_cache(self) -> None:
         # The records launch enforces (`enforce_preflight_errors`) hold no error for either.
@@ -6087,12 +6088,13 @@ class DockerLifecycleTests(unittest.TestCase):
                 payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 30 * 1024**3)
 
-    def test_local_launch_disk_preflight_counts_the_checkpoint_budget(self) -> None:
+    def test_local_launch_disk_preflight_counts_the_own_write_bound(self) -> None:
+        # 31 checkpoints of 4 GiB (rank 64) at once: 124 GiB of own writes above the 50 GiB reserve.
         run = {
             "type": "train",
                         "recipe": {"steps": 3000},
-            "backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "save_every_n_steps": 100}},
-            "safety": {"checkpoint_estimate_gb": 2},
+            "backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "save_every_n_steps": 100, "network_dim": 64}},
+            "recovery": {"training_state": {"enabled": False}},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -6100,7 +6102,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
             ):
-                with self.assertRaisesRegex(ValueError, "requires at least 112 GiB"):
+                with self.assertRaisesRegex(ValueError, "requires at least 174 GiB"):
                     _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
 
     def test_local_launch_disk_preflight_sums_estimates_on_shared_backing(self) -> None:
@@ -6110,12 +6112,14 @@ class DockerLifecycleTests(unittest.TestCase):
             "backend": {"name": "musubi-tuner", "config": {
                     "architecture": "flux2",
                     "save_every_n_steps": 100,
+                    "network_dim": 32,
                     "model_downloads": {
                         "dit": {"repo": "example/model", "filename": "dit.safetensors"},
                     },
                 }
             },
-            "safety": {"checkpoint_estimate_gb": 2, "allow_large_model_downloads": True},
+            "recovery": {"training_state": {"enabled": False}},
+            "safety": {"allow_large_model_downloads": True},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -6124,6 +6128,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
                 patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 40 * 1024**3}),
             ):
+                # 21 checkpoints of 2 GiB (rank 32) and 40 GiB of downloads share one backing.
                 with self.assertRaisesRegex(ValueError, "requires at least 132 GiB"):
                     _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
                 payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 10}})

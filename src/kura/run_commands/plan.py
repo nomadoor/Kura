@@ -44,7 +44,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, read_resume_lock, resume_steps, trained_steps, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, read_resume_lock, resume_steps, state_retention_window, trained_steps, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -460,10 +460,10 @@ def _model_download_preflight_report(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    trainer_downloads = _trainer_download_estimate(run, executor=executor, local_cache=local_cache)
-    if trainer_downloads["enabled"]:
-        # A warning, not a refusal: the free-space floor covers it until its size is declared.
-        records.append(_unmeasured_write_record("model-acquisition", "warning", trainer_downloads))
+    trainer_downloads = _trainer_downloads(run, executor=executor, local_cache=local_cache)
+    if trainer_downloads:
+        # A warning, not a refusal: locally the disk watch covers it.
+        records.append(_preflight_record("model-acquisition", "warning", trainer_downloads, "run.yaml"))
         if not any(item.get("acquisition") == "kura" for item in model_requirements(run, download_estimate)):
             return records
     probe_failures = download_estimate.get("probe_failures")
@@ -513,95 +513,141 @@ def _run_adapter(run: dict[str, Any]) -> Any:
         return None
 
 
-def _unmeasured_write(written: str | None, declared_gib: float | None, *, setting: str, scale: str, advice: str) -> dict[str, Any]:
-    """A write Kura cannot measure (a trainer's own model downloads, a run-scoped disk cache),
-    the same way for both disk checks and the plan: not counted, shown with its usual scale, until
-    the author declares its size in `setting`; then counted. The free-space floor covers it until
-    then, so it is never a refusal. `written` says what writes it, None when nothing does."""
-    if written is None:
-        return {"enabled": False, "bytes": 0, "status": "not-applicable"}
-    if declared_gib is None:
-        return {
-            "enabled": True, "bytes": 0, "status": "unknown", "setting": setting,
-            "detail": f"{written}; not counted in the disk estimate ({scale}); set {setting} {advice}",
-        }
-    return {"enabled": True, "bytes": int(declared_gib * 1024**3), "gib": declared_gib, "status": "declared-estimate", "setting": setting, "detail": written}
+# The run's own writes are bounded, never sized by a declared estimate (docs/adr/local-disk-protection.md,
+# decision 3): every weights-sized file on disk at once is counted at `rank × 64 MiB`. A LoRA file grows
+# with its rank; the 13 acceptance runs wrote checkpoints of 44-163 MiB at rank 16 and 267 MiB at rank 32,
+# at most 10.2 MiB per rank even in fp32 (sd-scripts and Musubi Tuner save fp32 when Kura passes no save
+# precision). The bound assumes linear LoRA modules; conv LoRA, LoKr, full-matrix training, and very large
+# models can exceed it, and the disk watch covers them.
+WEIGHTS_BYTES_PER_RANK = 64 * 1024**2
+# A training state holds the weights (fp32, 4 bytes per parameter) and the optimizer's moments: AdamW's
+# two fp32 moments add 8 bytes per parameter, 8-bit AdamW (the pinned AI-Toolkit baseline's default)
+# about 2. So a state is at most 3 weights-sized fp32 files with AdamW, 1.5 with 8-bit AdamW. One rule
+# for every optimizer: 3 files. The bound's headroom (64 MiB per rank against at most 10.2 measured)
+# also covers an optimizer that keeps more (Prodigy keeps four fp32 tensors: 5 files of real size).
+STATE_WEIGHT_FILES = 3
 
 
-def _unmeasured_write_record(check: str, undeclared_severity: str, estimate: dict[str, Any]) -> dict[str, Any]:
-    if estimate["status"] == "unknown":
-        return _preflight_record(check, undeclared_severity, str(estimate["detail"]), "run.yaml")
-    return _preflight_record(
-        check, "info", f"{estimate['detail']}; counted at the declared {_preflight_bytes(estimate['bytes'])} ({estimate['setting']})", "run.yaml",
-    )
+def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
+    """The run's own weights-sized writes on disk at once, for `run_write_estimate`: the most checkpoints
+    at once (`peak_checkpoints`), the training states the trainer keeps, and Kura's copies of them (made
+    on the local machine, so not on a Pod), each state as `STATE_WEIGHT_FILES` files, at
+    `rank × WEIGHTS_BYTES_PER_RANK` per file. A run with no rank (`network_dim`) is not bounded."""
+    adapter = _run_adapter(run)
+    display = adapter.display(run) if adapter is not None else {}
+    checkpoint = display.get("checkpoint") or {}
+    peak = peak_checkpoints(run, checkpoint) if adapter is not None else None
+    checkpoints = peak["count"] if peak is not None else 0
+    trainer_states = kura_copies = 0
+    if peak is not None and adapter.training_state is not None:
+        managed = training_state_managed(run)
+        keep = training_state_policy(run)["keep_generations"]
+        if training_state_contract(run).get("native_format") == "ai-toolkit-weight-optimizer-pair":
+            # Kura's hook keeps `keep` state folders and stages one more (container_scripts/ai_toolkit_state.py,
+            # publish_generation); the trainer itself rewrites one optimizer.pt beside its checkpoints at every
+            # save (BaseSDTrainProcess.save in the pinned AI-Toolkit), managed or not.
+            trainer_states = (keep + 1 if managed else 0) + 1
+        elif managed:
+            # An accelerate trainer keeps the states of `--save_last_n_steps_state` and writes the next before
+            # removing the oldest; its final `-state` folder stays beside them, as the checkpoint peak counts.
+            cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
+            window = state_retention_window(run, cadence if isinstance(cadence, int) else None)
+            trainer_states = peak_checkpoints(run, {"save_every_n_steps": checkpoint.get("save_every_n_steps"), "retention_window_steps": window})["count"]
+        if managed and executor == "docker":
+            # publish_training_state copies a state into the artifact store, then prunes to `keep`.
+            kura_copies = keep + 1
+    rank = _as_positive_int(display.get("rank"))
+    files = checkpoints + STATE_WEIGHT_FILES * (trainer_states + kura_copies)
+    bound = {
+        "rank": rank, "checkpoints": checkpoints, "trainer_states": trainer_states, "kura_state_copies": kura_copies,
+        "weights_files": files, "per_file_bytes": rank * WEIGHTS_BYTES_PER_RANK if rank else None,
+        "bytes": files * rank * WEIGHTS_BYTES_PER_RANK if rank else 0,
+    }
+    if peak is not None and peak["trainer_default_saves"]:
+        bound["trainer_default_saves_not_counted"] = True
+    return bound
 
 
-def _declared_gib(value: Any) -> float | None:
-    """A declared size as written; compile refuses any other form."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-        return None
-    return float(value)
+def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
+    """The own-writes part of a disk line: what was counted, and at what size. Only a local run has the
+    disk watch, so an unbounded RunPod run is told to leave room in the container disk instead."""
+    parts = f"{bound['checkpoints']} checkpoint(s)"
+    states = bound["trainer_states"] + bound["kura_state_copies"]
+    if states:
+        parts += f" + {states} training state(s) × {STATE_WEIGHT_FILES}"
+    uncounted = "; trainer-default saves not counted" if bound.get("trainer_default_saves_not_counted") else ""
+    if not bound["rank"]:
+        cover = ("leave room in runpod.container_disk_gb" if executor == "runpod"
+                 else "the disk watch stops the run before a store falls below the reserve")
+        return (f"own writes not bounded: {bound['weights_files']} weights-sized files ({parts}), but the run sets no rank "
+                f"(network_dim); {cover}{uncounted}")
+    return (f"own writes: {bound['weights_files']} weights-sized files ({parts}) at rank {bound['rank']} × 64 MiB = "
+            f"{_preflight_bytes(bound['bytes'])}{uncounted}")
 
 
-def _trainer_download_estimate(run: dict[str, Any], *, executor: str, local_cache: Path) -> dict[str, Any]:
-    """The model files a trainer downloads itself (AI-Toolkit resolves `model.base` on its own),
-    which Kura cannot size: an unmeasured write into the Hugging Face cache, counted at
-    `safety.model_download_estimate_gb` once declared."""
+def _trainer_downloads(run: dict[str, Any], *, executor: str, local_cache: Path) -> str | None:
+    """What a trainer downloads itself (AI-Toolkit resolves `model.base` on its own), which Kura does not
+    size and the estimate does not count; None when the trainer downloads nothing itself."""
     adapter = _run_adapter(run)
     requirements = adapter.requirements(run, None, declared=False) if adapter is not None else []
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
-    written = None
-    if backend_managed:
-        sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
-        # The trainer's MODELS_PATH sits at the same place inside the cache on every executor.
-        inside_cache = PurePosixPath(AI_TOOLKIT_MODELS_PATH).relative_to(HF_CACHE_CONTAINER_PATH)
-        cache = f"the Pod's Hugging Face cache at {HF_CACHE_CONTAINER_PATH}" if executor == "runpod" else f"the Hugging Face cache at {local_cache}"
-        written = (
-            f"the trainer downloads {sources} itself before the first step into {cache} "
-            f"(diffusers repositories in hub/, single files in {inside_cache}/), "
-            + ("on every run, while the Pod bills: each Pod starts with an empty cache"
-               if executor == "runpod" else "reusing files an earlier run left there")
-        )
-    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    return _unmeasured_write(
-        written, _declared_gib(safety.get("model_download_estimate_gb")),
-        setting="safety.model_download_estimate_gb", scale="often 10–30 GB", advice="to count it",
-    )
+    if not backend_managed:
+        return None
+    sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
+    # The trainer's MODELS_PATH sits at the same place inside the cache on every executor.
+    inside_cache = PurePosixPath(AI_TOOLKIT_MODELS_PATH).relative_to(HF_CACHE_CONTAINER_PATH)
+    if executor == "runpod":
+        return (f"the trainer downloads {sources} itself before the first step into the Pod's Hugging Face cache at "
+                f"{HF_CACHE_CONTAINER_PATH} (diffusers repositories in hub/, single files in {inside_cache}/), on every run, "
+                "while the Pod bills: each Pod starts with an empty cache; not counted in the container-disk estimate "
+                "(often 10–30 GB), so leave room in runpod.container_disk_gb")
+    return (f"the trainer downloads {sources} itself before the first step into the Hugging Face cache at {local_cache} "
+            f"(diffusers repositories in hub/, single files in {inside_cache}/), reusing files an earlier run left there; "
+            "not counted in the disk estimate (often 10–30 GB): the disk watch stops the run before the store falls below the reserve")
 
 
-def _disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
-    """The run-scoped disk cache both disk checks count, for every backend: whether the trainer
-    writes one (its adapter says), as an unmeasured write sized by `safety.disk_cache_estimate_gb`."""
+def _disk_cache_note(run: dict[str, Any]) -> str | None:
+    """The run-scoped disk cache the trainer writes (its adapter says), shown and not counted."""
     adapter = _run_adapter(run)
     written = adapter.disk_cache(run) if adapter is not None and adapter.disk_cache is not None else None
-    return _unmeasured_write(
-        written, _declared_disk_cache_gib(run),
-        setting="safety.disk_cache_estimate_gb", scale="image caches are a few MB per item", advice="for large or video datasets",
-    )
-
-
-def _declared_disk_cache_gib(run: dict[str, Any]) -> float | None:
-    """`safety.disk_cache_estimate_gb`. A run an older Kura compiled may hold the estimate as
-    sd-scripts `backend.config.disk_cache_estimate_gb`."""
-    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    value = safety.get("disk_cache_estimate_gb")
-    if value is None:
-        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-        config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
-        value = config.get("disk_cache_estimate_gb")
-    return _declared_gib(value)
+    if written is None:
+        return None
+    return f"{written}; not counted in the disk estimate (image caches are a few MB per item; the disk watch covers a larger one)"
 
 
 def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
-    estimate = _disk_cache_estimate(run)
-    if not estimate["enabled"]:
-        return []
-    return [_unmeasured_write_record(f"{_run_adapter(run).name}-disk-cache", "info", estimate)]
+    note = _disk_cache_note(run)
+    return [_preflight_record(f"{_run_adapter(run).name}-disk-cache", "info", note, "run.yaml")] if note else []
+
+
+def run_write_estimate(
+    run: dict[str, Any], config: dict[str, Any], *, executor: str, workspace: Path | None = None,
+    download_estimate: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """What a run writes, per store, for the local launch, the RunPod container-disk check, and the plan
+    (docs/adr/local-disk-protection.md, decision 3): the downloads Kura makes, measured from Hugging Face
+    metadata (a cached file counts 0), into the Hugging Face cache, and the run's own writes
+    (`own_write_bound`) into the workspace. On RunPod everything lands on the container disk, with the
+    selected input transfer; `measured_bytes` is the part Kura measured (downloads and the transfer)."""
+    if download_estimate is None:
+        download_estimate = _estimate_backend_download_bytes(
+            run, workspace=_download_estimate_workspace(run, workspace, executor=executor) if workspace is not None else None, config=config,
+        )
+    own = own_write_bound(run, executor=executor)
+    downloads = int(download_estimate.get("bytes") or 0)
+    estimate: dict[str, Any] = {"downloads": download_estimate, "own_writes": own}
+    if executor == "runpod":
+        transfer = _runpod_input_transfer_estimate(run)
+        measured = downloads + int((transfer or {}).get("remote_peak_bytes") or 0)
+        estimate.update({"input_transfer": transfer, "measured_bytes": measured, "stores": {"container": measured + own["bytes"]}})
+    else:
+        estimate["stores"] = {"hf_cache": downloads, "workspace": own["bytes"]}
+    return estimate
 
 
 def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     """How many checkpoints the run leaves, as information: a count is the user's decision, and
-    the launch disk gate (`_estimate_checkpoint_write_bytes`) budgets every one of them."""
+    the launch disk gate (`own_write_bound`) bounds every one of them."""
     steps = trained_steps(run)
     expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None:
@@ -689,13 +735,18 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
         return [_preflight_record("runpod-disk", "error", str(exc), "workspace.yaml")]
     incomplete = bool(download_estimate.get("unknown") or download_estimate.get("probe_failures"))
     suffix = "; estimate is incomplete because some model sizes are unavailable" if incomplete else ""
+    fits = payload["estimated_write_bytes"] <= payload["container_disk_bytes"]
+    verdict = "" if fits else (
+        "; the bound is above the container disk: a full Pod disk fails the run (the maximum lease bounds the bill), "
+        "so raise runpod.container_disk_gb if the run may write that much"
+    )
     return [
         _preflight_record(
             "runpod-disk",
-            "info",
-            "container_disk_gb="
-            f"{payload['container_disk_gib']}; estimated known remote writes {_preflight_bytes(payload['estimated_write_bytes'])}; "
-            f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}{suffix}",
+            "info" if fits else "warning",
+            f"container_disk_gb={payload['container_disk_gib']}; measured writes {_preflight_bytes(payload['measured_write_bytes'])} "
+            f"(model downloads and input transfer); estimated remote writes {_preflight_bytes(payload['estimated_write_bytes'])}; "
+            f"{own_write_text(payload['estimates']['own_writes'], executor='runpod')}{suffix}{verdict}",
             "workspace.yaml",
         )
     ]
@@ -787,7 +838,7 @@ def _local_disk_preflight_report(
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
             f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['minimum_free']}); "
-            f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}",
+            f"{own_write_text(payload['estimates']['own_writes'], executor='docker')}",
             "workspace.yaml",
         )
     ]
@@ -805,61 +856,31 @@ def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
     raise ValueError("; ".join(facts))
 
 
-def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
-    """The checkpoint bytes a training run writes for the launch disk preflights, counted at the
-    peak the trainer's retention leaves on disk while it trains (`peak_checkpoints`), at
-    `safety.checkpoint_estimate_gb` (default 1) GiB each. A run without a known backend writes
-    no checkpoint estimate, as `_disk_cache_estimate` writes no cache estimate for it."""
-    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    adapter = _run_adapter(run)
-    peak = peak_checkpoints(run, adapter.display(run).get("checkpoint") or {}) if adapter is not None else None
-    per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
-    count = peak["count"] if peak is not None else 0
-    estimate = {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
-    if peak is not None and peak["trainer_default_saves"]:
-        estimate["trainer_default_saves_not_counted"] = True
-    return estimate
-
-
-def _checkpoint_estimate_text(estimate: dict[str, Any]) -> str:
-    """The checkpoint part of a disk preflight line, naming the setting that sizes it and any
-    saves the trainer makes at a default Kura does not know."""
-    uncounted = "; trainer-default saves not counted" if estimate.get("trainer_default_saves_not_counted") else ""
-    return f"checkpoints: {estimate['count']} × {estimate['per_checkpoint_gib']} GiB (safety.checkpoint_estimate_gb{uncounted})"
-
-
 def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
+    """The RunPod container-disk check (docs/adr/local-disk-protection.md, decision 6): the estimate is
+    shown against `runpod.container_disk_gb`, and the launch is refused only when the writes Kura
+    measured (model downloads and the input transfer) alone do not fit, unless
+    `safety.allow_runpod_disk_risk` accepts it. A full Pod disk fails the run; the lease bounds the bill."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=DEFAULT_CONTAINER_DISK_GB)
     container_disk_bytes = container_disk_gib * 1024**3
-    checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    disk_cache_estimate = _disk_cache_estimate(run)
-    trainer_download_estimate = _trainer_download_estimate(run, executor="runpod", local_cache=Path(HF_CACHE_CONTAINER_PATH))
-    transfer_estimate = _runpod_input_transfer_estimate(run)
-    estimated_write_bytes = (
-        int(download_estimate.get("bytes") or 0)
-        + int(trainer_download_estimate.get("bytes") or 0)
-        + int(checkpoint_estimate.get("bytes") or 0)
-        + int(disk_cache_estimate.get("bytes") or 0)
-        + int((transfer_estimate or {}).get("remote_peak_bytes") or 0)
-    )
-    if estimated_write_bytes > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
-        required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
+    estimate = run_write_estimate(run, {"runpod": runpod_config}, executor="runpod", download_estimate=download_estimate)
+    measured = estimate["measured_bytes"]
+    if measured > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
+        required_gib = (measured + 1024**3 - 1) // 1024**3
         raise ValueError(
-            f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
-            f"(selected input transfer, model downloads, run-scoped cache, and checkpoints); {_checkpoint_estimate_text(checkpoint_estimate)}; "
-            "increase runpod.container_disk_gb, reduce writes, or set "
-            "safety.allow_runpod_disk_risk: true if intentional"
+            f"RunPod container_disk_gb={container_disk_gib} is below the measured writes of about {required_gib} GiB "
+            "(model downloads and the selected input transfer) before the run writes anything itself; "
+            "increase runpod.container_disk_gb, reduce downloads, or set safety.allow_runpod_disk_risk: true if intentional"
         )
     return {
         "container_disk_gib": container_disk_gib,
         "container_disk_bytes": container_disk_bytes,
-        "estimated_write_bytes": estimated_write_bytes,
+        "measured_write_bytes": measured,
+        "estimated_write_bytes": estimate["stores"]["container"],
         "estimates": {
             "model_downloads": download_estimate, "musubi_downloads": download_estimate,
-            "trainer_downloads": trainer_download_estimate,
-            "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate,
-            "input_transfer": transfer_estimate,
+            "own_writes": estimate["own_writes"], "input_transfer": estimate["input_transfer"],
         },
     }
 
@@ -948,17 +969,11 @@ def _local_launch_disk_preflight(
     minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
     paths = local_write_paths(workspace, config)
-    if download_estimate is None:
-        download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"), config=config)
+    estimate = run_write_estimate(run, config, executor="docker", workspace=workspace, download_estimate=download_estimate)
+    download_estimate = estimate["downloads"]
     if enforce_model_download_safety:
         _model_download_safety_preflight(run, download_estimate)
-    checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    disk_cache_estimate = _disk_cache_estimate(run)
-    trainer_download_estimate = _trainer_download_estimate(run, executor="docker", local_cache=paths["hf_cache"])
-    write_estimates = {
-        "hf_cache": int(download_estimate.get("bytes") or 0) + int(trainer_download_estimate.get("bytes") or 0),
-        "workspace": int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0),
-    }
+    write_estimates = estimate["stores"]
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     storage_statuses = probe_storages(paths, config)
@@ -993,7 +1008,7 @@ def _local_launch_disk_preflight(
         if problem:
             errors.append(problem)
     if errors:
-        raise ValueError("; ".join([*errors, _checkpoint_estimate_text(checkpoint_estimate)]))
+        raise ValueError("; ".join([*errors, own_write_text(estimate["own_writes"], executor="docker")]))
     try:
         # Bounded and outside the workspace, as the daemon probe is: the plan reads this too.
         docker_system_df = subprocess.run(
@@ -1019,8 +1034,7 @@ def _local_launch_disk_preflight(
         "minimum_free": minimum,
         "floor_bytes": floor_bytes,
         "estimates": {
-            "model_downloads": download_estimate, "musubi_downloads": download_estimate, "trainer_downloads": trainer_download_estimate,
-            "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate,
+            "model_downloads": download_estimate, "musubi_downloads": download_estimate, "own_writes": estimate["own_writes"],
         },
         "paths": checked,
         "docker_storage": docker_storage,
@@ -1310,7 +1324,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resources": resources,
         "runpod_capacity": _runpod_capacity_payload(run, workspace_config, run_dir),
         "model_downloads": download_estimate,
-        "disk_cache": _disk_cache_estimate(run),
         "preflight": preflight,
         "experiment": experiment_context(workspace, run_id, run=run),
     }
@@ -1711,14 +1724,6 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                     f"{_format_plan_value(failure.get('artifact'))}: "
                     f"{_format_plan_value(failure.get('status'))} ({_format_plan_value(failure.get('detail'))})"
                 )
-    disk_cache = payload.get("disk_cache") if isinstance(payload.get("disk_cache"), dict) else {}
-    if disk_cache.get("enabled"):
-        lines.append("")
-        lines.append("Run-scoped disk cache")
-        _append_kv(lines, "status", disk_cache.get("status"))
-        _append_kv(lines, "estimate", _format_bytes(disk_cache.get("bytes")) if disk_cache.get("status") != "unknown" else "unknown")
-        if disk_cache.get("detail"):
-            _append_kv(lines, "detail", disk_cache.get("detail"))
     preflight = payload.get("preflight") if isinstance(payload.get("preflight"), list) else []
     if preflight:
         lines.append("")

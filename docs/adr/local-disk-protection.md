@@ -88,8 +88,9 @@ and is not counted, because the watch covers it.
 
 **5. Declared estimates are retired.** `safety.checkpoint_estimate_gb`,
 `safety.disk_cache_estimate_gb`, and `safety.model_download_estimate_gb` are
-refused with a message naming what replaces them; `safety.max_run_disk_gb`
-goes too if it only caps an estimate. The large-download guard
+refused with a message naming what replaces them. `safety.max_run_disk_gb`
+stays: it is not an estimate but a per-run raise of the launch reserve (the
+launch keeps the larger of it and `docker.min_free_gb`). The large-download guard
 (`safety.large_model_download_gb`, `safety.allow_large_model_downloads`) is a
 separate decision and stays.
 
