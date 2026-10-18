@@ -48,7 +48,7 @@ class UnmeasuredModelDownloadTests(unittest.TestCase):
             with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 local = plan._local_launch_disk_preflight(
                     Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
-                    enforce_model_download_safety=False, download_estimate={"bytes": 0},
+                    download_estimate={"bytes": 0},
                 )
         self.assertEqual(runpod["measured_write_bytes"], 0)
         self.assertEqual(local["paths"]["hf_cache"]["estimated_write_bytes"], 0)

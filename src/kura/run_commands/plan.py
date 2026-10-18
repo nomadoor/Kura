@@ -415,38 +415,6 @@ def _probe_failure_fact(item: dict[str, Any], extra: str = "") -> str:
     )
 
 
-def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str = "docker") -> None:
-    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    probe_failures = download_estimate.get("probe_failures")
-    blocking_failures = [
-        item
-        for item in probe_failures if isinstance(item, dict) and (executor != "runpod" or item.get("status") in {"auth_error", "not_found"})
-    ] if isinstance(probe_failures, list) else []
-    if blocking_failures:
-        raise ValueError(_probe_failure_fact(blocking_failures[0]))
-    unknown = download_estimate.get("unknown")
-    if isinstance(unknown, list) and unknown and safety.get("allow_large_model_downloads") is not True:
-        labels = ", ".join(str(item) for item in unknown[:5])
-        suffix = "" if len(unknown) <= 5 else f", and {len(unknown) - 5} more"
-        raise ValueError(
-            "model download sizes are unknown for "
-            f"{labels}{suffix}; inspect `kura run plan`, choose explicit smaller/known artifacts, "
-            "or set safety.allow_large_model_downloads: true if this unbounded download is intentional"
-        )
-    if safety.get("allow_large_model_downloads") is True:
-        return
-    download_bytes = int(download_estimate.get("bytes") or 0)
-    threshold_bytes = _model_download_threshold_bytes(run)
-    if download_bytes <= threshold_bytes:
-        return
-    download_gib = (download_bytes + 1024**3 - 1) // 1024**3
-    threshold_gib = threshold_bytes // 1024**3
-    raise ValueError(
-        f"model downloads may write about {download_gib} GiB, above the {threshold_gib} GiB safety threshold; "
-        "inspect `kura run plan`, choose smaller/quantized artifacts, or set safety.allow_large_model_downloads: true if intentional"
-    )
-
-
 def _preflight_record(check: str, severity: str, fact: str, path: str | None = None) -> dict[str, Any]:
     record: dict[str, Any] = {"check": check, "severity": severity, "fact": fact}
     if path:
@@ -486,7 +454,10 @@ def _model_download_preflight_report(
         labels = ", ".join(str(item) for item in unknown[:5])
         suffix = "" if len(unknown) <= 5 else f", and {len(unknown) - 5} more"
         severity = "info" if safety.get("allow_large_model_downloads") is True else "error"
-        records.append(_preflight_record("model-downloads", severity, f"model download sizes are unknown for {labels}{suffix}", "run.yaml"))
+        action = "" if severity == "info" else (
+            "; choose artifacts of known size, or set safety.allow_large_model_downloads: true if this unbounded download is intentional"
+        )
+        records.append(_preflight_record("model-downloads", severity, f"model download sizes are unknown for {labels}{suffix}{action}", "run.yaml"))
         return records
     download_bytes = int(download_estimate.get("bytes") or 0)
     threshold_bytes = _model_download_threshold_bytes(run)
@@ -496,7 +467,8 @@ def _model_download_preflight_report(
             _preflight_record(
                 "model-downloads",
                 severity,
-                f"estimated model downloads write about {_preflight_bytes(download_bytes)}; threshold is {_preflight_bytes(threshold_bytes)}",
+                f"estimated model downloads write about {_preflight_bytes(download_bytes)}; threshold is {_preflight_bytes(threshold_bytes)}"
+                + ("" if severity == "info" else "; choose smaller or quantized artifacts, or set safety.allow_large_model_downloads: true if intentional"),
                 "run.yaml",
             )
         )
@@ -831,7 +803,7 @@ def _local_disk_preflight_report(
     """The verdict the local launch will reach, from the same check it runs."""
     try:
         payload = _local_launch_disk_preflight(
-            workspace, run, workspace_config, enforce_model_download_safety=False, download_estimate=download_estimate,
+            workspace, run, workspace_config, download_estimate=download_estimate,
         )
     except ValueError as exc:
         return [_preflight_record("disk", "error", str(exc), "workspace.yaml")]
@@ -982,7 +954,6 @@ def _local_launch_disk_preflight(
     run: dict[str, Any],
     config: dict[str, Any],
     *,
-    enforce_model_download_safety: bool = True,
     download_estimate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
@@ -995,8 +966,6 @@ def _local_launch_disk_preflight(
     paths = local_write_paths(workspace, config, docker_data)
     estimate = run_write_estimate(run, config, executor="docker", workspace=workspace, download_estimate=download_estimate)
     download_estimate = estimate["downloads"]
-    if enforce_model_download_safety:
-        _model_download_safety_preflight(run, download_estimate)
     write_estimates = estimate["stores"]
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []

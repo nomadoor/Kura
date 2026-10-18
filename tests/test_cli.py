@@ -49,7 +49,7 @@ from kura.images import NEWEST_KNOWN_CUDA, PINNED_IMAGES
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _plan_requirements, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
+from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _plan_requirements, _runpod_capacity_payload, _image_preflight_report
 from kura.training_artifacts import trained_steps
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.doctor import readiness_gaps
@@ -5861,11 +5861,25 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertEqual(safe["SSH_PRIVATE_KEY"], "***")
         self.assertEqual(safe["NORMAL"], "hello ***")
 
-    def test_model_download_safety_rejects_unknown_sizes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "model download sizes are unknown"):
-            _model_download_safety_preflight({"safety": {}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
+    def test_model_download_safety_rejects_unknown_and_large_sizes_and_names_the_way_out(self) -> None:
+        from kura.run_commands import plan
 
-        _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
+        def downloads(run: dict, estimate: dict) -> list[tuple[str, str]]:
+            records = _model_download_preflight_report(run, estimate, _plan_requirements(run, estimate), executor="docker", local_cache=Path("cache"))
+            return [(item["severity"], item["fact"]) for item in records if item["check"] == "model-downloads"]
+
+        unknown = {"bytes": 0, "unknown": ["repo:file.safetensors"]}
+        large = {"bytes": 10_000 * 1024**3, "unknown": []}
+        for estimate in (unknown, large):
+            with self.subTest(estimate=estimate):
+                [(severity, fact)] = downloads({"safety": {}}, estimate)
+                self.assertEqual(severity, "error")
+                self.assertIn("set safety.allow_large_model_downloads: true", fact)
+                [(severity, fact)] = downloads({"safety": {"allow_large_model_downloads": True}}, estimate)
+                self.assertEqual(severity, "info")
+                self.assertNotIn("allow_large_model_downloads", fact)
+        # The launch enforces these records; no second check decides them.
+        self.assertFalse(hasattr(plan, "_model_download_safety_preflight"))
 
     def test_hf_size_probe_preserves_http_and_connectivity_failures(self) -> None:
         item = {"repo_id": "repo/model", "filename": "weights.safetensors"}
@@ -5888,10 +5902,6 @@ class DockerLifecycleTests(unittest.TestCase):
             "unknown": [],
             "probe_failures": [{"artifact": "repo:model.safetensors", "status": "unreachable", "detail": "DNS failed"}],
         }
-        with self.assertRaisesRegex(ValueError, "metadata probe failed"):
-            _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, estimate, executor="docker")
-
-        _model_download_safety_preflight({"safety": {}}, estimate, executor="runpod")
         local_records = _model_download_preflight_report({}, estimate, _plan_requirements({}, estimate), executor="docker", local_cache=Path("cache"))
         remote_records = _model_download_preflight_report({}, estimate, _plan_requirements({}, estimate), executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in local_records})
@@ -5903,20 +5913,16 @@ class DockerLifecycleTests(unittest.TestCase):
             "unknown": [],
             "probe_failures": [{"artifact": "repo:model.safetensors", "status": "auth_error", "detail": "HTTP 401"}],
         }
-        with self.assertRaisesRegex(ValueError, "refused access"):
-            _model_download_safety_preflight({}, auth_estimate, executor="runpod")
         auth_records = _model_download_preflight_report({}, auth_estimate, _plan_requirements({}, auth_estimate), executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
 
     def test_probe_failure_wording_names_the_action_for_each_status(self) -> None:
         def wording(status: str, detail: str) -> list[str]:
             estimate = {"bytes": 0, "unknown": [], "probe_failures": [{"artifact": "repo:model.safetensors", "status": status, "detail": detail}]}
-            with self.assertRaises(ValueError) as caught:
-                _model_download_safety_preflight({}, estimate, executor="docker")
             records = _model_download_preflight_report({}, estimate, _plan_requirements({}, estimate), executor="docker", local_cache=Path("cache"))
             facts = [item["fact"] for item in records if item["check"] == "model-metadata-connectivity"]
             self.assertEqual(len(facts), 1)
-            return [str(caught.exception), facts[0]]
+            return facts
 
         for text in wording("auth_error", "HTTP 403"):
             self.assertIn("Hugging Face refused access to repo:model.safetensors (HTTP 403)", text)
@@ -6097,7 +6103,9 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 20 * 1024**3)
         self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 20 * 1024**3)
 
-    def test_local_launch_disk_preflight_rejects_large_unapproved_model_downloads(self) -> None:
+    def test_the_launch_preflight_rejects_large_unapproved_model_downloads(self) -> None:
+        from kura.run_commands.plan import collect_run_preflight, enforce_preflight_errors
+
         run = {
             "type": "train",
                         "model": {"base": "custom"},
@@ -6116,10 +6124,13 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
                 patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 30 * 1024**3}),
             ):
-                with self.assertRaisesRegex(ValueError, "allow_large_model_downloads"):
-                    _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
+                # The records the launch enforces before any container or Pod.
+                with self.assertRaisesRegex(ValueError, "model-downloads: .*allow_large_model_downloads"):
+                    enforce_preflight_errors(collect_run_preflight(run, root, config={}, executor="docker"))
                 run["safety"] = {"allow_large_model_downloads": True}
+                records = collect_run_preflight(run, root, config={}, executor="docker")
                 payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
+        self.assertNotIn("model-downloads", {item["check"] for item in records if item["severity"] == "error"})
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 30 * 1024**3)
 
     def test_local_launch_disk_preflight_counts_the_own_write_bound(self) -> None:
