@@ -75,10 +75,13 @@ run's own weights-sized writes, bounded by `rank × 64 MiB` per weights-sized
 file on disk at once (the most checkpoints at once, the trainer's training
 state folders, and Kura's copies of them; a state counts its optimizer
 moments too). A model a recorded run measured is bounded at that run's fp32
-LoRA bytes per rank, rounded up to a whole MiB, instead (amended 2026-10-19:
-64 MiB per rank put a 100-step Z-Image run at 42 GiB for about 2.5 GB
-written); these measurements are the only size table, and a model enters it
-only from a measured run. The launch refuses a
+LoRA bytes per rank, rounded up to a whole MiB, instead, and a state counts
+five such files, so an optimizer with four fp32 tensors (Prodigy) is held
+without the 64 MiB headroom (amended 2026-10-19: 64 MiB per rank put a
+100-step Z-Image run at 42 GiB for about 2.5 GB written); these measurements
+are the only size table, and a model enters it only from a measured run. A
+measured size holds the trainer's default modules only: modules added
+through an escape hatch go to the watch. The launch refuses a
 run when a store's free space minus the estimate is below the reserve; the
 plan shows the same numbers. The bound uses only measured facts and the
 rank, so it is never a size the user declares. It assumes linear LoRA

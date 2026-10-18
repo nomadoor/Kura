@@ -125,7 +125,7 @@ Face metadata (cached files count 0), on the Hugging Face cache's store, and
 the run's own weights-sized files on the workspace's store, each bounded by
 `rank × 64 MiB`, or by the rank times the measured size per rank for a model
 a recorded run measured (the most checkpoints at once, the trainer's training
-states, and Kura's copies of them, a state counting as three such files). The reserve
+states, and Kura's copies of them, a state counting as five such files). The reserve
 therefore stays a margin instead of being consumed by the run, and the job
 runner's disk watch stops a run that reaches it anyway.
 

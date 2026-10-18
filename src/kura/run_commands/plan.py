@@ -43,7 +43,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, runpod_launch_settings
 from kura.run_commands.experiment import experiment_context, format_experiment_context
-from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
+from kura.run_envelope import backend_config, backend_name, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, frozen_training_state_contract, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
@@ -507,15 +507,15 @@ MEASURED_WEIGHTS_MIB_PER_RANK: tuple[tuple[str, dict[str, str], int, str], ...] 
      "acceptance run 20261019-0751_vivi-klein4b-runpod_8992: 184,840,232 bytes at rank 32"),
     ("musubi-tuner", {"architecture": "wan", "task": "t2v-1.3B"}, 6,
      "conformance run 20261019-0326_conf-musubi-one-control_6640: 5,567,608 bytes at rank 1"),
+    # An SD 2.x base trained under architecture sd15 through extra_args (--v2) writes larger files.
     ("sd-scripts", {"architecture": "sd15", "mode": "lora"}, 3,
      "conformance run 20261019-0256_conf-sd-one-control_efc3: 9,548,360 bytes at rank 4"),
 )
-# A training state holds the weights (fp32, 4 bytes per parameter) and the optimizer's moments: AdamW's
+# A training state holds the weights (fp32, 4 bytes per parameter) and the optimizer's state: AdamW's
 # two fp32 moments add 8 bytes per parameter, 8-bit AdamW (the pinned AI-Toolkit baseline's default)
-# about 2. So a state is at most 3 weights-sized fp32 files with AdamW, 1.5 with 8-bit AdamW. One rule
-# for every optimizer: 3 files. The bound's headroom (64 MiB per rank against at most 10.2 measured)
-# also covers an optimizer that keeps more (Prodigy keeps four fp32 tensors: 5 files of real size).
-STATE_WEIGHT_FILES = 3
+# about 2, and Prodigy keeps four fp32 tensors (16). One rule for every optimizer: a state is 5
+# weights-sized fp32 files, so it holds even where the size per rank is a measurement with no headroom.
+STATE_WEIGHT_FILES = 5
 
 
 def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
@@ -565,10 +565,10 @@ def weights_bytes_per_rank(run: dict[str, Any]) -> tuple[int, str | None]:
     """The size per rank `own_write_bound` counts a weights-sized file at: the measured size of the run's
     model (`MEASURED_WEIGHTS_MIB_PER_RANK`) and what it was measured for, else `WEIGHTS_BYTES_PER_RANK`
     and None."""
-    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+    name_, config = backend_name(run), backend_config(run)
+    # Authored values only: a run that leaves a listed value to its default keeps the 64 MiB bound.
     for name, values, mib, _source in MEASURED_WEIGHTS_MIB_PER_RANK:
-        if backend.get("name") == name and all(config.get(key) == value for key, value in values.items()):
+        if name_ == name and all(config.get(key) == value for key, value in values.items()):
             return mib * 1024**2, name + " " + ", ".join(f"{key}={value}" for key, value in values.items())
     return WEIGHTS_BYTES_PER_RANK, None
 
@@ -581,8 +581,10 @@ def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
     if states:
         holders = [f"{bound['trainer_states']} the trainer keeps"] if bound["trainer_states"] else []
         if bound["kura_state_copies"]:
-            holders.append(f"{bound['kura_state_copies']} Kura copies")
-        parts += f", and {states} training states at {STATE_WEIGHT_FILES} files each ({', '.join(holders)})"
+            copies = bound["kura_state_copies"]
+            holders.append(f"{copies} Kura cop{'y' if copies == 1 else 'ies'}")
+        parts += (f", and {states} training state{'' if states == 1 else 's'} at {STATE_WEIGHT_FILES} files each "
+                  f"({', '.join(holders)})")
     uncounted = "; trainer-default saves not counted" if bound.get("trainer_default_saves_not_counted") else ""
     if not bound["rank"]:
         cover = ("leave room in runpod.container_disk_gb" if executor == "runpod"

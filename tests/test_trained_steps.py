@@ -426,9 +426,9 @@ class PeakCheckpointsTests(unittest.TestCase):
         run = musubi_run()
         run["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
         run["safety"] = {"allow_storage_risk": True}
-        part = ("own writes at most 936.0 MiB: 39 weights-sized files of up to 24.0 MiB (rank 4 × 6 MiB, measured for "
+        part = ("own writes at most 1.2 GiB: 51 weights-sized files of up to 24.0 MiB (rank 4 × 6 MiB, measured for "
                 "musubi-tuner architecture=flux2, model_version=klein-base-4b): 21 checkpoint files, and 6 training states "
-                "at 3 files each (3 the trainer keeps, 3 Kura copies)")
+                "at 5 files each (3 the trainer keeps, 3 Kura copies)")
         real_probe = plan.probe_storages
 
         def roomy(paths, config=None):

@@ -194,7 +194,8 @@ root-owned files; it changes ownership and deletes nothing.
   - the run's own weights-sized files on disk at once, each bounded by the
     rank (`network_dim`) times a size per rank: the most checkpoints at once,
     the training states the trainer keeps, and Kura's copies of them, a state
-    counting as 3 such files (weights and the optimizer's moments). A model a
+    counting as 5 such files (weights and up to four optimizer tensors, as
+    Prodigy keeps). A model a
     recorded run measured (Musubi Tuner Z-Image, FLUX.2 Klein Base 4B, and
     Wan 2.1 T2V 1.3B; sd-scripts SD 1.5 LoRA) counts its measured fp32 size per
     rank, rounded up to a whole MiB; any other model counts `rank × 64 MiB`, a
