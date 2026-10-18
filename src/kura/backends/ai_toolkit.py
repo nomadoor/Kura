@@ -1167,7 +1167,6 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
     first_dataset = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
-    dataset_config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
     try:
         baseline = ai_toolkit_baseline(run)
     except ValueError:
@@ -1186,7 +1185,6 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "model_edit": native.get("model_edit"),
         "extras_name_or_path": _first_set(native.get("extras_name_or_path"), _nested(config, "model", "extras_name_or_path")),
         "resolution": _first_set(first_dataset.get("resolution"), native.get("resolution")),
-        "dataset": deepcopy(dataset_config),
         "optimizer": _first_set(native.get("optimizer_type"), _nested(config, "train", "optimizer"), filled["train"].get("optimizer")),
         "precision": _first_set(native.get("mixed_precision"), _nested(config, "train", "dtype"), filled["train"].get("dtype")),
         "memory": {

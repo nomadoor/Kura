@@ -8,6 +8,34 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: musubi-tuner-plan-training-rows-2026-10-18
+    backend: musubi-tuner
+    reason: >-
+      The adapter display (shown by kura run plan and frozen as backend-display.lock.json) lists the task selector only for an architecture with a task table and names the saved checkpoint dtype save_precision instead of precision. Compile output, generated argv, model handling, and recorded smoke behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-tuner-release-conformance-docker-2026-10-17
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
   - id: musubi-tuner-family-card-hint-2026-10-18
     backend: musubi-tuner
     reason: >-
