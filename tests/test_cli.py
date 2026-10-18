@@ -10,6 +10,7 @@ import hashlib
 import io
 import importlib.util
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -6681,7 +6682,7 @@ class LaunchPhaseTests(unittest.TestCase):
 class RunPodUnattendedCompletionTests(unittest.TestCase):
     """The Pod-side guards that bound billing while no controller is attached."""
 
-    def _sandbox(self, root: Path, *, refuse: tuple[str, ...] = ()) -> tuple[dict[str, str], list[dict[str, Any]], Any]:
+    def _sandbox(self, root: Path, *, refuse: tuple[str, ...] = (), unavailable: int = 0) -> tuple[dict[str, str], list[dict[str, Any]], Any]:
         import http.server
 
         calls: list[dict[str, Any]] = []
@@ -6691,6 +6692,12 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 name = "podTerminate" if "podTerminate" in body["query"] else "podStop"
                 calls.append({"mutation": name, "pod": body["variables"]["podId"], "auth": self.headers.get("Authorization"), "agent": self.headers.get("User-Agent")})
+                if len(calls) <= unavailable:
+                    # RunPod's edge failing for a while (502/429/timeouts at the deadline).
+                    self.send_response(503)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 payload = {"errors": [{"message": "not allowed"}]} if name in refuse else {"data": {name: None}}
                 encoded = json.dumps(payload).encode("utf-8")
                 self.send_response(200)
@@ -6713,8 +6720,22 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
             "KURA_POD_ENV_FILE": str(environ),
             "KURA_LOG_PATH": str(root / "stdout.log"),
             "KURA_RUNPOD_GRAPHQL_URL": f"http://127.0.0.1:{server.server_port}/graphql",
+            "KURA_POD_SELF_DELETE_RETRY_SEC": "0",
         }
         return env, calls, server
+
+    def test_self_delete_keeps_trying_until_runpod_accepts_it(self) -> None:
+        """One failed attempt at the deadline must not leave the Pod billing (P6)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Two whole attempts fail (podTerminate and podStop each), the third is accepted.
+            env, calls, _server = self._sandbox(root, unavailable=4)
+            script = POD_SELF_DELETE_FUNCTION + '\nkura_pod_self_delete "$KURA_LOG_PATH"\n'
+            result = subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+            log = (root / "stdout.log").read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr + log)
+        self.assertEqual([call["mutation"] for call in calls], ["podTerminate", "podStop"] * 2 + ["podTerminate"])
+        self.assertIn("trying again", log)
 
     def test_self_delete_terminates_with_the_pod_scoped_key_from_the_init_environment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6736,6 +6757,40 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
             result = subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call["mutation"] for call in calls], ["podTerminate", "podStop"])
+
+    def test_self_delete_waits_longer_between_attempts_up_to_five_minutes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env, calls, _server = self._sandbox(root, unavailable=6)
+            env["KURA_POD_SELF_DELETE_RETRY_SEC"] = "200"
+            # Stand in for sleep, recording each wait.
+            script = 'sleep() { echo "slept $1" >> "$KURA_LOG_PATH"; }\n' + POD_SELF_DELETE_FUNCTION + '\nkura_pod_self_delete "$KURA_LOG_PATH"\n'
+            result = subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+            log = (root / "stdout.log").read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr + log)
+        self.assertEqual(re.findall(r"slept (\d+)", log), ["200", "300", "300"])
+
+    def test_a_collection_that_starts_while_the_delete_is_retried_keeps_the_pod(self) -> None:
+        """The unattended timer never deletes the Pod under a download that started meanwhile (ADR)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env, calls, _server = self._sandbox(root, unavailable=100)
+            env["KURA_POD_SELF_DELETE_RETRY_SEC"] = "7"
+            mark = root / "example.collected"
+            collecting = root / "example.collecting"
+            # The controller reconnects during the first wait between attempts.
+            stub = f'sleep() {{ if [ "$1" = 7 ]; then touch {collecting}; fi; }}'
+            script = "\n".join([
+                stub,
+                POD_SELF_DELETE_FUNCTION,
+                "export KURA_JOB_STARTED_EPOCH=$(date +%s)",
+                _unattended_completion_shell(wait_sec=1, collected_mark=str(mark), collecting_mark=str(collecting)),
+                "wait",
+            ])
+            subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+            log = (root / "stdout.log").read_text(encoding="utf-8")
+        self.assertEqual([call["mutation"] for call in calls], ["podTerminate", "podStop"])
+        self.assertIn("the Pod is to be kept now", log)
 
     def _run_timer(self, root: Path, *, collected: bool) -> list[str]:
         env, calls, _server = self._sandbox(root)

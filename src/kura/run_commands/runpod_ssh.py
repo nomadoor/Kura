@@ -1772,7 +1772,9 @@ echo "[kura] unattended completion: the Pod deletes itself in ${{kura_wait}}s un
   while [ -e {shlex.quote(collecting_mark or collected_mark + ".collecting")} ] && [ ! -e {shlex.quote(collected_mark)} ]; do sleep 60; done
   if [ -e {shlex.quote(collected_mark)} ]; then exit 0; fi
   echo "[kura] unattended wait of ${{kura_wait}}s expired before the outputs were collected; deleting the Pod" >> "$KURA_LOG_PATH" 2>&1 || true
-  kura_pod_self_delete "$KURA_LOG_PATH" || true
+  # A controller that starts collecting while the delete is retried keeps the Pod.
+  kura_keep_for_collection() {{ [ -e {shlex.quote(collecting_mark or collected_mark + ".collecting")} ] || [ -e {shlex.quote(collected_mark)} ]; }}
+  kura_pod_self_delete "$KURA_LOG_PATH" kura_keep_for_collection || true
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
 

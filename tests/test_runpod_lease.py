@@ -149,6 +149,30 @@ class LeaseGuardShellTests(unittest.TestCase):
                 time.sleep(0.1)
             self.assertTrue((directory / "deleted").exists())
 
+    def test_a_lease_moved_while_the_delete_is_retried_is_waited_for(self) -> None:
+        # The delete is being retried (RunPod unreachable) when `kura run lease` moves the deadline:
+        # the guard waits for the new deadline instead of exiting or deleting now.
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            deadline, count, deleted = directory / "deadline", directory / "count", directory / "deleted"
+            stub = (
+                "kura_pod_self_delete() { n=$(( $(cat %(c)s 2>/dev/null || echo 0) + 1 )); echo $n > %(c)s; "
+                "if [ $n -eq 1 ]; then echo $(( $(date +%%s) + 3600 )) > %(d)s; return 2; fi; echo deleted > %(x)s; }\n"
+            ) % {"c": count, "d": deadline, "x": deleted}
+            guard = self._guard(directory, 1).replace(f"kura_pod_self_delete() {{ echo deleted > {deleted}; }}\n", stub, 1)
+            subprocess.run(["bash", "-c", guard], check=True, timeout=10)
+            limit = time.monotonic() + 8
+            while not count.exists() and time.monotonic() < limit:
+                time.sleep(0.1)
+            time.sleep(1)
+            self.assertFalse(deleted.exists())
+            deadline.write_text(str(int(time.time()) - 1), encoding="utf-8")
+            limit = time.monotonic() + 8
+            while not deleted.exists() and time.monotonic() < limit:
+                time.sleep(0.1)
+            self.assertTrue(deleted.exists())
+            self.assertEqual(count.read_text(encoding="utf-8").strip(), "2")
+
     def test_an_absurd_deadline_falls_back_to_the_armed_one(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
