@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -419,6 +420,9 @@ def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool 
     notes: list[str] = []
     unreadable: list[str] = []
     docker = docker if docker is not None else doctor._docker_storage_summary()
+    if not shutil.which("docker"):
+        # No Docker on this host (or not on PATH): nothing of Docker's to list, and nothing to run.
+        docker = {"daemon_reachable": False, "diagnosis": "the docker command is not available on this host"}
     if not docker.get("daemon_reachable"):
         notes.append(f"Docker items are not listed: {docker.get('diagnosis') or 'the Docker daemon is not reachable'}")
         docker = None

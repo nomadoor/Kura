@@ -46,9 +46,12 @@ DOCKER_PROBE_TIMEOUT_SEC = 300
 
 def _docker_run(command: list[str], *, capture: bool = False, timeout: int = DOCKER_INFO_TIMEOUT_SEC) -> subprocess.CompletedProcess[str]:
     """A docker command for a doctor report; one that does not answer within `timeout` returns
-    exit code 124 with the reason as its stderr, so a hung daemon is reported, never waited on."""
+    exit code 124 with the reason as its stderr, so a hung daemon is reported, never waited on, and
+    a host without the docker command returns 127."""
     try:
         return subprocess.run(command, text=True, capture_output=capture, check=False, timeout=timeout)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(command, 127, "", "the docker command was not found on PATH")
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             command, 124, "", f"`{' '.join(command[:3])}` did not answer within {timeout} seconds; the Docker daemon may be hung or still starting",

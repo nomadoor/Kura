@@ -200,6 +200,7 @@ class ReclaimInventoryTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with (
+                patch("kura.reclaim.shutil.which", return_value="/usr/bin/docker"),
                 patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
                 patch("kura.doctor._docker_json_lines", side_effect=lambda command: lines if command[:3] == ["docker", "image", "ls"] else []),
                 patch("kura.cli.subprocess.run", side_effect=docker),
@@ -472,6 +473,29 @@ class ApplyScopeTests(unittest.TestCase):
         migrated, notes = migrate_workspace_config({"schema_version": 2, "runpod": {"download_min_free_gb": 50}})
         self.assertNotIn("download_min_free_gb", migrated.get("runpod", {}))
         self.assertTrue(any("runpod.download_min_free_gb" in note for note in notes))
+
+
+class NoDockerTests(unittest.TestCase):
+    def test_a_host_without_docker_lists_no_docker_items_and_never_runs_docker(self) -> None:
+        with _workspace() as root:
+            run_dir = _run(root, "done", ended="2026-10-01T00:00:00+00:00")
+            _write(run_dir / "tmp" / "x")
+            # Even a summary that claims a reachable daemon does not make Kura run a missing binary.
+            with (
+                patch("kura.reclaim.shutil.which", return_value=None),
+                patch("kura.doctor.subprocess.run", side_effect=FileNotFoundError("docker")) as run,
+            ):
+                inventory = reclaim_inventory(root, {}, docker={"daemon_reachable": True, "usage": []})
+            run.assert_not_called()
+            self.assertEqual({item["kind"] for item in inventory["items"]}, {"run-scratch"})
+            self.assertTrue(any("docker command is not available" in note for note in inventory["notes"]))
+
+    def test_doctor_docker_commands_report_a_missing_binary(self) -> None:
+        from kura import doctor
+
+        with patch("kura.doctor.subprocess.run", side_effect=FileNotFoundError("docker")):
+            self.assertEqual(doctor._docker_json_lines(["docker", "ps"]), [])
+            self.assertEqual(doctor._docker_run(["docker", "ps"], capture=True).returncode, 127)
 
 
 class RetiredSurfaceTests(unittest.TestCase):

@@ -776,6 +776,7 @@ class DoctorDockerTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with (
+                    patch("kura.reclaim.shutil.which", return_value="/usr/bin/docker"),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
                     patch("kura.doctor.kura_docker_containers", return_value=[
                         {"ID": "abc", "Names": "kura-old", "State": "exited"}, {"ID": "def", "Names": "kura-live", "State": "running"},
@@ -885,6 +886,8 @@ class DoctorDockerTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with (
+                    patch("kura.reclaim.shutil.which", return_value="/usr/bin/docker"),
+                    patch("kura.doctor._docker_json_lines", return_value=[]),
                     patch("kura.doctor._path_size_bytes", return_value=20),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3, "reclaimable_bytes": 12 * 1024**3}], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 2, "samples": ["cache/root-owned"], "truncated": False}),
