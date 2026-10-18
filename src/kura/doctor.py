@@ -113,7 +113,8 @@ def kura_docker_containers() -> list[dict[str, Any]]:
 
 
 def stopped_kura_containers(containers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """Kura's containers that are no longer running: part of the free class `kura cleanup --yes` removes."""
+    """Kura's containers on this Docker host that are no longer running, of any workspace; `kura cleanup`
+    offers only those of this workspace's finished runs (`kura.reclaim`)."""
     return [
         item
         for item in (kura_docker_containers() if containers is None else containers)
@@ -134,7 +135,11 @@ def _docker_managed_resources() -> dict[str, Any]:
     if stopped:
         # Stopped Kura containers are in the free class (docs/adr/reclaimable-data.md): Kura removes them
         # after the user's yes, so no agent runs a state-changing Docker command itself.
-        summary["remove_stopped"] = "`kura cleanup plan` lists them as free; `kura cleanup --yes` removes them after the user's yes"
+        summary["remove_stopped"] = (
+            "`kura cleanup plan` lists, as free, the stopped containers of this workspace's finished runs, and "
+            "`kura cleanup --yes` removes them after the user's yes, and `kura run prune` removes a run's containers with "
+            "the run; a container of an unfinished run, or one no run of this workspace recorded, is left"
+        )
     return summary
 
 

@@ -23,7 +23,7 @@ from kura.fsio import atomic_write_json
 from kura.hf_cache import hub_usage
 from kura.images import PINNED_IMAGES, effective_image
 from kura.paths import AI_TOOLKIT_MODELS_PATH, LEGACY_AI_TOOLKIT_CACHE, local_hf_cache
-from kura.records import names_realization, record
+from kura.records import names_realization, realization_reference, record
 from kura.training_artifacts import is_training_state_output, reclaimable_training_states
 from kura.yamlio import YAMLError, load_yaml
 
@@ -131,6 +131,9 @@ def became_in_use(workspace: Path, item: dict[str, Any]) -> list[str]:
             if item["id"] in names or (image is not None and image in item.get("docker_ids", [])) or name in item["referenced_by"]:
                 refs.add(name)
         return sorted(refs | set(unreadable))
+    if item["kind"] == "docker-containers":
+        return sorted(run_id for run_id in item["referenced_by"]
+                      if not run_done(workspace / "runs" / run_id, read_run_status(workspace / "runs" / run_id)))
     if item["class"] in ("resume", "outputs") or item["kind"] == "run-scratch":
         run_dir = workspace / "runs" / item["id"]
         return [item["id"]] if run_dir.is_dir() and not run_done(run_dir, read_run_status(run_dir)) else []
@@ -176,6 +179,20 @@ def _sizes(paths: list[Path]) -> int | None:
     return None if any(size is None for size in sizes) else sum(sizes)
 
 
+def run_containers(run_dir: Path, containers: list[dict[str, Any]]) -> list[str]:
+    """The IDs, among `docker ps` JSON entries, of the containers this run launched: their labels name the
+    run and a realization it recorded. A copy of the workspace with the same run, or another workspace,
+    never matches a container this run did not record."""
+    found = []
+    for container in containers:
+        labels = dict(label.partition("=")[::2] for label in str(container.get("Labels") or "").split(","))
+        realization = labels.get("io.kura.realization_id") or ""
+        if container.get("ID") and labels.get("io.kura.run_id") == run_dir.name and realization \
+                and Path(realization).name == realization and (run_dir / realization_reference(realization)).is_file():
+            found.append(str(container["ID"]))
+    return found
+
+
 def _free_items(workspace: Path, runs: dict[str, dict[str, Any]], docker: dict[str, Any] | None) -> list[dict[str, Any]]:
     items = []
     for run_id, run in runs.items():
@@ -203,10 +220,13 @@ def _free_items(workspace: Path, runs: dict[str, dict[str, Any]], docker: dict[s
             if str(usage.get("Type", "")).lower() == "build cache" and (usage.get("reclaimable_bytes") or 0) > 0:
                 items.append(_item("free", "docker-build-cache", "docker-build-cache", size=usage["reclaimable_bytes"], last_used=None, runs=runs,
                                    note="`docker builder prune` frees unused build cache of the whole Docker host, not only Kura's"))
-        containers = doctor.stopped_kura_containers()
-        if containers:
-            ids = [str(item["ID"]) for item in containers if item.get("ID")]
-            items.append(_item("free", "docker-containers", "docker-containers", size=None, last_used=None, runs=runs, docker_ids=ids))
+        # Only a finished run's container of this workspace: an unfinished run still reads its container's exit
+        # code, and a container of another workspace (labels name no run here) is that workspace's to remove.
+        stopped = doctor.stopped_kura_containers()
+        owned = {container: run_id for run_id, run in runs.items() if run["done"] for container in run_containers(run["dir"], stopped)}
+        if owned:
+            items.append(_item("free", "docker-containers", "docker-containers", size=None, refs=set(owned.values()),
+                               last_used=None, runs=runs, docker_ids=list(owned)))
         volumes = [str(item["Name"]) for item in doctor.kura_docker_volumes() if item.get("Name")]
         if volumes:
             items.append(_item("free", "docker-volumes", "docker-volumes", size=None, last_used=None, runs=runs, docker_ids=volumes))

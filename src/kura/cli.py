@@ -31,7 +31,7 @@ from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolv
 from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
-from kura.doctor import _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
+from kura.doctor import _path_size_bytes, _root_owned_files, stopped_kura_containers, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
@@ -66,7 +66,7 @@ from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
-from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, run_done, select_reclaim
+from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, run_containers, run_done, select_reclaim
 from kura.training_artifacts import ResumeSourceMismatch, compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -1389,9 +1389,17 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
     if problems:
         print("cannot prune runs: " + "; ".join(problems), file=sys.stderr)
         return 1
+    # A run's stopped containers go with it: once its records are gone, nothing could tell they were this workspace's.
+    stopped = stopped_kura_containers() if actions and shutil.which("docker") else []
+    for action in actions:
+        action["containers"] = run_containers(workspace / action["target"], stopped)
     if args.yes:
         for action in actions:
             try:
+                if action["containers"]:
+                    result = subprocess.run(["docker", "rm", *action["containers"]], text=True, capture_output=True, check=False)
+                    if result.returncode:
+                        raise OSError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker rm failed"))
                 _remove_tree(workspace, workspace / action["target"])
             except (OSError, ValueError) as exc:
                 print(f"cannot prune run {action['id']}: {_safe_error(exc)}", file=sys.stderr)
@@ -1400,7 +1408,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         "dry_run": not args.yes,
         "actions": actions,
         "note": (
-            "Deletes each whole run: every checkpoint and LoRA, samples, downloads, and its records. Training states "
+            "Deletes each whole run: every checkpoint and LoRA, samples, downloads, its records, and its stopped containers. Training states "
             "a continuation references stay in artifacts/training-state; the run's other stored states are then listed "
             "as resume data by `kura cleanup plan`."
         ),

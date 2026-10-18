@@ -767,6 +767,10 @@ class DoctorDockerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            (root / "runs" / "old").mkdir(parents=True)
+            (root / "runs" / "old" / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-10-01T00:00:00+00:00"}), encoding="utf-8")
+            (root / "runs" / "old" / "realizations").mkdir()
+            (root / "runs" / "old" / "realizations" / "r1.json").write_text("{}", encoding="utf-8")
             calls: list[list[str]] = []
 
             def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
@@ -780,7 +784,7 @@ class DoctorDockerTests(unittest.TestCase):
                     patch("kura.reclaim.shutil.which", return_value="/usr/bin/docker"),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
                     patch("kura.doctor.kura_docker_containers", return_value=[
-                        {"ID": "abc", "Names": "kura-old", "State": "exited"}, {"ID": "def", "Names": "kura-live", "State": "running"},
+                        {"ID": "abc", "Names": "kura-old", "State": "exited", "Labels": "io.kura.managed=true,io.kura.run_id=old,io.kura.realization_id=r1"}, {"ID": "def", "Names": "kura-live", "State": "running"},
                     ]),
                     patch("kura.doctor.kura_docker_volumes", return_value=[]),
                     patch("kura.doctor._docker_json_lines", return_value=[]),
@@ -1174,7 +1178,8 @@ class DoctorDockerTests(unittest.TestCase):
             # Counts, and a command that removes only Kura's stopped containers.
             self.assertEqual((managed["containers"], managed["stopped_containers"], managed["volumes"]), (1, 1, 1))
             # The free class removes them through Kura after the user's yes; no agent runs a Docker command itself.
-            self.assertEqual(managed["remove_stopped"], "`kura cleanup plan` lists them as free; `kura cleanup --yes` removes them after the user's yes")
+            self.assertIn("stopped containers of this workspace's finished runs", managed["remove_stopped"])
+            self.assertIn("`kura cleanup --yes` removes them after the user's yes", managed["remove_stopped"])
             self.assertEqual(payload["docker_storage"]["root_dir"], str(Path("/var/lib/docker")))
             self.assertEqual(payload["huggingface_cache"]["path"], str(root.resolve() / "cache" / "huggingface"))
             self.assertNotIn("docker.mounts", payload["huggingface_cache"].get("note", ""))
