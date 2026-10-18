@@ -35,6 +35,14 @@ class StorageStatus:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @property
+    def space_key(self) -> tuple[str, str]:
+        """The space this store's writes draw from, for summing a launch's writes: on WSL a Windows drive
+        under /mnt and a virtual disk stored on that drive both draw from the drive, so they share a key."""
+        if self.backing_kind in ("wsl2_vhdx", "wsl2_windows_drive") and _normalize_drive(self.backing_id) == self.backing_id:
+            return ("windows_drive", self.backing_id)
+        return (self.backing_kind, self.backing_id)
+
 
 def is_wsl() -> bool:
     return "microsoft" in platform.uname().release.lower()
