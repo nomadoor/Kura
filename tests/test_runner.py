@@ -40,6 +40,18 @@ def _launched(run_dir: Path, request: Path, **status) -> None:
     _status(run_dir, last_realization="realizations/r1.json", **status)
 
 
+_DISK_WATCH = patch("kura.run_commands.plan.local_reserve_problem", return_value=(None, []))
+
+
+def setUpModule() -> None:
+    # The disk watch reads this host's free space; its own tests are in test_disk_watch.
+    _DISK_WATCH.start()
+
+
+def tearDownModule() -> None:
+    _DISK_WATCH.stop()
+
+
 class Child:
     def __init__(self, code=None):
         self.code = code

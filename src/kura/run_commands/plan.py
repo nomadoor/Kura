@@ -34,7 +34,7 @@ from kura.images import image_cuda_version, launch_image, launch_image_warnings,
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements, requirement_source
 from kura.paths import AI_TOOLKIT_MODELS_PATH, HF_CACHE_CONTAINER_PATH, hf_cached_file, local_docker_mounts, local_hf_cache
-from kura.storage import probe_storages, storage_floor_problem
+from kura.storage import probe_storage, probe_storages, storage_floor_problem
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -877,8 +877,61 @@ def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | Non
 
 
 def local_min_free_gib(docker_config: dict[str, Any]) -> int:
-    """The free space a local Docker run keeps on every backing store; `kura doctor disk` warns below it."""
-    return _configured_gib(docker_config.get("min_free_gb"), default=100)
+    """The reserve a local Docker run keeps on every backing store (docs/adr/local-disk-protection.md):
+    the launch, the runner's disk watch, and image builds keep it; `kura doctor disk` warns below it."""
+    return _configured_gib(docker_config.get("min_free_gb"), default=20)
+
+
+def local_write_paths(workspace: Path, config: dict[str, Any]) -> dict[str, Path]:
+    """Every store a local Docker run writes to: the workspace, the Hugging Face cache, and each writable mount."""
+    paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
+    for mount in local_docker_mounts(workspace, config):
+        if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
+            source = _resolve_local_path(workspace, mount["source"])
+            if source not in paths.values():
+                paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    return paths
+
+
+def local_reserve_gib(run: dict[str, Any], docker_config: dict[str, Any]) -> tuple[float, str]:
+    """The reserve a local run keeps, and the setting that sets it, for the launch and the disk watch:
+    `docker.min_free_gb`, raised for one run by `safety.max_run_disk_gb`. Image builds and doctor,
+    which have no run, keep `local_min_free_gib`."""
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    reserve = local_min_free_gib(docker_config)
+    setting = "docker.min_free_gb in workspace.yaml" + ("" if "min_free_gb" in docker_config else " (default)")
+    if safety.get("max_run_disk_gb") is not None:
+        run_reserve = _configured_gib(safety.get("max_run_disk_gb"), default=reserve)
+        if run_reserve > reserve:
+            return run_reserve, "safety.max_run_disk_gb in run.yaml"
+    return reserve, setting
+
+
+def local_reserve_problem(workspace: Path, run: dict[str, Any], config: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """The runner's disk watch: the first store a running local run writes to that is below the reserve
+    (None when every store keeps it), checked once per backing store, and the stores whose WSL backing
+    drive could not be measured. Those are judged by Linux free space, as the RunPod stage and pull gate
+    judges them, so one failed PowerShell call never stops a run while a full virtual disk still does;
+    the launch refuses an unmeasured backing unless the run accepts the risk."""
+    docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    reserve_gib, setting = local_reserve_gib(run, docker_config)
+    checked: set[tuple[str, str]] = set()
+    unmeasured: list[str] = []
+    drive_memo: dict[str, Any] = {}
+    for name, path in local_write_paths(workspace, config).items():
+        status = probe_storage(path, config, role=name, drive_memo=drive_memo)
+        backing = (status.backing_kind, status.backing_id)
+        if backing in checked:
+            continue
+        checked.add(backing)
+        if status.confidence == "unknown":
+            unmeasured.append(str(path))
+        problem = storage_floor_problem(
+            status, path, int(reserve_gib * 1024**3), action="a running local Docker run", minimum=setting, risk_accepted=True,
+        )
+        if problem:
+            return problem, unmeasured
+    return None, unmeasured
 
 
 def _local_launch_disk_preflight(
@@ -891,20 +944,10 @@ def _local_launch_disk_preflight(
 ) -> dict[str, Any]:
     docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    required_gib = local_min_free_gib(docker_config)
-    required_setting = "docker.min_free_gb in workspace.yaml" + ("" if "min_free_gb" in docker_config else " (default)")
-    if safety.get("max_run_disk_gb") is not None:
-        run_floor_gib = _configured_gib(safety.get("max_run_disk_gb"), default=required_gib)
-        if run_floor_gib > required_gib:
-            required_gib, required_setting = run_floor_gib, "safety.max_run_disk_gb in run.yaml"
+    required_gib, required_setting = local_reserve_gib(run, docker_config)
     minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
-    paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
-    for mount in local_docker_mounts(workspace, config):
-        if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
-            source = _resolve_local_path(workspace, mount["source"])
-            if source not in paths.values():
-                paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    paths = local_write_paths(workspace, config)
     if download_estimate is None:
         download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"), config=config)
     if enforce_model_download_safety:

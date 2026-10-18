@@ -492,7 +492,7 @@ class PeakCheckpointsTests(unittest.TestCase):
         self.assertIn(f"{10**9} {workspace_part}, plus estimated writes", refused["fact"])
         passed = report(run, {})
         self.assertEqual(passed["severity"], "info")
-        self.assertIn(f"100 {workspace_part} (default), plus estimated writes", passed["fact"])
+        self.assertIn(f"20 {workspace_part} (default), plus estimated writes", passed["fact"])
         run["safety"]["max_run_disk_gb"] = 10**9
         raised = report(run, {})
         self.assertIn(f"{10**9} GiB minimum free, set by safety.max_run_disk_gb in run.yaml", raised["fact"])

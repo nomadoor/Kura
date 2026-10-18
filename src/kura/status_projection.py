@@ -21,7 +21,7 @@ from kura.executors.common import TERMINAL_STATES, host_time
 
 COVERED_FIELDS = (
     "state", "started", "ended", "exit_code", "last_realization", "last_observation",
-    "pod_id", "container_id", "container_name", "pod_stopped_at", "pod_missing_at",
+    "pod_id", "container_id", "container_name", "pod_stopped_at", "pod_missing_at", "stop_reason",
 )
 # The writers' own definition, so an observation after `recovery_required` is applied as they apply it.
 TERMINAL = TERMINAL_STATES
@@ -203,6 +203,9 @@ def _apply(projected: dict[str, Any], kind: str, value: dict[str, Any], path: Pa
             projected["pod_stopped_at"] = value.get("stopped_at")
         if projected.get("state") not in TERMINAL:
             projected.update({"state": "interrupted", "exit_code": None, "ended": value.get("stopped_at")})
+            if isinstance(value.get("reason"), str):
+                # Kura's own stop (the disk watch) records why; a user's stop has no reason.
+                projected["stop_reason"] = value["reason"]
     elif kind == "run_end":
         projected.update({"state": value.get("state"), "ended": value.get("at")})
         if value.get("state") != "recovery_required":

@@ -8,6 +8,54 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: disk-watch-stop-reason-runpod-executor-2026-10-18
+    executor: runpod
+    reason: 'The executor identity changes because executors/common.py''s write_stop_record takes an optional reason, which only the local Docker disk watch passes; a RunPod stop writes the same stop record as before, without it. The Pod, the transfer, the trainer command, output collection, the stop, and every RunPod record are unchanged, so each recorded smoke would run exactly as it did.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 722b5fbd3ca46022f96cde9d9d310584bdb9cb42c75f371b25df32d88cb4796c
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 0a0e58b754455f6913e84f607045a7fa09d9e96846cbd9c6876026c294287249
   - id: ai-toolkit-real-accumulation-2026-10-18
     backend: ai-toolkit
     reason: 'backend.config.gradient_accumulation_steps now compiles to AI-Toolkit''s train.gradient_accumulation, where each step runs N micro-batches and one optimizer update, instead of the legacy train.gradient_accumulation_steps, which counted every micro-batch as a step (a 750-step run with accumulation 2 made 375 updates). A run with accumulation other than 1 now trains its recipe steps as optimizer updates and captures Resume state; the Resume limitation for accumulation other than 1 is removed. A run compiled earlier keeps its frozen resolved/ai-toolkit.yaml and command, and the adapter''s legacy_training_state contract reads its command lock, which has no training_state_managed, as keeping no state under accumulation other than 1, as it was compiled. No evidence is listed because none reaches the previous identity: the ai-toolkit-models-in-hf-cache-2026-10-17 record changed behavior, so every earlier AI-Toolkit evidence chain already ends there.'

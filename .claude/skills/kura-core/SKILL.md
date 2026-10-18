@@ -71,3 +71,12 @@ Pod-side deletion, shared by training and render Pods, lives in
 `src/kura/container_scripts/pod_self_delete.sh`. A change to a RunPod executor
 source needs a new entry in `docs/adapter-source-identity-migrations.yaml`.
 Usage guidance stays in the shipped `runpod-lifecycle` skill.
+
+## Local disk
+
+A full local disk is guarded at run time: the job runner's local follower
+checks every store a run writes to against the reserve and stops the run, with
+its reason recorded first, when one falls below it. The launch checks one
+bounded write estimate. `kura.storage.storage_floor_problem` decides "below the
+reserve" for every gate (`docs/adr/local-disk-protection.md`). Usage guidance
+stays in the shipped `local-disk-safety` skill.

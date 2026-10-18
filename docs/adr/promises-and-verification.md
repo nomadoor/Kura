@@ -4,6 +4,9 @@ Status: accepted.
 
 Date: 2026-10-11
 
+Updated: 2026-10-18 — P8 is the runtime disk watch and one bounded launch
+estimate (`local-disk-protection.md`).
+
 ## Context
 
 From 2026-10-08 to 2026-10-11 most fixes followed one pattern: a change was
@@ -36,7 +39,7 @@ simplest mechanism) stays in `AGENTS.md`; it is not a promise to users.
 | P5 | The same run behaves the same on every executor and every supported OS: same outputs, states, and final status recorded. | CI (every OS) + conformance RunPod pass (the same expectations as on Docker; outputs are not compared across executors) |
 | P6 | Billing stops: every RunPod Pod Kura creates has its maximum lease armed when it starts, and none is left billing after its run ends. | py tests (the lease is armed at start) + conformance RunPod pass (the Pod is stopped after the run) |
 | P7 | No data is lost: datasets are never rewritten, outputs are collected before a Pod is deleted, and nothing a user made is deleted without their yes. | py tests + conformance |
-| P8 | Kura does not start a run its disk cannot hold: the launch estimate is at least the run's real peak; writes Kura cannot measure (a trainer's own model downloads, a disk cache) are covered by the local free-space floor unless their size is declared; the RunPod container-disk check has no floor, so there they count only once declared. | conformance |
+| P8 | Kura stops a local run before it drives any store it writes to below the reserve; the launch refuses a run whose measured downloads and bounded writes do not fit above the reserve (`local-disk-protection.md`). | py tests + conformance |
 | P9 | A record never states something that did not happen, and records written by an earlier Kura stay readable. | py tests |
 | P10 | No secret value reaches a workspace file, a log, an image, or a record. | py tests + release gate |
 | P11 | Every refusal and error says what to do next, clearly enough for an agent with no other context. | acceptance test |
@@ -59,14 +62,13 @@ table:
   Resume against the controls (a Resume or control that did not complete fails
   P3), disk peak against the estimate.
 
-P8 is checked on the checkpoint count: the most checkpoint files on local disk
-at once (sampled every half second and once after the run ends) must not exceed
-the count the launch estimate uses. That count is Kura's decision; the
-estimate's bytes are the count times `safety.checkpoint_estimate_gb`, a size the
-user sets and the small conformance models never approach, so bytes are not
-compared. No scenario run prunes while it trains, so its files only accumulate
-and the sample after the run sees the peak; the retention arithmetic of pruning
-trainers is held by py tests written from the pinned trainer sources.
+P8 is checked on the bound (`local-disk-protection.md`, updated 2026-10-18):
+the most bytes of weights-sized files (checkpoints and training-state folders)
+on local disk at once, sampled every half second and once after the run ends,
+must not exceed the run's own-write bound that the launch estimate uses, and
+the disk watch must not have stopped the run. The watch itself and the
+retention arithmetic of pruning trainers are held by py tests written from the
+pinned trainer sources.
 
 It runs on local Docker without billing. A RunPod pass runs the same scenario
 on one backend, Musubi Tuner or AI-Toolkit (the trainers most runs use), with

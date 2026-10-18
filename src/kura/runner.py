@@ -33,6 +33,9 @@ REQUESTS_DIR = "requests"
 POLL_SEC = 2.0
 # A follower that keeps failing is started again only after this long, doubling.
 RESPAWN_BACKOFF_SEC = (10.0, 600.0)
+# How often a local run's follower checks the stores it writes to against the reserve. On WSL each
+# check starts PowerShell, so not at every poll (docs/adr/local-disk-protection.md).
+DISK_WATCH_SEC = 30.0
 
 
 def _now() -> str:
@@ -351,8 +354,10 @@ def stop_request(run_dir: Path) -> Path | None:
     return path if path is not None and path.exists() else None
 
 
-def write_stop_request(run_dir: Path) -> Path | None:
-    """Ask whoever follows the run's latest launch to stop it; None when there is no launch request."""
+def write_stop_request(run_dir: Path, *, reason: str | None = None) -> Path | None:
+    """Ask whoever follows the run's latest launch to stop it; None when there is no launch request.
+
+    `reason` says why when Kura itself stops the run (the disk watch); a user's stop has none."""
     request = latest_request(run_dir)
     if request is None:
         return None
@@ -362,7 +367,7 @@ def write_stop_request(run_dir: Path) -> Path | None:
     except FileExistsError:
         return path
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(record("stop_request", {"request": request.name, "at": _now()}), handle)
+        json.dump(record("stop_request", {"request": request.name, "at": _now(), **({"reason": reason} if reason else {})}), handle)
         handle.flush()
         os.fsync(handle.fileno())
     return path
@@ -627,7 +632,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 # Working ---------------------------------------------------------------------------
 
-def work(workspace: Path, run_id: str, request_name: str, *, sleep: Callable[[float], None] = time.sleep, poll_sec: float = 5.0) -> int:
+def work(workspace: Path, run_id: str, request_name: str, *, sleep: Callable[[float], None] = time.sleep, poll_sec: float = 5.0,
+         clock: Callable[[], float] = time.monotonic) -> int:
     """Launch a claimed request or follow its launch, holding the run's controller lock for life."""
     run_dir = workspace / "runs" / run_id
     request = requests_dir(run_dir) / request_name
@@ -635,7 +641,7 @@ def work(workspace: Path, run_id: str, request_name: str, *, sleep: Callable[[fl
         with _run_operation_lock(run_dir, "controller", blocking=False):
             if not os.environ.get("KURA_RUNNER_EPOCH"):
                 os.environ["KURA_RUNNER_EPOCH"] = str(_read_json(_sibling(request, ".claim.json")).get("epoch", 0))
-            return _work_locked(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec)
+            return _work_locked(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec, clock=clock)
     except _OperationBusy:
         _log(f"{run_id}: another follower holds the run")
         return 0
@@ -644,17 +650,19 @@ def work(workspace: Path, run_id: str, request_name: str, *, sleep: Callable[[fl
         return 0
 
 
-def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float) -> int:
+def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float,
+                 clock: Callable[[], float]) -> int:
     if _request_executor(request) == "runpod":
         return _work_runpod(workspace, run_dir, request)
     if _request_executor(request) == "render-local":
         return _work_render_local(workspace, run_dir, request)
     if _request_executor(request) == "render-runpod":
         return _work_render_runpod(workspace, run_dir, request)
-    return _work_docker(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec)
+    return _work_docker(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec, clock=clock)
 
 
-def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float) -> int:
+def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float,
+                 clock: Callable[[], float]) -> int:
     from kura.executors.common import unresolved_create_intents
     from kura.executors.docker import DOCKER_LAUNCH_LOCK, reconcile_docker, resolve_docker_create_intents
 
@@ -695,6 +703,8 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
                                     error=f"the launch was refused or failed; see runs/{run_dir.name}/logs/runner.log")
             return 0
     failures = 0
+    next_disk_check = clock()
+    unmeasured_said: set[str] = set()
     while True:
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             _carry_out_stop(run_dir, request)
@@ -711,7 +721,45 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             _log(f"{run_dir.name}: finished as {status.get('state')}")
             _notify_finished(run_dir, request, status)
             return 0
+        if status.get("state") == "running" and clock() >= next_disk_check:
+            next_disk_check = clock() + DISK_WATCH_SEC
+            if _disk_watch(workspace, run_dir, request, unmeasured_said):
+                continue  # the stop it asked for is carried out at once
         sleep(poll_sec)
+
+
+def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -> bool:
+    """Ask for the run's stop, with the reason, when a store it writes to is below the reserve.
+
+    The stop request holds the reason before `docker stop` runs (run-records ADR, decision 1);
+    a stop already asked for keeps its own record. Settings that cannot be read, or a probe that
+    fails, stop nothing: the watch tries again at its next check. `said` keeps a store whose
+    backing could not be measured from being logged at every check."""
+    from kura.run_commands.plan import local_reserve_problem
+    from kura.yamlio import YAMLError, load_yaml
+
+    if _sibling(request, ".stop.json").exists():
+        return False
+    try:
+        config = load_yaml(workspace / "workspace.yaml") or {}
+        run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml") or {}
+        problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config if isinstance(config, dict) else {})
+    except (OSError, ValueError, YAMLError) as exc:
+        _log(f"{run_dir.name}: the disk watch could not check free space ({exc}); trying again")
+        return False
+    for path in unmeasured:
+        if path not in said:
+            said.add(path)
+            _log(f"{run_dir.name}: the Windows drive behind {path} could not be measured; "
+                 "the disk watch judges that store by Linux free space (set storage.host_drive in workspace.yaml)")
+    if problem is None:
+        return False
+    reason = (f"stopped by the disk watch: {problem}. Saves and training states written so far are kept; free space "
+              f"(`kura doctor disk` lists what can be freed), then, if the run kept training state, continue it with "
+              f"`kura run resume {run_dir.name} --additional-steps <steps>` (or `--to-step <step>`)")
+    write_stop_request(run_dir, reason=reason)
+    _log(f"{run_dir.name}: {reason}")
+    return True
 
 
 # Render followers ---------------------------------------------------------------------
@@ -1068,7 +1116,8 @@ def _carry_out_stop(run_dir: Path, request: Path) -> None:
     from kura.executors.docker import stop_docker
 
     try:
-        stop_docker(run_dir)
+        # A stop the disk watch asked for carries its reason into the stop record.
+        stop_docker(run_dir, reason=_read_json(_sibling(request, ".stop.json")).get("reason"))
     except (OSError, ValueError) as exc:
         _log(f"{run_dir.name}: could not stop the container ({exc}); trying again")
         return
@@ -1086,8 +1135,9 @@ def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, au
     state = status.get("state")
     # A RunPod render notifies from its own launch, so only a local render reaches here as a render.
     noun = "render" if _request_executor(request) == "render-local" else "run"
+    why = f" It was {status['stop_reason']}." if status.get("stop_reason") else ""
     try:
-        notify(channels or None, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.", priority="3")
+        notify(channels or None, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.{why}", priority="3")
     except Exception as exc:  # a notification never fails the run
         _log(f"{run_dir.name}: notification failed: {exc}")
 
@@ -1155,6 +1205,8 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             state = str(status.get("state"))
             if state != "completed":
                 _print_log_end(run_dir, out, after_line=log_start_line)
+            if status.get("stop_reason"):
+                print(f"the run was {status['stop_reason']}", file=out)
             return EXIT_FOR_STATE.get(state, 2)
         if not runner_alive(workspace) and (not launched or not run_finished(status)):
             if stopped_on_purpose(workspace):
