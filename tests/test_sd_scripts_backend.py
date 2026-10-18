@@ -285,6 +285,39 @@ class SdScriptsBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, rf"{key}.*text-encoder cache"):
                     validate_sd_scripts_dataset_config(run)
 
+    def test_static_caption_controls_rejected_when_text_encoder_cache_skips_them(self) -> None:
+        # The pinned trainer encodes each caption file as written, so these never reach training.
+        for cache_key in ("cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk"):
+            for key, value in (
+                ("caption_prefix", "photo of kura, "),
+                ("caption_suffix", ", best quality"),
+                ("secondary_separator", ";;;"),
+                ("enable_wildcard", True),
+            ):
+                with self.subTest(cache_key=cache_key, key=key):
+                    run = base_run("sd15", "lora")
+                    native = run["backend"]["config"]
+                    native[cache_key] = True
+                    native["dataset_config"]["datasets"][0]["subsets"][0][key] = value
+                    with self.assertRaisesRegex(
+                        ValueError, rf"subsets\[0\]\.{key} cannot be combined with text-encoder cache.*turn off"
+                    ):
+                        validate_sd_scripts_dataset_config(run)
+
+    def test_static_caption_controls_accepted_without_text_encoder_cache(self) -> None:
+        run = base_run("sd15", "lora")
+        native = run["backend"]["config"]
+        native["cache_text_encoder_outputs"] = False
+        native["dataset_config"]["datasets"][0]["subsets"][0].update(
+            {
+                "caption_prefix": "photo of kura, ",
+                "caption_suffix": ", best quality",
+                "secondary_separator": ";;;",
+                "enable_wildcard": True,
+            }
+        )
+        validate_sd_scripts_dataset_config(run)
+
     def test_inherited_caption_controls_are_checked_against_text_encoder_cache(self) -> None:
         for level in ("general", "dataset"):
             with self.subTest(level=level):

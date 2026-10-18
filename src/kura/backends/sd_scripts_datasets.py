@@ -374,6 +374,19 @@ def _text_cache_enabled(native: dict[str, Any]) -> bool:
     return native.get("cache_text_encoder_outputs") is True or native.get("cache_text_encoder_outputs_to_disk") is True
 
 
+# What a text-encoder-cached run does with each static caption control, and how to keep its effect.
+_TEXT_CACHE_CAPTION_FIXES = {
+    "caption_prefix": "the trainer caches each caption file as written and never adds caption_prefix; "
+    "write the prefix into the caption files themselves and remove caption_prefix",
+    "caption_suffix": "the trainer caches each caption file as written and never adds caption_suffix; "
+    "write the suffix into the caption files themselves and remove caption_suffix",
+    "secondary_separator": "the trainer caches each caption file as written and never replaces secondary_separator; "
+    "write the captions without secondary_separator and remove it",
+    "enable_wildcard": "the cache encodes one caption per image, so a wildcard choice is never made per step; "
+    "write one caption per caption file and remove enable_wildcard",
+}
+
+
 def _validate_text_cache_caption_controls(
     native: dict[str, Any], general: dict[str, Any], datasets: list[tuple[dict[str, Any], list[dict[str, Any]]]]
 ) -> None:
@@ -395,9 +408,23 @@ def _validate_text_cache_caption_controls(
                 incompatible.append("caption_dropout_every_n_epochs")
             if architecture != "anima" and effective.get("caption_dropout_rate") not in (None, 0, 0.0):
                 incompatible.append("caption_dropout_rate")
+            # Keyed to the pinned sd-scripts, 37a1cbbc (docs/adr/upstream-training-baseline.md, decision 5;
+            # re-audit on a pin upgrade). Its text-encoder cache strategies encode the caption
+            # file as read, bypassing process_caption (library/dataset.py), so prefix, suffix,
+            # and secondary_separator never reach training until upstream ships its fix
+            # (35cdee69, unreleased). A cached output holds one encoding, so a wildcard caption
+            # is never chosen per step even after that fix.
+            for key in ("caption_prefix", "caption_suffix", "secondary_separator"):
+                if effective.get(key) not in (None, ""):
+                    incompatible.append(key)
+            if effective.get("enable_wildcard") is True:
+                incompatible.append("enable_wildcard")
             if incompatible:
+                key = incompatible[0]
                 raise ValueError(
-                    f"sd-scripts {path}.{incompatible[0]} cannot be combined with text-encoder cache for this selector"
+                    f"sd-scripts {path}.{key} cannot be combined with text-encoder cache: "
+                    + _TEXT_CACHE_CAPTION_FIXES.get(key, f"the cache encodes each caption once, so it never changes per step; remove {key}")
+                    + ", or turn off cache_text_encoder_outputs and cache_text_encoder_outputs_to_disk"
                 )
 
 
