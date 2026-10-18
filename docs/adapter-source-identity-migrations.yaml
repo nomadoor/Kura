@@ -27,11 +27,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: df29212c647ee67c13e19f39a538cafc0bab1de2a49c5b087fd0be3ed48016c2
+      value: 2c37e7c607630ffb8619b3c5662ee025025b89d50e7dced449f88554c7ef794f
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 19231de994afdb5029e8cb54ebee309f22008eb5de01b66153a87478890a6c96
+      value: a82b9823a45a88a03e3ef8c2303785ec969a3096c35a8856ac14622d36253661
   - id: musubi-tuner-final-state-same-save-2026-10-18
     backend: musubi-tuner
     reason: "Kura no longer passes --save_state_on_train_end: at the pinned Musubi Tuner every trainer saves the end-of-training state when save_state or save_state_on_train_end is set, so with --save_state the trainer writes the same files as before. The trainer's end-of-training state (<name>-state) is no longer published as a second training-state artifact when a verified state of the run at its step is already published (the step state it repeats, with a different RNG file); its folder stays in outputs/. The trainer command's effect, training, weights, and every step state the recorded smokes published are unchanged, and a Resume from the last step still finds a verified state at that step; only the repeated copy is not added to the store, so the evidence below carries over."
@@ -54,11 +54,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: f95a67d3b05ecf52857de4cb55eef077e7c0ce2f14265c32027a11956f9cf454
+      value: b028f38e1e730c111e7d627cba1282d72aae6bac76b874208697e5f9c5876e0e
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 687fb324ef095cc5965c4710b0a0b43523ad5ea8f7be165d0c956feef9fbe344
+      value: 82f2273cc0429fac9e465be1cb4bad9b7c906a0215a0ed52df42a7525ca16d46
   - id: bounded-write-estimate-sd-scripts-2026-10-18
     backend: sd-scripts
     reason: 'The run envelope retires safety.checkpoint_estimate_gb, safety.disk_cache_estimate_gb, and safety.model_download_estimate_gb (refused when written, naming the bounded estimate and the disk watch that replace them; dropped by copies; ignored in a manifest an older Kura compiled), the retired sd-scripts backend.config.disk_cache_estimate_gb message names the same, and managed_state_save_args reads the state retention window from state_retention_window, which returns the same window as before. Kura never forwarded any of these keys to a trainer, so every recorded smoke compiles the same native configuration and command and collects the same outputs; the smoke harness no longer declares a disk cache estimate. The launch disk checks, which no trainer sees, now count one bounded estimate (docs/adr/local-disk-protection.md).'

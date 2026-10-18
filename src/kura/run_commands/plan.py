@@ -549,7 +549,10 @@ def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
             trainer_states = (keep + 1 if managed else 0) + 1
         elif managed:
             # An accelerate trainer keeps the states of `--save_last_n_steps_state` and writes the next before
-            # removing the oldest; its final `-state` folder stays beside them, as the checkpoint peak counts.
+            # removing the oldest. Under `--save_state` it also writes a final `-state` folder. Kura skips
+            # publishing it when a state of the run already holds its step, and publishing copies, never moves,
+            # so the folder stays in outputs/ beside them either way and is counted, as the checkpoint peak
+            # counts the final file.
             cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
             window = state_retention_window(run, cadence if isinstance(cadence, int) else None)
             trainer_states = peak_checkpoints(run, {"save_every_n_steps": checkpoint.get("save_every_n_steps"), "retention_window_steps": window})["count"]
