@@ -447,6 +447,11 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             self.assertTrue(runner._sibling(request, ".stop-done.json").exists())
 
 
+def _no_price_lookup():
+    # The launch measures stock and price before it creates; these tests are about the create.
+    return patch("kura.executors.runpod.runpod_gpu_availability", return_value={"status": "unavailable", "reason": "not measured in tests", "candidates": []})
+
+
 class UnconfirmedCreateTests(unittest.TestCase):
     def test_a_failed_lookup_still_hands_the_run_over(self) -> None:
         from kura.executors.runpod import RunPodAPIError, launch_runpod_session
@@ -457,7 +462,8 @@ class UnconfirmedCreateTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (503): down", status_code=503)), \
-                    patch("kura.executors.runpod._runpod_pods_named", side_effect=ValueError("RunPod API is unreachable: down")), patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod._runpod_pods_named", side_effect=ValueError("RunPod API is unreachable: down")), patch("kura.executors.runpod.time.sleep"), \
+                    _no_price_lookup():
                 with self.assertRaisesRegex(ValueError, "kura run reconcile"):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertEqual(_status(run_dir)["state"], "interrupted")
@@ -480,7 +486,7 @@ class SessionCreateTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (502): bad gateway", status_code=502)) as request, \
-                    patch("kura.executors.runpod._runpod_pods_named", return_value=[]), patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod._runpod_pods_named", return_value=[]), patch("kura.executors.runpod.time.sleep"), _no_price_lookup():
                 with self.assertRaisesRegex(ValueError, "kura run reconcile"):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertEqual(request.call_count, 1)

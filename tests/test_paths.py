@@ -109,29 +109,28 @@ class HuggingFaceCachedFileTests(unittest.TestCase):
             self.assertIsNone(hf_cached_file(cache, "org/name", "dit.safetensors"))
 
     def test_the_host_reads_the_cache_as_huggingface_hub_does(self) -> None:
-        try:
-            from huggingface_hub import try_to_load_from_cache
-        except ImportError:
-            self.skipTest("huggingface_hub is not installed on this host")
+        # What huggingface_hub 2.2.0 `try_to_load_from_cache` returned for each case (file_download.py: the
+        # revision defaults to `main`, `refs/<revision>` is read whole when it is a file, and the snapshot
+        # must be a directory in `snapshots/`). Measured once rather than imported: huggingface_hub is
+        # not a dependency of Kura's host side, so an import here would only ever skip.
         cases = (
-            ("main", "a" * 40, None),
-            ("main", "a" * 40 + "\n", None),
-            ("v1", "b" * 40, "v1"),
-            ("release/1", "c" * 40, "release/1"),
-            (None, None, "d" * 40),
-            (None, None, "main"),
+            # (ref file, its content, revision asked for, found)
+            ("main", "a" * 40, None, True),
+            ("main", "a" * 40 + "\n", None, False),
+            ("v1", "b" * 40, "v1", True),
+            ("release/1", "c" * 40, "release/1", True),
+            (None, None, "d" * 40, True),
+            (None, None, "main", False),
         )
-        for ref, written, revision in cases:
+        for ref, written, revision, found in cases:
             with self.subTest(ref=ref, written=written, revision=revision), tempfile.TemporaryDirectory() as directory:
                 cache = Path(directory)
                 commit = (written or "").strip() or (revision if revision and len(revision) == 40 else "e" * 40)
-                _cache_file(cache, "models--org--name", commit, "dit.safetensors")
+                path = _cache_file(cache, "models--org--name", commit, "dit.safetensors")
                 if ref is not None:
                     (cache / "hub" / "models--org--name" / "refs" / ref).parent.mkdir(parents=True, exist_ok=True)
                     (cache / "hub" / "models--org--name" / "refs" / ref).write_text(written, encoding="utf-8")
-                found = try_to_load_from_cache("org/name", "dit.safetensors", cache_dir=cache / "hub", revision=revision)
-                expected = Path(found) if isinstance(found, str) else None
-                self.assertEqual(hf_cached_file(cache, "org/name", "dit.safetensors", revision=revision), expected)
+                self.assertEqual(hf_cached_file(cache, "org/name", "dit.safetensors", revision=revision), path if found else None)
 
     def test_a_snapshot_with_no_ref_for_the_revision_is_not_cached(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
