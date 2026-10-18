@@ -263,7 +263,7 @@ class RetiredKeyTests(unittest.TestCase):
                 self.assertEqual(lines["docker"], lines["runpod"])
 
     def test_the_trainer_downloads_and_disk_cache_are_shown_not_counted(self) -> None:
-        report = plan._model_download_preflight_report(ai_toolkit_run(), {"bytes": 0}, executor="docker", local_cache=Path("/c"))
+        report = plan._model_download_preflight_report(ai_toolkit_run(), {"bytes": 0}, plan._plan_requirements(ai_toolkit_run(), {"bytes": 0}), executor="docker", local_cache=Path("/c"))
         fact = report[0]["fact"]
         self.assertIn("not counted", fact)
         self.assertIn("disk watch", fact)

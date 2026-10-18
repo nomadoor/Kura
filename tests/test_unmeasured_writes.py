@@ -26,7 +26,7 @@ class UnmeasuredModelDownloadTests(unittest.TestCase):
         cache = Path("/mnt/e/hf-cache")
         for executor in ("docker", "runpod"):
             with self.subTest(executor=executor):
-                report = plan._model_download_preflight_report(_ai_toolkit_run(), {"bytes": 0}, executor=executor, local_cache=cache)
+                report = plan._model_download_preflight_report(_ai_toolkit_run(), {"bytes": 0}, plan._plan_requirements(_ai_toolkit_run(), {"bytes": 0}), executor=executor, local_cache=cache)
                 self.assertEqual([item["severity"] for item in report], ["warning"])
                 fact = report[0]["fact"]
                 self.assertIn("stabilityai/stable-diffusion-xl-base-1.0", fact)
@@ -55,7 +55,7 @@ class UnmeasuredModelDownloadTests(unittest.TestCase):
 
     def test_a_run_whose_downloads_kura_measures_names_no_trainer_download(self) -> None:
         run = {"backend": {"name": "musubi-tuner", "config": {"architecture": "wan"}}}
-        self.assertIsNone(plan._trainer_downloads(run, executor="docker", local_cache=Path("/c")))
+        self.assertIsNone(plan._trainer_downloads(plan._plan_requirements(run, {}), executor="docker", local_cache=Path("/c")))
 
     def test_a_local_path_base_is_no_trainer_download(self) -> None:
         # The trainer reads a local model.base from disk; only a selector it resolves itself downloads.
@@ -63,16 +63,18 @@ class UnmeasuredModelDownloadTests(unittest.TestCase):
         run["model"]["base"] = "/models/sdxl"
         for executor in ("docker", "runpod"):
             with self.subTest(executor=executor):
-                self.assertIsNone(plan._trainer_downloads(run, executor=executor, local_cache=Path("/c")))
-                report = plan._model_download_preflight_report(run, {"bytes": 0}, executor=executor, local_cache=Path("/c"))
+                self.assertIsNone(plan._trainer_downloads(plan._plan_requirements(run, {}), executor=executor, local_cache=Path("/c")))
+                report = plan._model_download_preflight_report(run, {"bytes": 0}, plan._plan_requirements(run, {"bytes": 0}), executor=executor, local_cache=Path("/c"))
                 self.assertFalse(any("downloads" in item["fact"] and "itself" in item["fact"] for item in report))
                 self.assertNotIn("warning", {item["severity"] for item in report})
 
-    def test_the_trainer_downloads_come_from_the_one_requirements_reader(self) -> None:
+    def test_a_preflight_reads_the_model_requirements_once(self) -> None:
         import kura.model_requirements as model_requirements
 
-        with patch.object(plan, "model_requirements", wraps=model_requirements.model_requirements) as owner:
-            self.assertIsNotNone(plan._trainer_downloads(_ai_toolkit_run(), executor="docker", local_cache=Path("/c")))
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(plan, "model_requirements", wraps=model_requirements.model_requirements) as owner:
+            records = plan.collect_run_preflight(_ai_toolkit_run(), Path(directory), config={}, executor="docker", download_estimate={"bytes": 0})
+        self.assertIn("model-acquisition", {item["check"] for item in records})
         owner.assert_called_once()
 
     def test_the_declared_size_is_retired(self) -> None:

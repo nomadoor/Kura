@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends.sd_scripts_datasets import (
+    _text_cache_enabled,
     display_sd_scripts_dataset_config,
     validate_sd_scripts_dataset_config,
     write_sd_scripts_dataset_config,
@@ -197,7 +198,7 @@ def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> 
         # Kura projects image conditioning only.
         raise ValueError(f"sd-scripts Anima LLLite is image-only and requires lllite_cond_in_channels: 3, not {native['lllite_cond_in_channels']!r}")
     if architecture == "anima" and mode == "lora":
-        if (_truthy(native.get("cache_text_encoder_outputs")) or _truthy(native.get("cache_text_encoder_outputs_to_disk"))) and not _truthy(native.get("network_train_unet_only")):
+        if _text_cache_enabled(native) and not _truthy(native.get("network_train_unet_only")):
             raise ValueError("sd-scripts Anima LoRA text-encoder caching requires network_train_unet_only=true")
         incompatible_pairs = (("blocks_to_swap", "cpu_offload_checkpointing"), ("blocks_to_swap", "unsloth_offload_checkpointing"), ("cpu_offload_checkpointing", "unsloth_offload_checkpointing"))
         for left, right in incompatible_pairs:
@@ -205,7 +206,7 @@ def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> 
                 raise ValueError(f"sd-scripts Anima LoRA cannot combine {left} with {right}")
     if architecture == "flux1" and native.get("blocks_to_swap") not in (None, 0) and _truthy(native.get("cpu_offload_checkpointing")):
         raise ValueError("sd-scripts FLUX.1 cannot combine blocks_to_swap with cpu_offload_checkpointing")
-    if architecture in {"sdxl", "flux1"} and (_truthy(native.get("cache_text_encoder_outputs")) or _truthy(native.get("cache_text_encoder_outputs_to_disk"))) and not _truthy(native.get("network_train_unet_only")):
+    if architecture in {"sdxl", "flux1"} and _text_cache_enabled(native) and not _truthy(native.get("network_train_unet_only")):
         raise ValueError(f"sd-scripts {architecture} text-encoder caching requires network_train_unet_only=true")
 
 

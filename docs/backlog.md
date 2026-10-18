@@ -24,9 +24,6 @@ why, so it is not raised again.
 - 2026-10-18 | tests | No test drives the RunPod training launch writer against settling, as the Docker one does | review of the realization-reference pull request | -
 - 2026-10-18 | disk watch | The watch probes the workspace, the Hugging Face cache, and writable mounts, but not Docker's data root, where a container's writable layer grows | review of the disk watch / bounded estimate change | P8
 - 2026-10-17 | AI-Toolkit baseline | The pinned UI fills `model.assistant_lora_path` (a training adapter) for `qwen_image_2:turbo`, `ming_image`, and the MiniMax-H3 entries, but the baseline fills only the keys docs/adr/upstream-training-baseline.md lists, so a Kura run of those entries trains without the adapter unless the author writes it. Decide in the ADR whether the baseline fills it; filling it changes what the MiniMax-H3 evidence trained | CodeRabbit on the AI-Toolkit 0.13.30 upgrade pull request | P11
-- 2026-10-18 | one owner | A plan computes the model requirements more than once: `_resources_payload`, `_model_download_preflight_report`, and `_trainer_downloads` each call `model_requirements` | review of the unmeasured-download change | -
-- 2026-10-18 | one owner | runner `_validated_workspace_config` repeats `workspace_config()`; give `workspace_config` a path argument and call it from `local_slot_wait` and `_disk_watch` | review of the backlog batch | -
-- 2026-10-18 | disk watch | An invalid workspace.yaml is logged at every disk watch check, with no dedupe as unmeasured stores have | review of the backlog batch | -
 - 2026-10-18 | AI-Toolkit legacy lock | `own_write_bound` uses the current training-state contract, so an old AI-Toolkit lock with accumulation 2 counts states it never saved (an over-estimate, so safe) | review of the backlog batch | P8
 
 ## Rejected

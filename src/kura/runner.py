@@ -612,25 +612,15 @@ def _active_local_runs(workspace: Path) -> int:
     )
 
 
-def _validated_workspace_config(workspace: Path) -> dict[str, Any]:
-    """workspace.yaml read and checked as every command reads it (`validate_workspace_config`);
-    the runner is given its workspace, so it does not look for one from the current directory."""
-    from kura.workspace import validate_workspace_config
-    from kura.yamlio import load_yaml_mapping
-
-    config = load_yaml_mapping(workspace / "workspace.yaml")
-    validate_workspace_config(config)
-    return config
-
-
 def local_slot_wait(workspace: Path) -> str | None:
     """Why a new local training request waits, or None when a slot is free: every slot is
     taken (runner.local_slots), or workspace.yaml is not valid, which holds every local
     request until it is fixed."""
+    from kura.workspace import workspace_config
     from kura.yamlio import YAMLError
 
     try:
-        config = _validated_workspace_config(workspace)
+        config = workspace_config(workspace)
     except (OSError, YAMLError, ValueError) as exc:
         return f"workspace.yaml is not valid, so local launches wait until it is fixed ({exc})"
     slots = (config.get("runner") or {}).get("local_slots", 1)
@@ -758,19 +748,23 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
     a stop already asked for keeps its own record. Settings that cannot be read or are not valid
     (workspace.yaml is checked as every command checks it), or a probe that fails, stop nothing:
     the watch tries again at its next check. `said` keeps a store whose backing could not be
-    measured from being logged at every check."""
+    measured, or the same reason it could not check, from being logged at every check."""
     from kura.run_commands.plan import local_reserve_problem
     from kura.storage import RECLAIM_POINTER
+    from kura.workspace import workspace_config
     from kura.yamlio import YAMLError, load_yaml
 
     if _sibling(request, ".stop.json").exists():
         return False
     try:
-        config = _validated_workspace_config(workspace)
+        config = workspace_config(workspace)
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml") or {}
         problem, unmeasured = local_reserve_problem(workspace, run if isinstance(run, dict) else {}, config)
     except (OSError, ValueError, YAMLError) as exc:
-        _log(f"{run_dir.name}: the disk watch could not check free space ({exc}); trying again")
+        message = f"{run_dir.name}: the disk watch could not check free space ({exc}); trying again"
+        if message not in said:
+            said.add(message)
+            _log(message)
         return False
     for path in unmeasured:
         if path not in said:

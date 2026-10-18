@@ -723,6 +723,19 @@ class SdScriptsBackendTests(unittest.TestCase):
         run["backend"]["config"]["network_train_unet_only"] = True
         self.assertIn("--network_train_unet_only", command_sd_scripts(run)["argv"][2])
 
+    def test_the_selector_asks_the_one_text_cache_owner(self) -> None:
+        # Whether the text-encoder cache is on is decided once (sd_scripts_datasets._text_cache_enabled),
+        # for the caption controls and for the selector alike.
+        from kura.backends import sd_scripts
+
+        for architecture in ("anima", "sdxl", "flux1"):
+            with self.subTest(architecture=architecture):
+                run = base_run(architecture, "lora") if architecture == "anima" else base_run(architecture)
+                with patch.object(sd_scripts, "_text_cache_enabled", return_value=True) as owner, \
+                        self.assertRaisesRegex(ValueError, "network_train_unet_only"):
+                    command_sd_scripts(run)
+                owner.assert_called()
+
     def test_flux_local_memory_flags_are_native_and_conflict_checked(self) -> None:
         run = base_run("flux1")
         run["backend"]["config"].update(

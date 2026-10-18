@@ -48,7 +48,7 @@ from kura.images import NEWEST_KNOWN_CUDA, PINNED_IMAGES
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
+from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _plan_requirements, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
 from kura.training_artifacts import trained_steps
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.doctor import readiness_gaps
@@ -5890,8 +5890,8 @@ class DockerLifecycleTests(unittest.TestCase):
             _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, estimate, executor="docker")
 
         _model_download_safety_preflight({"safety": {}}, estimate, executor="runpod")
-        local_records = _model_download_preflight_report({}, estimate, executor="docker", local_cache=Path("cache"))
-        remote_records = _model_download_preflight_report({}, estimate, executor="runpod", local_cache=Path("cache"))
+        local_records = _model_download_preflight_report({}, estimate, _plan_requirements({}, estimate), executor="docker", local_cache=Path("cache"))
+        remote_records = _model_download_preflight_report({}, estimate, _plan_requirements({}, estimate), executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in local_records})
         self.assertIn(("model-metadata-connectivity", "warning"), {(item["check"], item["severity"]) for item in remote_records})
         self.assertTrue(any("known portion" in item["fact"] for item in remote_records if item["check"] == "model-downloads"))
@@ -5903,7 +5903,7 @@ class DockerLifecycleTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "refused access"):
             _model_download_safety_preflight({}, auth_estimate, executor="runpod")
-        auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod", local_cache=Path("cache"))
+        auth_records = _model_download_preflight_report({}, auth_estimate, _plan_requirements({}, auth_estimate), executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
 
     def test_probe_failure_wording_names_the_action_for_each_status(self) -> None:
@@ -5911,7 +5911,7 @@ class DockerLifecycleTests(unittest.TestCase):
             estimate = {"bytes": 0, "unknown": [], "probe_failures": [{"artifact": "repo:model.safetensors", "status": status, "detail": detail}]}
             with self.assertRaises(ValueError) as caught:
                 _model_download_safety_preflight({}, estimate, executor="docker")
-            records = _model_download_preflight_report({}, estimate, executor="docker", local_cache=Path("cache"))
+            records = _model_download_preflight_report({}, estimate, _plan_requirements({}, estimate), executor="docker", local_cache=Path("cache"))
             facts = [item["fact"] for item in records if item["check"] == "model-metadata-connectivity"]
             self.assertEqual(len(facts), 1)
             return [str(caught.exception), facts[0]]
@@ -5949,7 +5949,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
         self.assertEqual(estimate["unknown"], [])
         self.assertEqual(estimate["probe_failures"][0]["status"], "not_found")
-        records = _model_download_preflight_report(run, estimate, executor="runpod", local_cache=Path("cache"))
+        records = _model_download_preflight_report(run, estimate, _plan_requirements(run, estimate), executor="runpod", local_cache=Path("cache"))
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in records})
 
     @posix_only(POSIX_PATHS)
