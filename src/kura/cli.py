@@ -1325,6 +1325,8 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         print("cannot prune runs: name the runs to delete, `kura run prune <run-id>...`; "
               "`kura cleanup plan --outputs` lists finished runs and their outputs", file=sys.stderr)
         return 2
+    from kura.runner import pod_may_still_bill
+
     workspace = _require_workspace()
     runs_root = (workspace / "runs").resolve()
     actions: list[dict[str, Any]] = []
@@ -1338,10 +1340,13 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
             problems.append(f"there is no run {run_id!r}; `kura cleanup plan --outputs` lists finished runs")
             continue
         status = read_run_status(run_dir)
-        if not run_done(status):
-            pod_id = (status or {}).get("pod_id")
-            if isinstance(pod_id, str) and not (status or {}).get("pod_stopped_at") and not (status or {}).get("pod_missing_at"):
-                problems.append(f"run {run_id!r} has Pod {pod_id}, which may still exist and bill; run `kura run stop {run_id}` first")
+        if not run_done(run_dir, status):
+            billing = pod_may_still_bill(run_dir, status) if status is not None else None
+            if billing is not None:
+                problems.append(f"run {run_id!r} is kept: {billing}")
+            elif status is not None and unresolved_create_intents(run_dir):
+                problems.append(f"run {run_id!r} is kept: a launch stopped before recording whether it created its container; "
+                                f"run `kura run reconcile {run_id}` first")
             else:
                 state = "unreadable" if status is None else f"{status.get('state') or 'unknown'}" + (
                     f" with publication {status['publication_state']}" if status.get("publication_state") == "pending" else "")

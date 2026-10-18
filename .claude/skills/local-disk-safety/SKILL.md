@@ -141,8 +141,10 @@ kura run prune <run>... --yes                               # delete whole finis
   outside its state folders. Samples and state folders stay. Ask the user
   which checkpoints to keep; never pick for them.
 - `kura run prune` deletes each named run directory with everything in it.
-  It refuses a run whose publication is pending or whose Pod may still exist
-  and bill (run `kura run stop <run>` first).
+  It refuses a run whose publication is pending, whose Pod may still exist
+  and bill (run `kura run stop <run>` first), or whose launch stopped before
+  recording its Pod or container (run `kura run reconcile <run>` first). The
+  listing leaves such runs out too.
   `kura run discard <run>` removes a draft or an unlaunched compiled run.
 
 Also require explicit approval for dataset deletion, `docker system prune -a`,

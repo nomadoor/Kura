@@ -75,8 +75,8 @@ Applying it names the classes and items the user agreed to, and without
 `--yes` it is a dry run. With no option it frees the free class; each other
 option removes or moves only what it names. One owner decides whether a run's
 data may be offered or deleted at all (it ended, its publication is not
-pending, and no Pod of it may still bill), for the listing and the whole-run
-delete alike. Kura fails closed: a run whose status or records cannot be read
+pending, no Pod of it may still bill, and no launch left a Pod or container
+unrecorded), for the listing and the whole-run delete alike. Kura fails closed: a run whose status or records cannot be read
 counts as using every model and image, and a compiled run uses the models and
 image it froze. The Hugging Face cache is
 listed even when it is outside the workspace, and its items are removed one by

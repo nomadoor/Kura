@@ -375,6 +375,9 @@ class FailClosedTests(unittest.TestCase):
             self.assertEqual(became_in_use(root, item), [])
             _write(run_dir / "status.json", json.dumps({"state": "running"}))
             self.assertEqual(became_in_use(root, item), ["done"])
+            _write(run_dir / "status.json", json.dumps({"state": "completed", "ended": "2026-10-01T00:00:00+00:00"}))
+            _run(root, "later", state="compiled", repos=("org/model",))
+            self.assertEqual(became_in_use(root, item), ["later"])
 
 
 class RunDoneTests(unittest.TestCase):
@@ -406,6 +409,29 @@ class RunDoneTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "runpod-stopped", "--yes"])), 0)
             self.assertFalse(done.exists())
+
+
+    def test_an_unconfirmed_runpod_create_keeps_a_run(self) -> None:
+        with _workspace() as root:
+            run_dir = root / "runs" / "unconfirmed"
+            _write(run_dir / "status.json", json.dumps({"state": "interrupted", "ended": "2026-10-01T00:00:00+00:00"}))
+            _write(run_dir / "realizations" / "r9.create-intent.json", json.dumps({"executor": "runpod", "pod_name": "kura-unconfirmed-r9"}))
+            _write(run_dir / "cache" / "x")
+            _write(run_dir / "outputs" / "a.safetensors")
+            _state(root, "state-step-00000010-dddddddddddd", "unconfirmed")
+            self.assertFalse(any(item["id"] == "unconfirmed" for item in _items(root, outputs=True)))
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "unconfirmed", "--yes"])), 1)
+            self.assertIn("kura run reconcile unconfirmed", err.getvalue())
+            self.assertTrue(run_dir.is_dir())
+            # A Docker create intent bills nothing, but its container may still write to the run: kept too.
+            (run_dir / "realizations" / "r9.create-intent.json").write_text(json.dumps({"executor": "docker"}), encoding="utf-8")
+            self.assertFalse(any(item["id"] == "unconfirmed" for item in _items(root, outputs=True)))
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "unconfirmed", "--yes"])), 1)
+            self.assertIn("kura run reconcile unconfirmed", err.getvalue())
+            (run_dir / "realizations" / "r9.create-intent.json").unlink()
+            self.assertIn(("free", "unconfirmed"), {(item["class"], item["id"]) for item in _items(root)})
 
 
 class ApplyScopeTests(unittest.TestCase):

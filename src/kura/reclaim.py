@@ -17,7 +17,7 @@ from typing import Any
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
 from kura.container_scripts.ai_toolkit_models import list_model_files
 from kura import doctor
-from kura.executors.common import CLEANUP_ELIGIBLE_STATES, run_finished
+from kura.executors.common import CLEANUP_ELIGIBLE_STATES, run_finished, unresolved_create_intents
 from kura.fsio import atomic_write_json
 from kura.images import PINNED_IMAGES, effective_image
 from kura.paths import AI_TOOLKIT_MODELS_PATH, LEGACY_AI_TOOLKIT_CACHE, local_hf_cache
@@ -72,15 +72,17 @@ def read_run_status(run_dir: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def run_done(status: dict[str, Any] | None) -> bool:
+def run_done(run_dir: Path, status: dict[str, Any] | None) -> bool:
     """Whether Kura may offer or delete a run's data (the inventory and `kura run prune` ask here): its
     status reads, it ended in a cleanup state with publication no longer pending, and no Pod of it may
-    still bill. Unknown and recovery_required wait for a person; an unreadable status counts as running."""
-    from kura.runner import _pod_left_running
+    still bill (`runner.pod_may_still_bill`), and no launch left a container or Pod unrecorded (an
+    unresolved create intent of either executor). Unknown and recovery_required wait for a person; an
+    unreadable status counts as running."""
+    from kura.runner import pod_may_still_bill
 
     return (
         status is not None and str(status.get("state")) in CLEANUP_ELIGIBLE_STATES and run_finished(status)
-        and not _pod_left_running(status)
+        and pod_may_still_bill(run_dir, status) is None and not unresolved_create_intents(run_dir)
     )
 
 
@@ -97,7 +99,7 @@ def _runs(workspace: Path) -> dict[str, dict[str, Any]]:
             status = read_run_status(run_dir)
             runs[run_dir.name] = {
                 "dir": run_dir, "status": status or {}, "state": str((status or {}).get("state") or "unreadable"),
-                "done": run_done(status), "uses_inputs": run_uses_inputs(status),
+                "done": run_done(run_dir, status), "uses_inputs": run_uses_inputs(status),
                 "unfinished": status is None or not run_finished(status),
             }
     return runs
@@ -110,10 +112,26 @@ def became_in_use(workspace: Path, item: dict[str, Any]) -> list[str]:
         statuses = {path.name: read_run_status(path) for path in (workspace / "runs").glob("*") if path.is_dir()}
         return sorted(name for name, status in statuses.items() if status is None or not run_finished(status))
     if item["class"] == "download":
-        return sorted(run for run in item["referenced_by"] if run_uses_inputs(read_run_status(workspace / "runs" / run)))
+        # Every run, not only those the inventory saw: one compiled or launched since may name this item.
+        runs = {path.name: path for path in (workspace / "runs").glob("*") if path.is_dir()}
+        refs: set[str] = set()
+        unreadable: list[str] = []
+        for name, path in runs.items():
+            if not run_uses_inputs(read_run_status(path)):
+                continue
+            try:
+                repos, files, legacy = _model_references(path)
+                image = _frozen_image(path)
+            except UnreadableReference:
+                unreadable.append(name)
+                continue
+            names = repos | files | ({LEGACY_AI_TOOLKIT_CACHE} if legacy else set())
+            if item["id"] in names or (image is not None and image in item.get("docker_ids", [])) or name in item["referenced_by"]:
+                refs.add(name)
+        return sorted(refs | set(unreadable))
     if item["class"] in ("resume", "outputs") or item["kind"] == "run-scratch":
         run_dir = workspace / "runs" / item["id"]
-        return [item["id"]] if run_dir.is_dir() and not run_done(read_run_status(run_dir)) else []
+        return [item["id"]] if run_dir.is_dir() and not run_done(run_dir, read_run_status(run_dir)) else []
     return []
 
 

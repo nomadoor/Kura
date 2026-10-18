@@ -54,7 +54,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run resume <source-run> --to-step <T> [--artifact <id>]` | Create a derived draft toward absolute logical step `T`, optionally selecting an older valid state |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
-| `uv run kura run prune <run-id>...` | Preview deleting whole finished runs, outputs and records included (add `--yes` to delete); Kura's one whole-run delete. A run whose publication is pending, or whose Pod may still exist (`kura run stop <run-id>` first), is refused |
+| `uv run kura run prune <run-id>...` | Preview deleting whole finished runs, outputs and records included (add `--yes` to delete); Kura's one whole-run delete. A run whose publication is pending, whose Pod may still exist (`kura run stop <run-id>` first), or whose launch stopped before recording its Pod or container (`kura run reconcile <run-id>` first) is refused |
 
 Compile after editing `run.yaml`, review `run plan`, and obtain the single
 launch approval. After that explicit approval, a non-interactive agent uses
