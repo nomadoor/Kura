@@ -75,6 +75,7 @@ values each shipped card covers:
 | `flux2` | `flux2`, `flux2_klein_4b`, `flux2_klein_9b` | — | `flux2` |
 | `flux_kontext` | `flux_kontext` | — | `flux_kontext` |
 | `krea2` | `krea2` | — | `krea2` |
+| `iris3b` | `iris3b` | — | — |
 | `moss_image` | `moss_image:base` | — | — |
 
 Every other selector value `kura run capabilities <backend>` lists has no
@@ -128,6 +129,34 @@ Changing GPU class or cost, applying a recipe-changing adjustment, or accepting
 an expected slowdown beyond roughly twofold requires a new plan decision.
 After an OOM, diagnose the actual log and move one rung; never silently retry
 with changed settings.
+
+### AI-Toolkit on a small local GPU
+
+AI-Toolkit's baseline keeps the text encoder in VRAM for the whole run
+(`train.cache_text_embeddings: false`). On a local GPU with about 12 GB this
+can spill into shared system memory: the run does not fail, it runs tens of
+times slower (Z-Image and MOSS-Image on 12 GB ran 35 to 55 times slower). For a local AI-Toolkit run on such a GPU, set
+`native_config.train.cache_text_embeddings: true` unless a limit below
+applies; the family cards give measured figures. In the pinned AI-Toolkit
+(dcebc744) it encodes each item's caption once before training, writes the
+embeddings to a `_t_e_cache` folder beside the images, and removes the text
+encoder from the GPU. Its limits:
+
+- training the text encoder is refused;
+- each item's caption is encoded once, so `shuffle_tokens` and
+  `random_triggers` take effect once rather than every step, and
+  `token_dropout_rate` is skipped; `caption_dropout_rate` still works (the
+  dropped caption is cached too and chosen per step);
+- it applies to every dataset in the run.
+
+With the cache on, `unload_text_encoder: true` adds nothing. Never set
+`unload_text_encoder: true` without the cache: the trainer then trains on a
+blank prompt (or the trigger word only) instead of the captions.
+
+Recognise a spill while a run executes: seconds per step tens of times above
+the family card's figure for comparable settings, or GPU memory pinned at the
+GPU's total. Stop the run (`kura run stop`), tell the user, and plan it again
+with the cache rather than waiting.
 
 ## Last look
 
