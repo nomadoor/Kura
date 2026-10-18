@@ -1,0 +1,6 @@
+# CodeRabbit reviews a pull request only when someone comments
+# "@coderabbitai review" (see AGENTS.md, "How a change is made").
+inheritance: true
+reviews:
+  auto_review:
+    enabled: false

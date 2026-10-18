@@ -170,10 +170,12 @@ replaces any delegation given earlier in a conversation or in memory.
    review (where step 4 requires one) left no Critical or Major finding.
 
 The context-free review is one round: Critical and Major findings are fixed
-on the branch, and only the fixed part is checked again. CodeRabbit reviews
-the pull request when its quota allows, and its findings follow the same
-rule, except that a Major is fixed in a follow-up design rather than holding
-the merge. Minor and Nit findings from either review, and pre-existing issues
+on the branch, and only the fixed part is checked again. CodeRabbit does not
+review automatically: comment `@coderabbitai review` once on a pull request
+that is large, adds a mechanism, touches what Kura must never get wrong, or
+that the context-free review or the maintainer is unsure about. Its findings
+follow the same rule, except that a Major is fixed in a follow-up design
+rather than holding the merge. Minor and Nit findings from either review, and pre-existing issues
 a review happens to find, go to `docs/backlog.md` and are fixed later in one
 batch pull request.
 
