@@ -962,11 +962,21 @@ def managed_state_save_args(
     backend's validated `save_every_n_steps`; a backend building its own command passes its
     training-state contract.
     """
-    cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
-    if not isinstance(cadence, int):
-        cadence = None
+    cadence, window = managed_state_cadence(run, configured_cadence, contract=contract)
     every = [] if cadence is None else ["--save_every_n_steps", str(cadence)]
-    return [*every, "--save_state", "--save_last_n_steps_state", str(state_retention_window(run, cadence))]
+    return [*every, "--save_state", "--save_last_n_steps_state", str(window)]
+
+
+def managed_state_cadence(
+    run: dict[str, Any], configured_cadence: Any, *, contract: dict[str, Any] | None = None,
+) -> tuple[int | None, int]:
+    """The step cadence an accelerate trainer whose state Kura manages saves state at
+    (`checkpoint_save_cadence`, None when it is given none) and the steps it keeps states for
+    (`state_retention_window`). `managed_state_save_args` builds the trainer's flags from it and
+    the disk estimate (`own_write_bound`) counts the states from it, so both read one answer."""
+    cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
+    cadence = cadence if isinstance(cadence, int) else None
+    return cadence, state_retention_window(run, cadence)
 
 
 def state_retention_window(run: dict[str, Any], cadence: int | None) -> int:

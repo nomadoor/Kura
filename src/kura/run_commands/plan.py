@@ -44,7 +44,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, read_resume_lock, resume_steps, state_retention_window, trained_steps, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -563,8 +563,7 @@ def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
             # publishing it when a state of the run already holds its step, and publishing copies, never moves,
             # so the folder stays in outputs/ beside them either way and is counted, as the checkpoint peak
             # counts the final file.
-            cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
-            window = state_retention_window(run, cadence if isinstance(cadence, int) else None)
+            _, window = managed_state_cadence(run, checkpoint.get("save_every_n_steps"), contract=training_state_contract(run))
             trainer_states = peak_checkpoints(run, {"save_every_n_steps": checkpoint.get("save_every_n_steps"), "retention_window_steps": window})["count"]
         if managed and executor == "docker":
             # publish_training_state copies a state into the artifact store, then prunes to `keep`.
@@ -601,8 +600,7 @@ def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
 def _trainer_downloads(run: dict[str, Any], *, executor: str, local_cache: Path) -> str | None:
     """What a trainer downloads itself (AI-Toolkit resolves `model.base` on its own), which Kura does not
     size and the estimate does not count; None when the trainer downloads nothing itself."""
-    adapter = _run_adapter(run)
-    requirements = adapter.requirements(run, None, declared=False) if adapter is not None else []
+    requirements = model_requirements(run) if _run_adapter(run) is not None else []
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
     if not backend_managed:
         return None

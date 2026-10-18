@@ -107,6 +107,17 @@ class DiskWatchTests(unittest.TestCase):
         stopped.assert_not_called()
         probe.assert_not_called()
 
+    def test_an_invalid_workspace_yaml_is_logged_and_never_stops_the_run(self) -> None:
+        # The watch reads workspace.yaml as every command does: a file the loader refuses (here a
+        # misspelt reserve) is not read past, so the watch says it could not check and tries again.
+        logged: list[str] = []
+        with _launched_run(workspace_config={"docker": {"min_free_gbb": 30}}) as (root, _run_dir, request), \
+                patch.object(runner, "_log", side_effect=logged.append):
+            _, stopped, _, probe = self._work(root, request, 5, states=[{"state": "running"}, {"state": "completed", "publication_state": "completed"}])
+        stopped.assert_not_called()
+        probe.assert_not_called()
+        self.assertTrue(any("the disk watch could not check free space" in line and "min_free_gbb" in line for line in logged))
+
     def test_the_run_reserve_raises_the_watch_reserve_as_it_does_the_launch(self) -> None:
         from kura.run_commands.plan import local_reserve_gib
 

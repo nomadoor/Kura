@@ -320,7 +320,10 @@ def storage_floor_problem(
     Windows drive behind it has room, the problem says so: Linux seeing less free space than the
     drive is normal on WSL, so this is said only when it is what stops the gate."""
     gib = 1024**3
-    required_display_gib = (required_bytes + gib - 1) // gib
+    # Rounded up, so the figure shown is never below what is required: whole GiB as a whole
+    # number, anything else (a fractional docker.min_free_gb, an estimate) to one decimal.
+    tenths = -(-required_bytes * 10 // gib)
+    required_display_gib = tenths // 10 if required_bytes % gib == 0 else f"{tenths / 10:.1f}"
     needed = f"{action} requires at least {required_display_gib} GiB" + (f" ({minimum})" if minimum else "")
     if status.confidence == "unknown" and not risk_accepted:
         return (
