@@ -26,3 +26,19 @@ def without_record_fields(value: dict[str, Any]) -> dict[str, Any]:
     """The facts of a record, for comparing a record with one written before kinds existed."""
 
     return {key: item for key, item in value.items() if key not in RECORD_FIELDS}
+
+
+def realization_reference(realization_id: str) -> str:
+    """How status and the records name a run's realization: relative to the run, with `/`, on every OS."""
+
+    return f"realizations/{realization_id}.json"
+
+
+def names_realization(reference: Any, realization_id: str) -> bool:
+    """Whether a reference read from status names this realization.
+
+    A status an earlier Kura wrote on Windows spells the reference with the
+    host's separator (`realizations\\<id>.json`); it names the same realization.
+    """
+
+    return isinstance(reference, str) and reference.replace("\\", "/") == realization_reference(realization_id)

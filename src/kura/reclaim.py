@@ -22,7 +22,7 @@ from kura.executors.common import CLEANUP_ELIGIBLE_STATES, run_finished, unresol
 from kura.fsio import atomic_write_json
 from kura.images import PINNED_IMAGES, effective_image
 from kura.paths import AI_TOOLKIT_MODELS_PATH, LEGACY_AI_TOOLKIT_CACHE, local_hf_cache
-from kura.records import record
+from kura.records import names_realization, record
 from kura.training_artifacts import is_training_state_output, reclaimable_training_states
 from kura.yamlio import YAMLError, load_yaml
 
@@ -167,7 +167,7 @@ def last_observation_container_missing(run_dir: Path, status: dict[str, Any]) ->
     if not isinstance(reference, str) or not isinstance(realization, str):
         return False
     observation = _read_json(run_dir / reference)
-    return observation.get("container_missing") is True and f"realizations/{observation.get('realization_id')}.json" == realization
+    return observation.get("container_missing") is True and names_realization(realization, str(observation.get("realization_id")))
 
 
 def _sizes(paths: list[Path]) -> int | None:

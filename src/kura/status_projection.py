@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.executors.common import TERMINAL_STATES, host_time, latest_launch_id
+from kura.records import realization_reference
 
 COVERED_FIELDS = (
     "state", "started", "ended", "exit_code", "last_realization", "last_observation",
@@ -66,7 +67,7 @@ def project_status(run_dir: Path) -> dict[str, Any]:
         # A render started after the latest launch record: a local render (no realization until it
         # ends) or a RunPod render on its session Pod.
         if realization is not None and realization.get("generator") != "comfyui":
-            rendering["last_realization"] = f"realizations/{rid}.json"
+            rendering["last_realization"] = realization_reference(rid)
             pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
             if isinstance(pod.get("id"), str):
                 rendering["pod_id"] = pod["id"]
@@ -76,7 +77,7 @@ def project_status(run_dir: Path) -> dict[str, Any]:
         return {"state": "compiled"}
     if realization is None:
         return _project_unlaunched(directory, rid)
-    projected: dict[str, Any] = {"last_realization": f"realizations/{rid}.json", "state": realization.get("state")}
+    projected: dict[str, Any] = {"last_realization": realization_reference(rid), "state": realization.get("state")}
     pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
     container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
     if isinstance(pod.get("id"), str):

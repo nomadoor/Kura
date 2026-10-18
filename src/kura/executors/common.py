@@ -9,13 +9,13 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any, Callable
 
 from kura.secrets import is_secret_name, secret_values
 from kura.yamlio import YAMLError, load_yaml
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
-from kura.records import record, without_record_fields
+from kura.records import names_realization, realization_reference, record, without_record_fields
 from kura.run_envelope import final_step, resume_intent
 from kura.training_artifacts import is_training_state_output, logical_step, read_resume_lock, resume_steps
 
@@ -233,36 +233,45 @@ def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> lis
     except (OSError, json.JSONDecodeError):
         status = {}
     newest = latest_launch_id(directory)
-    named = status.get("last_realization")
-    # Launches on Windows record the path with the host's separator.
-    named = PureWindowsPath(named).as_posix() if isinstance(named, str) else None
     intents = []
     for path in sorted(directory.glob(f"*{CREATE_INTENT_SUFFIX}")):
         realization_id = path.name[: -len(CREATE_INTENT_SUFFIX)]
         if not (directory / f"{realization_id}.json").exists() or (
-            realization_id == newest and named != f"realizations/{realization_id}.json"
+            realization_id == newest and not names_realization(status.get("last_realization"), realization_id)
         ):
             intents.append(path)
     return intents if executor is None else [path for path in intents if create_intent_executor(path) == executor]
 
 
+def point_status_at_launch(latest: dict[str, Any], realization_id: str, realization: dict[str, Any]) -> None:
+    """Point status at the realization a launch recorded: what the launch writes, and what settling
+    a launch that stopped before status followed it writes, on every executor."""
+    container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
+    pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
+    latest.update({
+        "state": realization.get("state"), "last_realization": realization_reference(realization_id),
+        "started": realization.get("launched_at"), "ended": realization.get("attempted_at"), "exit_code": None,
+        # A RunPod realization names no host; the run runs on its Pod.
+        "host": "runpod" if realization.get("executor") == "runpod" else realization.get("host"),
+    })
+    if container.get("id"):
+        latest.update({"container_id": container["id"], "container_name": container.get("name")})
+    if pod.get("id"):
+        latest["pod_id"] = pod["id"]
+    if "ai_toolkit_models" in realization:
+        latest["ai_toolkit_models"] = realization["ai_toolkit_models"]
+    else:
+        latest.pop("ai_toolkit_models", None)
+    # The launch ended any capacity wait, and a new realization starts its own observations and
+    # progress; an earlier one's step is not its.
+    for key in ("capacity_wait", "last_observation", *PROGRESS_FIELDS):
+        latest.pop(key, None)
+
+
 def settle_status_from_realization(run_dir: Path, realization_path: Path) -> dict[str, Any]:
     """Bring status up to a realization a launch wrote just before it stopped."""
     realization = json.loads(realization_path.read_text(encoding="utf-8"))
-    container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
-    pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
-
-    def mutate(latest: dict[str, Any]) -> None:
-        latest.update({"state": realization.get("state"), "last_realization": f"realizations/{realization_path.name}",
-                       "started": realization.get("launched_at"), "ended": realization.get("attempted_at"), "exit_code": None})
-        if container.get("id"):
-            latest.update({"container_id": container["id"], "container_name": container.get("name")})
-        if pod.get("id"):
-            latest["pod_id"] = pod["id"]
-        # The launch ended any capacity wait when it recorded the Pod.
-        latest.pop("capacity_wait", None)
-
-    return _mutate_run_status(run_dir, mutate)
+    return _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_path.stem, realization))
 
 
 def create_intent_executor(path: Path) -> str:
