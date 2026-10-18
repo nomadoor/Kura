@@ -1,0 +1,24 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-19'
+executor: runpod
+kura_commit: 664da53
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on Musubi Tuner over
+  RunPod before the 0.7.0 release: the v0.3.6 image, the RunPod SSH session env change, and the
+  removal of the container_disk and object_staging storage modes.
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend musubi-tuner --runpod --yes
+hardware:
+  gpu: RTX 3090 ($0.22/hr, the only priced GPU of the pass's candidates at launch)
+runtime_image_digest: sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173
+adapter_source: 4d6ee39558c74aad097fd0ac0746476fa3809cbe8992a01d6490eb91d2f2b0af
+pod_minutes: about 66 across 7 Pods (about $0.24 GPU; the 3-item runs took 12 to 22 minutes each), every Pod stopped and none left listed
+results:
+  P1: pass
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass (every Pod recorded pod_stopped_at)
+  P7: pass
+  P8: not measured on RunPod
+runs: [20261019-0326_conf-musubi-one-control_6640, 20261019-0332_conf-musubi-one-control-2_9b6d, 20261019-0336_conf-musubi-one-split_8d3b, 20261019-0339_conf-musubi-one-resume_e00f, 20261019-0353_conf-musubi-multi-fresh_87dd, 20261019-0418_conf-musubi-multi-split_9df2, 20261019-0431_conf-musubi-multi-resume_f5e3]
