@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-19 | render cost | `kura render launch` has no way to shorten the RunPod lease, so the cost ceiling of a render that takes minutes is computed over the 12 h default lease (about $7 on an A40) | ComfyUI v0.41.3 upgrade | -
 - 2026-10-19 | tests | `kura_env_exports` sorts the mapping before its type check, so a mapping with mixed key types raises TypeError instead of the named ValueError (JSON-loaded records cannot hold one); the new imports in tests/test_launch_contracts.py sit inside the kura import block | review of the SSH session env fix | -
 - 2026-10-18 | workspace.yaml | The removed-value error for `runpod.storage_mode` is a bare `ValueError`, so it lacks the "Run `kura doctor workspace`" suffix the other schema errors carry | review of the container_disk removal | -
 - 2026-10-18 | RunPod images | `docker/ai-toolkit/kura_runpod_object_job.py` (object staging) is still copied into the AI-Toolkit and Musubi Tuner images although object staging is removed; delete it and the Dockerfile `COPY` lines with the next image rebuild, and the test that reads it | review of the container_disk removal | -
