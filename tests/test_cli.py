@@ -1115,7 +1115,7 @@ class DoctorDockerTests(unittest.TestCase):
 
     def test_doctor_disk_warns_on_low_effective_backing_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
             (root / "cache").mkdir()
             (root / "runs").mkdir()
