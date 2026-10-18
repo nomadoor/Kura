@@ -655,6 +655,63 @@ class AccelerateStateRunnerTests(unittest.TestCase):
 
                 self.assertEqual(sorted(item["observed_step"] for item in published), [10, 20])
 
+    def _sd_scripts_state(self, directory: Path, step: int, *, rng: bytes | None = None) -> Path:
+        state = _write_state(directory)
+        (state / "train_state.json").write_text(json.dumps({"current_epoch": 1, "current_step": step}) + "\n", encoding="utf-8")
+        if rng is not None:
+            (state / "random_states_0.pkl").write_bytes(_torch_archive_bytes(rng))
+        _write_state_marker(state, "sd-scripts", step)
+        return state
+
+    def _sd_scripts_collected(self, root: Path, executor: str) -> Path:
+        run = sd_scripts_run()
+        run["recipe"]["steps"] = 20
+        run_dir = root / "runs" / "derived"
+        (run_dir / "resolved").mkdir(parents=True)
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+        if executor == "docker":
+            return run_dir
+        downloaded = run_dir / "downloads" / run_dir.name
+        downloaded.mkdir(parents=True)
+        shutil.copytree(run_dir / "resolved", downloaded / "resolved")
+        shutil.copy2(run_dir / "status.json", downloaded / "status.json")
+        return downloaded
+
+    def test_the_sd_scripts_end_state_at_a_saved_step_is_not_published_again(self) -> None:
+        import kura.training_artifacts as training_artifacts
+
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory, patch.object(
+                training_artifacts, "publish_training_state_candidate", wraps=training_artifacts.publish_training_state_candidate,
+            ) as owner:
+                root = Path(directory)
+                collected = self._sd_scripts_collected(root, executor)
+                step_state = self._sd_scripts_state(collected / "outputs" / "derived-step00000020-state", 20)
+                final = self._sd_scripts_state(collected / "outputs" / "derived-state", 20, rng=b"end-of-training rng")
+
+                published = publish_completed_training_states(root, collected, allow_final_state=True)
+
+                self.assertEqual([item["observed_step"] for item in published], [20])
+                kept = {item["path"]: item["sha256"] for item in published[0]["files"]}
+                self.assertEqual(kept["random_states_0.pkl"], hashlib.sha256((step_state / "random_states_0.pkl").read_bytes()).hexdigest())
+                self.assertIn("train_state.json", kept)
+                self.assertEqual(len(list((root / "artifacts" / "training-state").glob("*/manifest.json"))), 1)
+                self.assertTrue(final.is_dir())
+                self.assertEqual(owner.call_count, 2)
+
+    def test_the_sd_scripts_end_state_at_a_step_with_no_step_state_is_published(self) -> None:
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                collected = self._sd_scripts_collected(root, executor)
+                self._sd_scripts_state(collected / "outputs" / "derived-step00000010-state", 10)
+                self._sd_scripts_state(collected / "outputs" / "derived-state", 20)
+
+                published = publish_completed_training_states(root, collected, allow_final_state=True)
+
+                self.assertEqual(sorted(item["observed_step"] for item in published), [10, 20])
+
     def test_a_musubi_artifact_published_before_the_marker_still_resumes(self) -> None:
         # Resume reads an artifact's own inventory, never the contract's required files.
         with tempfile.TemporaryDirectory() as directory:

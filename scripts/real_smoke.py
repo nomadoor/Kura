@@ -1120,6 +1120,18 @@ def runpod_cost_ceiling(workspace: Path, config: dict[str, Any], smoke: Smoke) -
     return {**ceiling, "priced_gpu_type_ids": priced}
 
 
+def conformance_backends(named: list[str] | None, runs: list[str] | None) -> list[str]:
+    """The backends a conformance pass runs: those named with --backend, else every backend that
+    has one of the selected scenario runs (all of them when no run is named). A named backend
+    without the runs is refused by `conformance`; none at all is refused here."""
+    if named:
+        return named
+    selected = [backend for backend in CONFORMANCE_BACKENDS if scenario_runs(backend, runs)]
+    if not selected:
+        raise SystemExit(f"no backend has scenario run {runs}")
+    return selected
+
+
 def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str | tuple[str, ...], yes: bool, runs: list[str] | None = None) -> int:
     if workspace.resolve() == REPO.resolve():
         raise SystemExit("conformance creates runs; give it a separate workspace (`kura init` one), not this checkout")
@@ -1260,14 +1272,14 @@ def main() -> int:
     evidence_parser.add_argument("run_id", nargs="+")
     conformance_parser = commands.add_parser("conformance", help="Run the promise conformance scenario in a separate workspace; prints its plan unless --yes")
     conformance_parser.add_argument("--workspace", required=True, type=Path, help="A Kura workspace for the conformance runs, never this checkout")
-    conformance_parser.add_argument("--backend", action="append", choices=CONFORMANCE_BACKENDS, help="Only this backend (repeatable); default all")
+    conformance_parser.add_argument("--backend", action="append", choices=CONFORMANCE_BACKENDS, help="Only this backend (repeatable); default every backend that has the selected runs")
     conformance_parser.add_argument("--runpod", action="store_true", help="The billed RunPod pass of one backend; shows the cost ceiling first")
     conformance_parser.add_argument("--gpu", action="append", help=f"RunPod GPU type for --runpod, repeatable; the Pod lands on one with stock (default: {', '.join(CONFORMANCE_GPUS)}; the models are tiny)")
     conformance_parser.add_argument("--run", action="append", choices=[run.key for run in SCENARIO], help="Only this scenario run (repeatable); a Resume needs its source named too; default all")
     conformance_parser.add_argument("--yes", action="store_true", help="Launch the runs after showing the plan")
     args = parser.parse_args()
     if args.command == "conformance":
-        return conformance(args.workspace.resolve(), args.backend or list(CONFORMANCE_BACKENDS), runpod=args.runpod, gpu=tuple(args.gpu) if args.gpu else CONFORMANCE_GPUS, yes=args.yes, runs=args.run)
+        return conformance(args.workspace.resolve(), conformance_backends(args.backend, args.run), runpod=args.runpod, gpu=tuple(args.gpu) if args.gpu else CONFORMANCE_GPUS, yes=args.yes, runs=args.run)
     workspace = Path.cwd()
     if not (workspace / "workspace.yaml").is_file():
         raise SystemExit("run from a Kura workspace root")

@@ -99,6 +99,40 @@ class HuggingFaceCachedFileTests(unittest.TestCase):
             self.assertIsNone(hf_cached_file(cache, "org/name", "vae.safetensors"))
             self.assertIsNone(hf_cached_file(cache, "org/other", "dit.safetensors"))
 
+    def test_a_ref_with_a_trailing_newline_is_read_as_written(self) -> None:
+        # huggingface_hub reads a ref file whole, so a hand-edited ref with a newline names no snapshot.
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            _cache_file(cache, "models--org--name", "a" * 40, "dit.safetensors")
+            (cache / "hub" / "models--org--name" / "refs").mkdir(parents=True)
+            (cache / "hub" / "models--org--name" / "refs" / "main").write_text("a" * 40 + "\n", encoding="utf-8")
+            self.assertIsNone(hf_cached_file(cache, "org/name", "dit.safetensors"))
+
+    def test_the_host_reads_the_cache_as_huggingface_hub_does(self) -> None:
+        try:
+            from huggingface_hub import try_to_load_from_cache
+        except ImportError:
+            self.skipTest("huggingface_hub is not installed on this host")
+        cases = (
+            ("main", "a" * 40, None),
+            ("main", "a" * 40 + "\n", None),
+            ("v1", "b" * 40, "v1"),
+            ("release/1", "c" * 40, "release/1"),
+            (None, None, "d" * 40),
+            (None, None, "main"),
+        )
+        for ref, written, revision in cases:
+            with self.subTest(ref=ref, written=written, revision=revision), tempfile.TemporaryDirectory() as directory:
+                cache = Path(directory)
+                commit = (written or "").strip() or (revision if revision and len(revision) == 40 else "e" * 40)
+                _cache_file(cache, "models--org--name", commit, "dit.safetensors")
+                if ref is not None:
+                    (cache / "hub" / "models--org--name" / "refs" / ref).parent.mkdir(parents=True, exist_ok=True)
+                    (cache / "hub" / "models--org--name" / "refs" / ref).write_text(written, encoding="utf-8")
+                found = try_to_load_from_cache("org/name", "dit.safetensors", cache_dir=cache / "hub", revision=revision)
+                expected = Path(found) if isinstance(found, str) else None
+                self.assertEqual(hf_cached_file(cache, "org/name", "dit.safetensors", revision=revision), expected)
+
     def test_a_snapshot_with_no_ref_for_the_revision_is_not_cached(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)

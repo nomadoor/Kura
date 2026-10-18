@@ -8,6 +8,108 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-backlog-batch-2026-10-18
+    backend: sd-scripts
+    reason: >-
+      managed_state_save_args now takes the state cadence and retention window from managed_state_cadence, which the disk estimate also reads; the flags it returns are the same for every run. The registry module derives the AI-Toolkit conditional fields from that adapter's requirement tables (the accepted values are unchanged), and a comment in sd_scripts.py says why --save_state_on_train_end stays an owned flag. Generated argv, compile output, model handling, and recorded smoke behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-release-conformance-docker-2026-10-17
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 945ae8efcdff95cd410f9e199215999c45a46cdd8bf6bf510de206132a032f6d
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f4898a4a9708a89a831abb8fdf7b56895419b654559fd41e1ad923adb35c1473
+  - id: musubi-tuner-backlog-batch-2026-10-18
+    backend: musubi-tuner
+    reason: >-
+      managed_state_save_args now takes the state cadence and retention window from managed_state_cadence, which the disk estimate also reads; the flags it returns are the same for every run. The registry module derives the AI-Toolkit conditional fields from that adapter's requirement tables (the accepted values are unchanged), and a comment in musubi_command.py says why --save_state_on_train_end stays an owned flag. Generated argv, compile output, model handling, and recorded smoke behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-tuner-release-conformance-docker-2026-10-17
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 7b58c15f3d2498965674fb6866dad50fbd344882397c254d1b64de4844b1bb09
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: d8ea1d81032d4164bf5cc93bf547043778a6c89fed192eeacfcbb1dd0a8262ef
+  - id: backlog-batch-runpod-executor-2026-10-18
+    executor: runpod
+    reason: >-
+      executors/runpod.py writes the AI-Toolkit model listing and the Pod-owned dataset handoff records it brings home to a temporary file and renames it, so an interrupted copy leaves no truncated record for a later collection to keep or report as a conflict. A completed collection brings home the same records with the same contents; the Pod, the transfer, the trainer command, and recorded smoke behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: c0cfcb7d09031a41b0defdc705e6974ef7df5779fa9462c95096c79bfa890581
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: dbe8529c4faf148779237825a041a2ab08f3d598c9dcaf7d48e8bb8efeb493b2
   - id: musubi-tuner-guidance-wording-2026-10-18
     backend: musubi-tuner
     reason: "The identity changes because two shared files change wording only: backends/registry.py adds to the refusal of a missing required backend.config value where a recommended value is read (REQUIRED_VALUE_SOURCES), and container_scripts/hf_download.py adds the user's two actions (accept the model license, set HF_TOKEN in their own terminal) to the text of an in-container Hugging Face authentication failure. Which runs are refused, compile output, generated argv, model downloads, and recorded smoke behavior are unchanged."
@@ -130,7 +232,7 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
+      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
@@ -162,7 +264,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
+      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
   - id: sd-scripts-family-card-hint-2026-10-18
     backend: sd-scripts
     reason: >-

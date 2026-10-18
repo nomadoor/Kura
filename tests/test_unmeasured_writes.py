@@ -57,6 +57,24 @@ class UnmeasuredModelDownloadTests(unittest.TestCase):
         run = {"backend": {"name": "musubi-tuner", "config": {"architecture": "wan"}}}
         self.assertIsNone(plan._trainer_downloads(run, executor="docker", local_cache=Path("/c")))
 
+    def test_a_local_path_base_is_no_trainer_download(self) -> None:
+        # The trainer reads a local model.base from disk; only a selector it resolves itself downloads.
+        run = _ai_toolkit_run()
+        run["model"]["base"] = "/models/sdxl"
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor):
+                self.assertIsNone(plan._trainer_downloads(run, executor=executor, local_cache=Path("/c")))
+                report = plan._model_download_preflight_report(run, {"bytes": 0}, executor=executor, local_cache=Path("/c"))
+                self.assertFalse(any("downloads" in item["fact"] and "itself" in item["fact"] for item in report))
+                self.assertNotIn("warning", {item["severity"] for item in report})
+
+    def test_the_trainer_downloads_come_from_the_one_requirements_reader(self) -> None:
+        import kura.model_requirements as model_requirements
+
+        with patch.object(plan, "model_requirements", wraps=model_requirements.model_requirements) as owner:
+            self.assertIsNotNone(plan._trainer_downloads(_ai_toolkit_run(), executor="docker", local_cache=Path("/c")))
+        owner.assert_called_once()
+
     def test_the_declared_size_is_retired(self) -> None:
         with self.assertRaisesRegex(ValueError, "safety.model_download_estimate_gb is retired"):
             validate_train_run_fields({"safety": {"model_download_estimate_gb": 14}})

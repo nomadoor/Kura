@@ -1266,6 +1266,49 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=("a.png", "b.png"))
                 BACKENDS["ai-toolkit"].compile(run, root)
 
+    def test_ai_toolkit_model_edit_applies_where_the_requirements_name_it(self) -> None:
+        # One owner: the surface condition is derived from the requirement tables' keys.
+        from kura.backends.ai_toolkit import AI_TOOLKIT_PROFILE_REQUIREMENTS
+        from kura.backends.ai_toolkit_baseline import trained_arch
+        from kura.backends.registry import AI_TOOLKIT_SURFACE
+
+        [condition] = [item for item in AI_TOOLKIT_SURFACE.conditions if item.field == "model_edit"]
+        [[(selector, values)]] = condition.when_any
+        self.assertEqual(selector, "model_arch")
+        required = {arch for (arch, _profile), fields in AI_TOOLKIT_PROFILE_REQUIREMENTS.items() if "model_edit" in fields}
+        self.assertEqual({trained_arch(value) for value in values}, required)
+        self.assertEqual(required, {"krea2", "moss_image"})
+        for arch in ("flux3", "ming_image", "iris3b"):
+            with self.subTest(arch=arch), self.assertRaisesRegex(ValueError, "model_edit"):
+                validate_backend_config({"backend": {"name": "ai-toolkit", "config": {"model_arch": arch, "model_edit": True}}, "model": {"base": "example/model"}})
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_refuses_the_0_13_30_architectures_outside_their_profiles(self) -> None:
+        def compiled(arch: str, base: str, controls: tuple[str, ...], **authored):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = {
+                    "id": f"refused-{arch.replace(':', '-').replace('_', '-')}",
+                    "backend": {"name": "ai-toolkit", "config": {"model_arch": arch, "dataset_config": {}, **authored}},
+                    "model": {"base": base}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                }
+                self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=controls)
+                BACKENDS["ai-toolkit"].compile(run, root)
+                return yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+
+        # MOSS-Image reads references only in edit mode, so references without model_edit are refused.
+        with self.assertRaisesRegex(ValueError, "model_edit"):
+            compiled("moss_image", "OpenMOSS-Team/MOSS-Image-SFT", ("a.png",))
+        # The base_edit entry does not turn edit mode on by itself.
+        process = compiled("moss_image:base_edit", "OpenMOSS-Team/MOSS-Image-Base", ())
+        self.assertNotIn("edit", process["model"].get("model_kwargs", {}))
+        # Ming-Image trains from a target alone.
+        with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile matches architecture='ming_image'"):
+            compiled("ming_image", "inclusionAI/Ming-Image-0.1-Design", ("a.png",))
+        # model.base never chooses the entry: the Base model under moss_image names its own entry.
+        with self.assertRaisesRegex(ValueError, "model.base 'OpenMOSS-Team/MOSS-Image-Base' is the model of UI entry moss_image:base, moss_image:base_edit, but model_arch 'moss_image' selects entry 'moss_image'"):
+            compiled("moss_image", "OpenMOSS-Team/MOSS-Image-Base", ())
+
     @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture(self) -> None:
         cases = (

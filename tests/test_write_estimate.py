@@ -77,19 +77,42 @@ class BoundTests(unittest.TestCase):
         counted = plan.own_write_bound(off, executor="docker")
         self.assertEqual((counted["trainer_states"], counted["kura_state_copies"]), (0, 0))
 
-    def test_the_state_window_is_the_one_the_trainer_is_given(self) -> None:
-        from kura.training_artifacts import managed_state_save_args
+    def test_the_estimate_counts_states_at_the_cadence_and_window_the_trainer_is_given(self) -> None:
+        # One owner (`managed_state_cadence`) answers the command builders and the estimate.
+        import re
 
-        run = musubi_run()
-        run["backend"]["config"]["save_every_n_steps"] = 50
         import kura.training_artifacts as training_artifacts
+        from kura.backends.musubi_command import command_musubi_tuner
+        from kura.backends.sd_scripts import command_sd_scripts
 
-        with patch.object(plan, "state_retention_window", wraps=training_artifacts.state_retention_window) as estimate, \
-                patch.object(training_artifacts, "state_retention_window", wraps=training_artifacts.state_retention_window) as command:
-            plan.own_write_bound(run, executor="docker")
-            managed_state_save_args(run, 50)
-        self.assertEqual(estimate.call_args, command.call_args)
-        self.assertEqual(estimate.call_args.args[1], 50)
+        for label, build, command in (("musubi-tuner", musubi_run, command_musubi_tuner), ("sd-scripts", sd_scripts_run, command_sd_scripts)):
+            for cadence in (None, 50):
+                for keep in (1, 2):
+                    with self.subTest(backend=label, cadence=cadence, keep=keep):
+                        run = build()
+                        run["backend"]["config"].pop("save_every_n_steps", None)
+                        if cadence is not None:
+                            run["backend"]["config"]["save_every_n_steps"] = cadence
+                        run["recovery"] = {"training_state": {"enabled": True, "keep_generations": keep}}
+                        calls = []
+                        owner = training_artifacts.managed_state_cadence
+
+                        def spy(*args, owner=owner, calls=calls, **kwargs):
+                            answer = owner(*args, **kwargs)
+                            calls.append(answer)
+                            return answer
+
+                        with patch.object(plan, "managed_state_cadence", side_effect=spy), \
+                                patch.object(training_artifacts, "managed_state_cadence", side_effect=spy):
+                            plan.own_write_bound(run, executor="docker")
+                            argv = " ".join(command(run)["argv"])
+                        self.assertEqual(len(calls), 2)
+                        self.assertEqual(calls[0], calls[1])
+                        given_cadence, window = calls[0]
+                        self.assertEqual(re.search(r"--save_last_n_steps_state (\d+)", argv).group(1), str(window))
+                        # Musubi names its default cadence (the recipe's steps) itself; sd-scripts is given none.
+                        named = re.search(r"--save_every_n_steps (\d+)", argv)
+                        self.assertEqual(int(named.group(1)) if named else None, given_cadence)
 
     def test_a_run_without_a_rank_is_not_bounded_and_says_so(self) -> None:
         run = sd_scripts_run()
@@ -172,6 +195,72 @@ class RetiredKeyTests(unittest.TestCase):
         # The older sd-scripts spelling is dropped on copy too, no longer moved under safety.
         self.assertEqual(without_retired_train_run_keys({"backend": {"name": "sd-scripts", "config": {"disk_cache_estimate_gb": 1}}}),
                          {"backend": {"name": "sd-scripts", "config": {}}})
+
+    def test_a_manifest_frozen_with_the_retired_estimates_plans_and_launches(self) -> None:
+        # A run an older Kura compiled keeps the declared estimates in its frozen manifest; they are
+        # read past, so it plans and launches with the bound a run without them has.
+        import os
+
+        import yaml
+
+        from tests.test_resume_steps import _plan_workspace, _plannable_musubi_run
+
+        run = _plannable_musubi_run()
+        frozen = {**run, "safety": {"checkpoint_estimate_gb": 2, "disk_cache_estimate_gb": 1, "model_download_estimate_gb": 9,
+                                    "allow_storage_risk": True}}
+        frozen["backend"] = {**run["backend"], "config": {**run["backend"]["config"], "disk_cache_estimate_gb": 1}}
+        current = {**run, "safety": {"allow_storage_risk": True}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}), \
+                patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
+                patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                patch.object(plan, "probe_storages", side_effect=_roomy(plan.probe_storages)):
+            root = Path(directory).resolve()
+            _plan_workspace(root)
+            run_dir = root / "runs" / "derived"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(current), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(frozen), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                payload = plan.plan_run("derived")
+                plan.format_run_plan(payload)
+                launched = [plan._local_launch_disk_preflight(root, item, {}, enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                            for item in (frozen, current)]
+                remote = [plan._runpod_launch_disk_preflight(item, {"container_disk_gb": 500}, {"bytes": 0}) for item in (frozen, current)]
+            finally:
+                os.chdir(previous)
+        self.assertTrue(payload["compiled"])
+        self.assertEqual(payload["source"], "runs/derived/resolved/manifest.lock.yaml")
+        self.assertEqual(launched[0]["estimates"], launched[1]["estimates"])
+        self.assertEqual(remote[0]["estimated_write_bytes"], remote[1]["estimated_write_bytes"])
+        self.assertFalse(any("estimate_gb" in str(item.get("fact")) for item in payload.get("preflight", [])))
+
+    def test_an_ai_toolkit_rank_written_in_native_config_bounds_the_writes(self) -> None:
+        run = ai_toolkit_run()
+        run["backend"]["config"].pop("network_dim")
+        run["backend"]["config"].pop("network_alpha")
+        run["backend"]["config"]["native_config"] = {"network": {"linear": 32, "linear_alpha": 32}}
+        counted = plan.own_write_bound(run, executor="docker")
+        self.assertEqual(counted["rank"], 32)
+        self.assertEqual(counted["per_file_bytes"], 32 * 64 * MIB)
+        self.assertEqual(counted["bytes"], counted["weights_files"] * 32 * 64 * MIB)
+
+    def test_the_runpod_plan_shows_the_lines_the_docker_plan_shows(self) -> None:
+        # Only the disk verdict differs: the local free-space check, or the container disk.
+        executor_lines = {"disk", "runpod-disk"}
+        for label, build in (("ai-toolkit", ai_toolkit_run), ("musubi-tuner", musubi_run), ("sd-scripts", sd_scripts_run)):
+            with self.subTest(backend=label), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(plan, "_runpod_input_transfer_estimate", return_value=None):
+                workspace = Path(directory).resolve()
+                lines = {}
+                for executor in ("docker", "runpod"):
+                    records = plan.collect_run_preflight(build(), workspace, config={"runpod": {"container_disk_gb": 500}},
+                                                         executor=executor, download_estimate={"bytes": 0})
+                    lines[executor] = sorted((item["check"], item["severity"]) for item in records if item["check"] not in executor_lines)
+                self.assertTrue(lines["docker"])
+                self.assertEqual(lines["docker"], lines["runpod"])
 
     def test_the_trainer_downloads_and_disk_cache_are_shown_not_counted(self) -> None:
         report = plan._model_download_preflight_report(ai_toolkit_run(), {"bytes": 0}, executor="docker", local_cache=Path("/c"))

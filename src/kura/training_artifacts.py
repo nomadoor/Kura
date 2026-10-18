@@ -962,11 +962,21 @@ def managed_state_save_args(
     backend's validated `save_every_n_steps`; a backend building its own command passes its
     training-state contract.
     """
-    cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
-    if not isinstance(cadence, int):
-        cadence = None
+    cadence, window = managed_state_cadence(run, configured_cadence, contract=contract)
     every = [] if cadence is None else ["--save_every_n_steps", str(cadence)]
-    return [*every, "--save_state", "--save_last_n_steps_state", str(state_retention_window(run, cadence))]
+    return [*every, "--save_state", "--save_last_n_steps_state", str(window)]
+
+
+def managed_state_cadence(
+    run: dict[str, Any], configured_cadence: Any, *, contract: dict[str, Any] | None = None,
+) -> tuple[int | None, int]:
+    """The step cadence an accelerate trainer whose state Kura manages saves state at
+    (`checkpoint_save_cadence`, None when it is given none) and the steps it keeps states for
+    (`state_retention_window`). `managed_state_save_args` builds the trainer's flags from it and
+    the disk estimate (`own_write_bound`) counts the states from it, so both read one answer."""
+    cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
+    cadence = cadence if isinstance(cadence, int) else None
+    return cadence, state_retention_window(run, cadence)
 
 
 def state_retention_window(run: dict[str, Any], cadence: int | None) -> int:
@@ -1042,11 +1052,22 @@ def frozen_training_state_managed(run: dict[str, Any], command_lock: dict[str, A
     value = command_lock.get("training_state_managed")
     if isinstance(value, bool):
         return value
-    from kura.backends import get_backend
+    return training_state_managed(run, frozen_training_state_contract(run, command_lock), frozen=True)
 
-    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    legacy = get_backend(backend.get("name")).legacy_training_state
-    return training_state_managed(run, legacy(run) if legacy is not None else None, frozen=True)
+
+def frozen_training_state_contract(run: dict[str, Any], command_lock: dict[str, Any]) -> dict[str, Any]:
+    """The training-state contract a compiled run's command was built under: the adapter's
+    `legacy_training_state` contract for a lock written before compile froze
+    `training_state_managed`, when the adapter has one, else the current contract. The plan's
+    capability and warning and `frozen_training_state_managed` all read it."""
+    if not isinstance(command_lock.get("training_state_managed"), bool):
+        from kura.backends import get_backend
+
+        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+        legacy = get_backend(backend.get("name")).legacy_training_state
+        if legacy is not None:
+            return legacy(run)
+    return training_state_contract(run)
 
 
 def _frozen_command_lock(run_dir: Path) -> dict[str, Any]:

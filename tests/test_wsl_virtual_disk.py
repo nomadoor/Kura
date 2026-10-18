@@ -36,6 +36,18 @@ def _wsl(*, linux_free_gib: int, host_free_gib: int) -> contextlib.ExitStack:
     return stack
 
 
+class RequiredFigureTests(unittest.TestCase):
+    def test_the_required_figure_is_rounded_up_and_shows_a_fraction(self) -> None:
+        from kura.storage import StorageStatus, storage_floor_problem
+
+        status = StorageStatus(path="x", probe="x", backing_id="C:", backing_kind="native", linux_free_bytes=GIB,
+                               linux_total_bytes=1000 * GIB, host_free_bytes=None, effective_free_bytes=GIB, confidence="exact", mount={})
+        for required, shown in ((20 * GIB, "20 GiB"), (int(1.5 * GIB), "1.5 GiB"), (int(10.31 * GIB), "10.4 GiB"), (20 * GIB + 1, "20.1 GiB")):
+            with self.subTest(shown=shown):
+                problem = storage_floor_problem(status, "/w", required, action="a local Docker launch")
+                self.assertIn(f"a local Docker launch requires at least {shown}", problem)
+
+
 class WslVirtualDiskHintTests(unittest.TestCase):
     def _launch_problem(self, root: Path) -> str:
         with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):

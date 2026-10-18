@@ -957,6 +957,30 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["sizes"]["runs"], {"path": str(root / "runs"), "size_bytes": 20})
             self.assertEqual(payload["root_owned"], {"count": 2, "samples": ["cache/root-owned"], "scan_stopped_at_limit": False})
 
+    def test_doctor_disk_advises_on_build_cache_only_above_10_gib(self) -> None:
+        gib = 1024**3
+        for reclaimable, advised in ((10 * gib, False), (10 * gib + 1, True)):
+            with self.subTest(reclaimable=reclaimable), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {}}), encoding="utf-8")
+                (root / "cache" / "huggingface").mkdir(parents=True)
+                (root / "runs").mkdir()
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with (
+                        patch("kura.doctor._path_size_bytes", return_value=20),
+                        patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [
+                            {"Type": "Build Cache", "size_bytes": 31 * gib, "reclaimable_bytes": reclaimable}], "kura_managed": {}}),
+                        patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                        patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                    ):
+                        cmd_doctor_disk(argparse.Namespace())
+                finally:
+                    os.chdir(previous)
+                codes = [issue["code"] for issue in json.loads(stdout.getvalue())["issues"]]
+                self.assertEqual("docker_build_cache_reclaimable" in codes, advised)
+
     def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -1234,12 +1258,10 @@ class DoctorDockerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+            def fake_docker_run(command: list[str], *, capture: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
                 text = ""
-                if command[:2] == ["docker", "info"] and "--format" not in command:
+                if command[:2] == ["docker", "info"]:
                     text = "ok"
-                elif command[:3] == ["docker", "info", "--format"]:
-                    text = "/var/lib/docker\n"
                 elif command[:2] == ["docker", "version"]:
                     text = "Docker version\n"
                 elif command[:3] == ["docker", "system", "df"]:
@@ -1257,7 +1279,7 @@ class DoctorDockerTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor.docker_data_location", return_value=(Path("/var/lib/docker"), "")), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
                     self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
             finally:
                 os.chdir(previous)
@@ -1268,6 +1290,7 @@ class DoctorDockerTests(unittest.TestCase):
             # Not `kura run prune`: with --yes it also removes old runs.
             # The workspace AGENTS.md keeps state-changing Docker commands with the user.
             self.assertEqual(managed["remove_stopped"], "ask the user to run: docker container prune --filter label=io.kura.managed=true")
+            self.assertEqual(payload["docker_storage"]["root_dir"], str(Path("/var/lib/docker")))
             self.assertEqual(payload["huggingface_cache"]["path"], str(root.resolve() / "cache" / "huggingface"))
             self.assertNotIn("docker.mounts", payload["huggingface_cache"].get("note", ""))
             self.assertEqual(payload["local_images"], {name: "present" for name in PINNED_IMAGES})
@@ -1278,7 +1301,7 @@ class DoctorDockerTests(unittest.TestCase):
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             runs: list[list[str]] = []
 
-            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+            def fake_docker_run(command: list[str], *, capture: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
                 if command[:3] == ["docker", "image", "inspect"]:
                     found = command[3] in (PINNED_IMAGES["musubi-tuner"], PINNED_IMAGES["sd-scripts"])
                     return subprocess.CompletedProcess(command, 0 if found else 1, "[]\n" if found else "", "" if found else "No such image")
@@ -1291,7 +1314,7 @@ class DoctorDockerTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor.docker_data_location", return_value=(Path("/var/lib/docker"), "")), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
                     self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
             finally:
                 os.chdir(previous)
@@ -1313,7 +1336,7 @@ class DoctorDockerTests(unittest.TestCase):
             root = Path(directory)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
 
-            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+            def fake_docker_run(command: list[str], *, capture: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
                 if command[:3] == ["docker", "image", "inspect"]:
                     return subprocess.CompletedProcess(command, 1, "", "No such image")
                 if command[:3] == ["docker", "system", "df"] or command[:2] == ["docker", "ps"] or command[:3] == ["docker", "volume", "ls"]:
@@ -1323,7 +1346,7 @@ class DoctorDockerTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor.docker_data_location", return_value=(Path("/var/lib/docker"), "")), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
                     self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
             finally:
                 os.chdir(previous)
@@ -1332,6 +1355,98 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertIsNone(payload["gpu_available"])
             self.assertIn("docker pull nomadoor/kura-ai-toolkit@sha256:", payload["diagnosis"])
             self.assertEqual(list(payload)[0], "diagnosis")
+
+    def test_doctor_docker_reports_a_hung_daemon_instead_of_waiting(self) -> None:
+        from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            hung = subprocess.TimeoutExpired(["docker", "version"], DOCKER_INFO_TIMEOUT_SEC)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), \
+                        patch("kura.doctor.docker_daemon_problem", return_value="`docker info` did not answer within 30 seconds; Docker may still be starting"), \
+                        patch("kura.doctor.subprocess.run", side_effect=hung) as run, \
+                        patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 1)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertFalse(payload["daemon_reachable"])
+            self.assertEqual(payload["diagnostics"]["docker_version_returncode"], 124)
+            self.assertIn("did not answer within 30 seconds", payload["diagnostics"]["docker_version_stderr"])
+            self.assertTrue(all(call.kwargs.get("timeout") for call in run.call_args_list))
+
+    def test_doctor_asks_where_docker_keeps_its_data_in_one_place(self) -> None:
+        import kura.doctor as doctor
+
+        asked: list[list[str]] = []
+
+        def fake_docker_run(command: list[str], *, capture: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+            asked.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), \
+                patch("kura.doctor.docker_data_location", return_value=(None, "Docker Desktop keeps /var/lib/docker inside its own VM")) as location, \
+                patch("kura.doctor._docker_run", side_effect=fake_docker_run):
+            summary = doctor._docker_storage_summary()
+        location.assert_called_once()
+        self.assertNotIn("root_dir", summary)
+        self.assertEqual(summary["root_dir_not_measured"], "Docker Desktop keeps /var/lib/docker inside its own VM")
+        self.assertFalse(any(command[:2] == ["docker", "info"] for command in asked))
+
+    def test_doctor_says_why_docker_usage_was_not_measured(self) -> None:
+        import kura.doctor as doctor
+
+        def fake_docker_run(command: list[str], *, capture: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+            if command[:3] == ["docker", "system", "df"]:
+                return subprocess.CompletedProcess(command, 124, "", "`docker system df` did not answer within 30 seconds; the Docker daemon may be hung or still starting")
+            if command[:3] == ["docker", "image", "inspect"]:
+                return subprocess.CompletedProcess(command, 1, "", "No such image")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        patches = (patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None),
+                   patch("kura.doctor.docker_data_location", return_value=(Path("/var/lib/docker"), "")), patch("kura.doctor._docker_run", side_effect=fake_docker_run))
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            summary = doctor._docker_storage_summary()
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        cmd_doctor_docker(argparse.Namespace())
+                finally:
+                    os.chdir(previous)
+        docker = json.loads(stdout.getvalue())["docker_storage"]
+        for report in (summary, docker):
+            self.assertIn("`docker system df` exited with 124", report["usage_not_measured"])
+            self.assertIn("did not answer within 30 seconds", report["usage_not_measured"])
+        self.assertNotIn("usage", docker)
+
+    def test_image_build_stops_on_the_retired_build_cache_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"schema_version": 2, "docker": {"build_cache_limit_gb": 20}}), encoding="utf-8")
+            stderr = io.StringIO()
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli.enclosing_checkout", return_value=None), \
+                        patch("kura.cli._docker_run") as docker_run, patch("kura.cli.docker_daemon_problem") as daemon, patch("sys.stderr", stderr):
+                    self.assertEqual(cmd_image_build(argparse.Namespace(name="sd-scripts", ref=None)), 1)
+            finally:
+                os.chdir(previous)
+            docker_run.assert_not_called()
+            daemon.assert_not_called()
+            self.assertIn("cannot build image", stderr.getvalue())
+            self.assertIn("docker.build_cache_limit_gb", stderr.getvalue())
+            self.assertIn("docker.min_free_gb", stderr.getvalue())
 
     def test_doctor_workspace_points_an_old_schema_at_migrate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

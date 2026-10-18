@@ -904,6 +904,30 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             bring_home_ai_toolkit_models(run_dir, downloaded, "real-1")
             self.assertEqual(json.loads(target.read_text(encoding="utf-8")), listed)
 
+    def test_an_interrupted_ai_toolkit_models_copy_leaves_no_record_to_keep(self) -> None:
+        from kura.executors.runpod import bring_home_ai_toolkit_models
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "matched")
+            listed = {"kind": "ai_toolkit_models", "realization_id": "real-1", "files": []}
+            (downloaded / "realizations" / "real-1.ai-toolkit-models.json").write_text(json.dumps(listed), encoding="utf-8")
+            with patch("kura.fsio.os.replace", side_effect=OSError("interrupted")):
+                bring_home_ai_toolkit_models(run_dir, downloaded, "real-1")
+            # Neither the final name nor a temporary file is left; the next collection brings it home.
+            self.assertEqual([path.name for path in (run_dir / "realizations").iterdir() if "ai-toolkit-models" in path.name], [])
+            bring_home_ai_toolkit_models(run_dir, downloaded, "real-1")
+            self.assertEqual(json.loads((run_dir / "realizations" / "real-1.ai-toolkit-models.json").read_text(encoding="utf-8")), listed)
+
+    def test_an_interrupted_pod_record_copy_leaves_no_record_to_conflict_with(self) -> None:
+        from kura.executors.runpod import finalize_runpod_dataset_handoff
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "matched")
+            with patch("kura.fsio.os.replace", side_effect=OSError("interrupted")), self.assertRaises(OSError):
+                finalize_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+            self.assertFalse((run_dir / "realizations" / "real-1.runpod-input.json").exists())
+            self.assertEqual(list((run_dir / "realizations").glob(".*.tmp")), [])
+
     def test_local_or_remote_drift_projects_a_warning_and_never_overwrites_records(self) -> None:
         from kura.executors.runpod import project_runpod_dataset_handoff as finalize_runpod_dataset_handoff
 
