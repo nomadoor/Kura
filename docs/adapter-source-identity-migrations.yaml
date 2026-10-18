@@ -31,11 +31,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: b028f38e1e730c111e7d627cba1282d72aae6bac76b874208697e5f9c5876e0e
+      value: 82f2273cc0429fac9e465be1cb4bad9b7c906a0215a0ed52df42a7525ca16d46
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: efb794a55c1be0868afe31f8826106a88b0be7cd06b06207df43f8b70537e444
+      value: 91bc7dcb4dab7e7dcb74970be216cd7b44982dd6485582ce8b8a2aeed4d3af35
   - id: sd-scripts-capabilities-arch-2026-10-18
     backend: sd-scripts
     reason: >-
@@ -56,11 +56,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 2c37e7c607630ffb8619b3c5662ee025025b89d50e7dced449f88554c7ef794f
+      value: a82b9823a45a88a03e3ef8c2303785ec969a3096c35a8856ac14622d36253661
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 8a1c51201f5c3e21b2d6726d5d48543e1ef397685f66143ee09b2c8fe056c171
+      value: e935cab4c887e32900beb51bc0a96f19ab3df5e80ed3d03d973dcf3198e6940d
   - id: sd-scripts-final-state-same-save-2026-10-18
     backend: sd-scripts
     reason: "Kura no longer passes --save_state_on_train_end: at the pinned sd-scripts every trainer saves the end-of-training state when save_state or save_state_on_train_end is set, so with --save_state the trainer writes the same files as before. The trainer's end-of-training state (<name>-state) is no longer published as a second training-state artifact when a verified state of the run at its step is already published (the step state it repeats, with a different RNG file); its folder stays in outputs/. The trainer command's effect, training, weights, and every step state the recorded smokes published are unchanged, and a Resume from the last step still finds a verified state at that step; only the repeated copy is not added to the store, so the evidence below carries over."
