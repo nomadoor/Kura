@@ -28,7 +28,7 @@ class NeedsPersonTests(unittest.TestCase):
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps(NEEDS_PERSON), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "k"}), patch.object(runpod, "_runpod_request", return_value={}):
-                status = runpod.stop_runpod(run_dir, {"gpu_type_ids": ["A"]})
+                status = runpod.stop_runpod(run_dir)
             self.assertEqual((status["state"], status["exit_code"]), ("recovery_required", 0))
             self.assertTrue(status["pod_stopped_at"])
 
