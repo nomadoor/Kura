@@ -42,6 +42,9 @@ why, so it is not raised again.
 
 
 - 2026-10-19 | images | The build-context test reads only unindented `COPY `/`ADD ` lines, so a lower-case instruction or a `RUN --mount=type=bind,source=...` from outside docker/ would pass it and fail the build instead | review of the build context | -
+
+
+- 2026-10-19 | cleanup | An image another workspace's `images.<name>` override names (a locally built tag in a `nomadoor/kura-*` repository) is listed as an old image here, and removing it costs a rebuild, not a download; `--models unreferenced` also refuses the workspace's own legacy AI-Toolkit directory and `hub/blobs` with a shared cache (they can still be named) | review of the shared-cache refusal | P7
 - 2026-10-19 | tests | The moved-lease-during-retry test stubs `kura_pod_self_delete`, so the real `kura_lease_moved` check never runs in a test, and it runs under bash, not sh; drive the real self-delete against the 503 sandbox with a stubbed sleep that moves the deadline | review of the self-delete retry | P6
 - 2026-10-19 | RunPod lease | A delete attempt already in flight when `kura run lease` moves the deadline can still delete the Pod (a window of one attempt, at most about 60 s) | review of the self-delete retry | P6
 - 2026-10-19 | render cost | `kura render launch` has no way to shorten the RunPod lease, so the cost ceiling of a render that takes minutes is computed over the 12 h default lease (about $7 on an A40) | ComfyUI v0.41.3 upgrade | -
@@ -81,6 +84,7 @@ why, so it is not raised again.
 
 ## Rejected
 
+- 2026-10-19 | cleanup | REJECTED: `--images old` cannot see images frozen in another workspace's unfinished runs, but a pinned image needs no guard: the pins are digests, Docker refuses to remove an image a container uses (and `kura cleanup` now leaves other workspaces' containers), and a compiled run pulls the same digest again at launch, a download, the class it is listed in | 0.7.0 audit | P7
 - 2026-10-17 | RunPod recovery | REJECTED: collection already brings `recovery/` home: the terminal snapshot copies every file under the run on the Pod except its top-level `cache/` and `transfer/` (`runpod_ssh._runpod_remote_snapshot_manifest`), and the Anima recovery copy is written under `recovery/`; tests/test_runpod_recovery_collection.py holds this (was: RunPod collection does not bring back `recovery/` (only outputs, checkpoints, samples, metrics), so an Anima native recovery copy made on a failed RunPod run stays on the Pod) | review of the sd-scripts acceptance fixes pull request | P7
 - 2026-10-18 | conformance | REJECTED: no trainer writes a cache under outputs/, so every weights-sized file counted there is a save the bound is meant to cover (was: real_smoke `_weights_bytes` counts every `.safetensors`/`.bin`/`.pt` under outputs, so a trainer cache written there would count against the bound) | review of the disk watch / bounded estimate change | P8
 - 2026-10-17 | ComfyUI specs | REJECTED: a check before launch would copy the image's rule into a second place; the Pod's refusal already says to compile again (was: A RunPod render compiled before 2026-10-16 may hold a model spec with both repo and url or an empty target_name; the image refuses it on the Pod (saying to compile again) instead of the launch refusing it before a Pod exists) | review of the ComfyUI prepare pull request | P11

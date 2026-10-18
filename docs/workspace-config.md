@@ -88,7 +88,7 @@ Kura mounts that directory at `/workspace/cache/huggingface` in every local
 container, measures free space on its drive before launch, and counts the models
 already in it. `kura cleanup plan` lists the models in a cache outside the workspace
 too, and `kura cleanup --models <id>... --yes` removes only the ones named,
-since other workspaces may share it. AI-Toolkit's own model
+since other workspaces may share it; `--models unreferenced` is refused for it, because only this workspace's records are read. Point several workspaces at a cache outside all of them, never into one workspace's own cache, which that workspace treats as its own. AI-Toolkit's own model
 downloads go into this cache too: diffusers repositories in `hub/`, single files
 in `ai-toolkit-models/`. Two local runs that
 fetch the same AI-Toolkit model at the same time can collide in the trainer's

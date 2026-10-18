@@ -86,7 +86,10 @@ unrecorded), for the listing and the whole-run delete alike. Kura fails closed: 
 counts as using every model and image, and a compiled run uses the models and
 image it froze. The Hugging Face cache is
 listed even when it is outside the workspace, and its items are removed one by
-one on the user's yes, never as a whole.
+one on the user's yes, never as a whole. A cache outside the workspace
+(configured there, or a directory linked there) may be shared, and only this
+workspace's records are read, so "every unreferenced model" is refused for it:
+the user names each model.
 
 **4. Other surfaces point at that command and do not clean up.**
 `kura doctor disk`, the launch's disk refusal, and the disk watch's stop
