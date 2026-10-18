@@ -11,6 +11,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.comfyui_models import DEFAULT_MODEL_REGISTRY, endpoint_fingerprint, required_model_refs, resolve_model_specs, visible_model_refs
+from kura.images import BUILD_SOURCES
 from kura.render import _cleanup_stage, _fetch_endpoint_object_info, _lora_insert_from_sidecar, _materialize_stage, _model_patch_stage_plan, insert_lora_loader, launch_render, patch_workflow
 
 
@@ -226,11 +227,10 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         self.assertEqual(patched["4"]["inputs"]["name"], "patch.safetensors")
         self.assertEqual(patched["5"]["inputs"]["lora_name"], "lora.safetensors")
 
-    def test_managed_comfyui_pin_contains_core_anima_lllite_merge(self) -> None:
+    def test_managed_comfyui_dockerfile_builds_the_pinned_source(self) -> None:
         dockerfile = (ROOT / "docker" / "comfyui" / "Dockerfile").read_text(encoding="utf-8")
-        revision = "0f42ba51463174fb255f2c4605ae0e0b441fe6d7"
-        self.assertIn(revision, dockerfile)
-        self.assertIn(revision, (Path(__file__).resolve().parents[1] / "docker" / "comfyui" / "Dockerfile").read_text(encoding="utf-8"))
+        build_arg, revision = BUILD_SOURCES["comfyui"]
+        self.assertIn(f"ARG {build_arg}={revision}\n", dockerfile)
 
     def test_authored_lllite_workflow_loads_then_applies_patch(self) -> None:
         workflow = json.loads((ROOT / "examples" / "sd-scripts-anima-smoke" / "anima-lllite-api.json").read_text(encoding="utf-8"))

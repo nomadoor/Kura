@@ -1,0 +1,90 @@
+schema_version: 1
+component: managed-comfyui
+observed_at: 2026-10-18
+purpose: runtime update adoption (ComfyUI ref bump for RunPod renders); no image-quality claim
+upstream:
+  repository: Comfy-Org/ComfyUI
+  old:
+    commit: 0f42ba51463174fb255f2c4605ae0e0b441fe6d7
+    version: 0.28.0 (git describe v0.28.0-8)
+  new:
+    commit: 8713616fcc321624e306bbd36be5906203dcb0dc
+    version: 0.41.3 (lightweight tag on the release/v0.41 branch, not on master)
+  delta: old is an ancestor of new; 551 commits, 730 files
+  v0.41.0_to_v0.41.3: one partner API node (Krea 3), workflow-templates 0.11.84 to 0.11.87, version string; nothing Kura uses
+images:
+  old: nomadoor/kura-comfyui@sha256:addecff7524ddd1bc4731515f50173bcf085814002e76cc4f2ce7c9090ac9a15
+  new: nomadoor/kura-comfyui@sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9
+  new_tag: nomadoor/kura-comfyui:v0.41.3-20261018
+  base: pytorch/pytorch:2.11.0-cuda13.0-cudnn9-runtime (unchanged)
+  cuda: '13.0'
+# What Kura uses from ComfyUI and how the delta lands on it (source audit of the exact commits).
+impact:
+  - delta: HTTP API Kura calls (system_stats, object_info, prompt, history, view, queue, interrupt)
+    kura_status: built-in client, compatible; /prompt also accepts an optional workflow_metadata, history and view entries keep filename/subfolder/type
+    action: none
+    evidence: source, local render below
+  - delta: assets system (off by default) adds id/preview_id to outputs only when enabled
+    kura_status: not affected
+    action: none
+    evidence: source
+  - delta: CLI flags (--listen/--port unchanged; --disable-api-nodes now an alias of --offline; new --disable-comfy-compiler, --disable-cuda-graphs)
+    kura_status: Kura passes only --listen/--port
+    action: none
+    evidence: source, local start below
+  - delta: model folder names (only datasets and previews added)
+    kura_status: kura_comfy_prepare.py paths unchanged
+    action: none
+    evidence: source
+  - delta: requirements (torchaudio dropped, comfy-kitchen 0.2.37, comfy-aimdo 0.5.6, frontend 1.55.17); torch still unpinned
+    kura_status: absorbed by the rebuild; the image keeps the base torch 2.11.0+cu130 (the Dockerfile CUDA check passed)
+    action: rebuild
+    evidence: image build, pip list in the image
+  - delta: Comfy Compiler / CUDA graphs and DynamicVRAM on by default where aimdo and CUDA are present
+    kura_status: behavior change; local start log shows DynamicVRAM enabled; RunPod first-inference time and VRAM not yet observed
+    action: observe on the RunPod render
+    evidence: local render below
+  - delta: shipped workflow samples (anima, sd1.5, sdxl, flux2-klein, z-image, qwen-image 2512 and edit-2511, krea2, ideogram4)
+    kura_status: every API class_type is registered in /object_info; only Anima base rendered end to end
+    action: re-render the other samples on the new image
+    evidence: object_info probe, local render below
+  - delta: changed sample nodes (ResolutionSelector optional preview input, ModelSamplingAuraFlow optional sampling, EmptyLatentImage default 512 to 1024, ConditioningZeroOut also zeroes conditioning_scale/direct_context)
+    kura_status: optional or defaulted inputs; API samples set their values explicitly
+    action: none
+    evidence: source
+  - delta: ModelPatchLoader gains detection branches (Qwen Image 2.1 Fun, MiniMax H3 Fun, Uni3C); AnimaLLLiteApply moved category only
+    kura_status: both nodes registered with the same required inputs; Anima LLLite weights not loaded on the new image
+    action: one Anima LLLite render
+    evidence: object_info probe
+  - delta: LoRA key maps (Qwen Image 2.1, Flux3, MiniMax H3, HiDream O1 added; existing families unchanged)
+    kura_status: LoraLoader and LoraLoaderModelOnly registered; no Kura-trained LoRA rendered on the new image
+    action: one render with a Kura-trained LoRA
+    evidence: source, object_info probe
+  - delta: new families renderable in user workflows (Qwen Image 2.1, Flux3, MiniMax H3, Trellis2, others)
+    kura_status: generic (user workflows); no shipped sample; the old pin had no Qwen Image 2.1 support
+    action: none in this change
+    evidence: source
+  - delta: 16 partner API nodes removed (Kling, OpenAI Dalle/Sora, Veo, ByteDance and similar)
+    kura_status: unused by Kura and its samples
+    action: none
+    evidence: static registration diff
+local_probe:
+  image: kura-comfyui:dev (the build later published as the new digest)
+  gpu: NVIDIA GeForce RTX 4070 Ti 12 GB
+  container: labeled io.kura.purpose=smoke, port 127.0.0.1:18188, three Anima weights mounted read-only from the local Hugging Face cache; removed after the probe
+  exact_commit: passed
+  runtime: torch 2.11.0+cu130, CUDA available, comfyui_version 0.41.3
+  server_up_seconds: 21
+  object_info_nodes: 987
+  sample_class_types: every class_type in the API samples is registered, plus LoraLoader, LoraLoaderModelOnly, ModelPatchLoader (required name), AnimaLLLiteApply (required model, model_patch, image, strength, start_percent, end_percent); MarkdownNote is a frontend-only note in the UI exports
+  render:
+    harness: kura render compile, launch --dry-run, launch (local executor), separate smoke workspace
+    run_id: 20261018-2221_anima-base-v0413_a68e
+    workflow: workflows/samples/anima/anima-base-v1.0_api.json, seed 1234, 1152x896, 30 steps
+    outcome: completed, 1 image collected
+    prompt_executed_seconds: 33.7
+    sampling_rate: 1.61 it/s after a 7 s first-step initialization
+limits:
+  - One sample (Anima base) rendered, locally; the other shipped samples, an Anima LLLite render, and a Kura-trained LoRA render are not observed on the new image.
+  - No RunPod render on the new digest yet (pull time, host CUDA, compiler-on timing there are unobserved).
+  - Pixel parity with the old image was not compared.
