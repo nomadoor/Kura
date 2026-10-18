@@ -96,6 +96,9 @@ _OPTIONAL_ROLE_FLAGS = {"vae": "--vae", "llm_adapter": "--llm_adapter_path", "t5
 NETWORK_MODULES = {"sd15": "networks.lora", "sdxl": "networks.lora", "flux1": "networks.lora_flux", "anima": "networks.lora_anima"}
 # --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps
 # (library/optimizer.py:509 and train_network.py:1206 at 37a1cbb), so they are owned too.
+# --save_state_on_train_end is no longer emitted (the trainer saves the end state under
+# --save_state alone) but stays owned: written without --save_state, where Kura manages no state,
+# it would save a state Kura neither publishes nor counts in the disk estimate.
 _COMMAND_FLAGS = EPOCH_SAVE_FLAGS | {"--lr_scheduler_type", "--max_train_epochs"} | {
     "--dataset_config", "--pretrained_model_name_or_path", "--clip_l", "--t5xxl", "--ae", "--qwen3", "--vae",
     "--llm_adapter_path", "--t5_tokenizer_path", "--network_module", "--network_dim", "--network_alpha",

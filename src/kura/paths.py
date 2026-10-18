@@ -65,7 +65,9 @@ def hf_cached_file(hf_cache: Path, repo_id: str, filename: str, *, revision: str
     try:
         ref = repo / "refs" / commit
         if ref.is_file():
-            commit = ref.read_text(encoding="utf-8").strip()
+            # As huggingface_hub reads it: the whole file, no whitespace stripped, so a ref the
+            # container would not find in snapshots/ is not found here either.
+            commit = ref.read_text(encoding="utf-8")
         snapshots = repo / "snapshots"
         if not snapshots.is_dir() or commit not in os.listdir(snapshots):
             return None

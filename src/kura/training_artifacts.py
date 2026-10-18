@@ -1052,11 +1052,22 @@ def frozen_training_state_managed(run: dict[str, Any], command_lock: dict[str, A
     value = command_lock.get("training_state_managed")
     if isinstance(value, bool):
         return value
-    from kura.backends import get_backend
+    return training_state_managed(run, frozen_training_state_contract(run, command_lock), frozen=True)
 
-    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    legacy = get_backend(backend.get("name")).legacy_training_state
-    return training_state_managed(run, legacy(run) if legacy is not None else None, frozen=True)
+
+def frozen_training_state_contract(run: dict[str, Any], command_lock: dict[str, Any]) -> dict[str, Any]:
+    """The training-state contract a compiled run's command was built under: the adapter's
+    `legacy_training_state` contract for a lock written before compile froze
+    `training_state_managed`, when the adapter has one, else the current contract. The plan's
+    capability and warning and `frozen_training_state_managed` all read it."""
+    if not isinstance(command_lock.get("training_state_managed"), bool):
+        from kura.backends import get_backend
+
+        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+        legacy = get_backend(backend.get("name")).legacy_training_state
+        if legacy is not None:
+            return legacy(run)
+    return training_state_contract(run)
 
 
 def _frozen_command_lock(run_dir: Path) -> dict[str, Any]:

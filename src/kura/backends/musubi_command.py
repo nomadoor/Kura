@@ -69,6 +69,9 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
 # flag Kura emits for some architectures only by _reject_emitted_duplicates.
 # --lr_scheduler_type replaces the named schedule and --max_train_epochs overrides the steps, both
 # decided by Kura (trainer_base.py:373 and :1771 at v0.3.5), so they are owned too.
+# --save_state_on_train_end is no longer emitted (the trainer saves the end state under
+# --save_state alone) but stays owned: written without --save_state, where Kura manages no state,
+# it would save a state Kura neither publishes nor counts in the disk estimate.
 MUSUBI_OWNED_FLAGS = EPOCH_SAVE_FLAGS | frozenset({"--lr_scheduler_type", "--max_train_epochs"}) | frozenset({
     "--audio_vae", "--base_weights", "--byt5", "--cache_seed", "--clip", "--dataset_config",
     "--dit", "--dit_high_noise", "--fp8", "--h3_guidance_loss_uncond_cache",

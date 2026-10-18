@@ -10,6 +10,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -123,6 +124,36 @@ class EveryBackendTests(unittest.TestCase):
                 lock = {"backend": "ai-toolkit", "cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "x.yaml"], "env": {}, "adapter_source": {}}
                 (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps(lock), encoding="utf-8")
                 self.assertEqual(training_state_capture_required(run_dir), required)
+
+    def test_the_plan_reads_an_old_lock_by_the_rule_of_its_time(self) -> None:
+        # The plan's capability, warning, and saved answer all follow the lock's contract.
+        import os
+
+        import kura.run_commands.plan as plan
+        import kura.training_artifacts as training_artifacts
+
+        for accumulation, saved in ((2, False), (1, True)):
+            with self.subTest(accumulation=accumulation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                run = _ai_toolkit(model_arch="sdxl", gradient_accumulation_steps=accumulation)
+                run["compute"] = {"executor": "docker"}
+                run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+                run_dir = _compiled(str(root), run)
+                (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+                lock = {"backend": "ai-toolkit", "cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "x.yaml"], "env": {}, "adapter_source": {}}
+                (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with patch.object(plan, "frozen_training_state_contract", wraps=training_artifacts.frozen_training_state_contract) as owner:
+                        state = plan.plan_run(run["id"])["training_state"]
+                finally:
+                    os.chdir(previous)
+                owner.assert_called()
+                self.assertEqual(state["saved"], saved)
+                self.assertEqual(state["capability"] == "unsupported", not saved)
+                self.assertEqual(state["warning"] is not None and state["warning"].startswith("not saved"), not saved)
 
 
 if __name__ == "__main__":

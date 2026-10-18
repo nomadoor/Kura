@@ -7,7 +7,6 @@ import json
 import os
 import secrets
 import shlex
-import shutil
 import sys
 import tarfile
 import time
@@ -18,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from kura import __version__
 from kura.yamlio import YAMLError, load_yaml
+from kura.fsio import atomic_write_bytes
 from kura.images import runpod_min_cuda_version
 from kura.install_source import kura_provenance
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff, handoff_was_frozen
@@ -985,7 +985,8 @@ def finalize_runpod_dataset_handoff(
             continue
         target = local / record.name
         if not target.exists():
-            shutil.copyfile(record, target)
+            # Whole or not at all: a truncated copy would later read as a conflicting record.
+            atomic_write_bytes(target, record.read_bytes())
         elif target.read_bytes() != record.read_bytes():
             conflicts.append(record.name)
     postflight_ref = f"realizations/{realization_id}.dataset-input-postflight.json"
@@ -1032,16 +1033,17 @@ def bring_home_ai_toolkit_models(run_dir: Path, downloaded_run: Path, realizatio
 
     Any AI-Toolkit command that declares MODELS_PATH gets one, with or without
     a frozen dataset handoff, so this is apart from the handoff records. Only
-    this realization's name comes home, and a record already present is kept.
-    A lost listing costs a record, never the download.
+    this realization's name comes home, and a record already present is kept,
+    so it is written whole or not at all: an interrupted copy leaves no
+    truncated record for a later collection to keep. A lost listing costs a
+    record, never the download.
     """
     name = f"{realization_id}{AI_TOOLKIT_MODELS_RECORD_SUFFIX}"
     remote = downloaded_run / "realizations" / name
     target = run_dir / "realizations" / name
     try:
         if remote.is_file() and not target.exists():
-            target.parent.mkdir(exist_ok=True)
-            shutil.copyfile(remote, target)
+            atomic_write_bytes(target, remote.read_bytes())
     except OSError:
         return
 

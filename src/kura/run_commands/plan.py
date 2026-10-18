@@ -44,7 +44,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, frozen_training_state_contract, frozen_training_state_managed, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -1277,7 +1277,9 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     native_config = backend_config(run, backend.get("name")) if isinstance(backend.get("name"), str) else {}
     state_policy = training_state_policy(run)
     state_cadence, trainer_default_cadence = _training_state_cadence(run)
-    state_capability = training_state_contract(run)["capability"]
+    # A compiled run is read under the contract its command was built with.
+    compiled = source == manifest
+    state_capability = (frozen_training_state_contract(run, command_lock) if compiled else training_state_contract(run))["capability"]
     state_payload = {
         "enabled": state_policy["enabled"],
         "keep_generations": state_policy["keep_generations"],
@@ -1285,7 +1287,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "trainer_default_cadence": trainer_default_cadence,
         "capability": state_capability,
         # The answer that decides what happens: the trainer saves state, and a finished run must leave it.
-        "saved": frozen_training_state_managed(run, command_lock) if source == manifest else training_state_managed(run),
+        "saved": frozen_training_state_managed(run, command_lock) if compiled else training_state_managed(run),
         "warning": (
             "disabled: crash or Pod-loss Resume is unavailable"
             if not state_policy["enabled"]
