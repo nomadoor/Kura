@@ -640,6 +640,8 @@ class ScenarioRun:
     dataset: str  # "one" item or "multi" items in buckets; `conformance_datasets` names them per backend
     steps: int  # a fresh run's recipe steps, or a Resume's target step
     resume_of: str | None = None
+    accumulation: int = 1  # backend.config.gradient_accumulation_steps
+    backends: tuple[str, ...] | None = None  # the backends that run it; None is every backend
 
 
 SCENARIO = (
@@ -650,7 +652,18 @@ SCENARIO = (
     ScenarioRun("multi-fresh", "multi", 7),
     ScenarioRun("multi-split", "multi", 4),
     ScenarioRun("multi-resume", "multi", 7, resume_of="multi-split"),
+    # A step is one optimizer update on every backend (P1): AI-Toolkit, whose legacy accumulation
+    # counted micro-batches, and sd-scripts as the control. Three items, so a window of two
+    # micro-batches fills inside an epoch (Accelerate also ends a window at the end of an epoch).
+    ScenarioRun("multi-accum-2", "multi", 4, accumulation=2, backends=("ai-toolkit", "sd-scripts")),
 )
+
+
+def scenario_runs(backend: str, keys: list[str] | None = None) -> list[ScenarioRun]:
+    """The scenario runs `backend` runs, in order; only those named in `keys` when given."""
+    return [run for run in SCENARIO if (run.backends is None or backend in run.backends) and (not keys or run.key in keys)]
+
+
 # A Resume and the uninterrupted runs it is checked against (P3, `resume_problems`): two
 # controls on one item, whose learned state the Resume must equal when they equal each
 # other; one on several, whose step count and scheduler it must equal.
@@ -675,8 +688,16 @@ def conformance_datasets(backend: str) -> dict[str, str]:
     return {"one": IMAGE_DATASET, "multi": BUCKET_DATASET}
 
 
-def conformance_smoke(backend: str, kind: str) -> Smoke:
-    """The one small model per backend, training its `kind` ("one" or "multi") dataset with a save cadence."""
+def conformance_smoke(backend: str, kind: str, *, accumulation: int = 1) -> Smoke:
+    """The one small model per backend, training its `kind` ("one" or "multi") dataset with a save
+    cadence, and with `accumulation` micro-batches per optimizer update when it is not 1."""
+    smoke = _conformance_smoke(backend, kind)
+    if accumulation == 1:
+        return smoke
+    return replace(smoke, config={**smoke.config, "gradient_accumulation_steps": accumulation})
+
+
+def _conformance_smoke(backend: str, kind: str) -> Smoke:
     dataset = conformance_datasets(backend)[kind]
     if backend == "sd-scripts":
         config = {
@@ -757,19 +778,44 @@ def state_counters(payload: Path) -> dict[str, Any]:
     return counters
 
 
-def compare_values(image: str, first: Path, second: Path, names: list[str]) -> dict[str, list[int]]:
-    """Each named file's [differing, total] value leaves in two payloads, compared by
-    `compare_state_values.py` in `image`, the run's pinned trainer image (it has torch),
-    with no network and everything mounted read-only."""
+def _compare_in_image(image: str, payloads: list[Path], args: list[str]) -> Any:
+    """`compare_state_values.py args` run in `image`, the run's pinned trainer image (it has
+    torch), with no network and the payloads mounted read-only at /a and /b; its JSON answer."""
+    mounts = [item for payload, target in zip(payloads, ("/a", "/b")) for item in ("-v", f"{payload.resolve()}:{target}:ro")]
     argv = [
         "docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
-        "-v", f"{first.resolve()}:/a:ro", "-v", f"{second.resolve()}:/b:ro", "-v", f"{COMPARE_VALUES.parent}:/c:ro",
-        image, "-I", f"/c/{COMPARE_VALUES.name}", "/a", "/b", *names,
+        *mounts, "-v", f"{COMPARE_VALUES.parent}:/c:ro",
+        image, "-I", f"/c/{COMPARE_VALUES.name}", *args,
     ]
     result = subprocess.run(argv, capture_output=True, text=True, check=False)
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip()[-500:] or f"exit code {result.returncode}")
     return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def compare_values(image: str, first: Path, second: Path, names: list[str]) -> dict[str, list[int]]:
+    """Each named file's [differing, total] value leaves in two payloads, compared in `image`."""
+    return _compare_in_image(image, [first, second], ["/a", "/b", *names])
+
+
+def accumulation_problems(workspace: Path, run_id: str, steps: int) -> list[str]:
+    """P1 under gradient accumulation: the optimizer's own completed-update counter in the run's
+    final training state equals the recipe steps. Kura's step markers and `status.last_step`
+    count the trainer's steps, which a trainer that counts micro-batches as steps also advances;
+    the optimizer counts only updates. It is read in the run's pinned trainer image."""
+    state = _run_states(workspace, run_id).get(steps)
+    if state is None:
+        return [f"no training state at step {steps} to read the optimizer's update counter from"]
+    payload = state[1]
+    names = [name for name in ("optimizer.bin", "optimizer.pt") if (payload / name).is_file()]
+    if not names:
+        return [f"the state at step {steps} holds no optimizer file"]
+    image = str(_env_lock(workspace / "runs" / run_id).get("selected_image"))
+    try:
+        counts = _compare_in_image(image, [payload], ["--optimizer-steps", "/a", *names])
+    except (OSError, RuntimeError, ValueError) as exc:
+        return [f"cannot read the optimizer's update counter in the trainer image: {exc}"]
+    return [f"{name} holds {held} optimizer updates, recipe steps {steps}" for name, held in counts.items() if held != [steps]]
 
 
 CANNOT_COMPARE = "cannot compare values in the trainer image"
@@ -1050,7 +1096,7 @@ def runpod_cost_ceiling(workspace: Path, config: dict[str, Any], smoke: Smoke) -
     return {**ceiling, "priced_gpu_type_ids": priced}
 
 
-def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str | tuple[str, ...], yes: bool) -> int:
+def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str | tuple[str, ...], yes: bool, runs: list[str] | None = None) -> int:
     if workspace.resolve() == REPO.resolve():
         raise SystemExit("conformance creates runs; give it a separate workspace (`kura init` one), not this checkout")
     if not (workspace / "workspace.yaml").is_file():
@@ -1060,6 +1106,9 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
         raise SystemExit(problem)
     if runpod and len(backends) != 1:
         raise SystemExit("the RunPod pass runs one backend; name it with --backend")
+    plans = {backend: scenario_runs(backend, runs) for backend in backends}
+    if not all(plans.values()):
+        raise SystemExit(f"no scenario run {runs} for {', '.join(b for b, planned in plans.items() if not planned)}")
     config = load_yaml(workspace / "workspace.yaml") or {}
     hf_cache = local_hf_cache(workspace, config)
     print(f"Conformance plan: workspace {workspace}, executor {'runpod (' + ', '.join(_gpus(gpu)) + ')' if runpod else 'local Docker'}, Hugging Face cache {hf_cache}")
@@ -1067,7 +1116,11 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
         smoke = conformance_smoke(backend, "one")
         print(f"  {backend:13} {smoke.architecture:5} {smoke.model_base}: {_cache_state(hf_cache, smoke)}")
     datasets = sorted({dataset for backend in backends for dataset in conformance_datasets(backend).values()})
-    print("  runs per backend, in order: " + "; ".join(f"{run.key} {'Resume to ' if run.resume_of else ''}{run.steps} steps" for run in SCENARIO))
+    for backend, planned in plans.items():
+        print(f"  {backend} runs, in order: " + "; ".join(
+            f"{run.key} {'Resume to ' if run.resume_of else ''}{run.steps} steps" + (f" (accumulation {run.accumulation})" if run.accumulation != 1 else "")
+            for run in planned
+        ))
     print(f"  datasets {', '.join(datasets)} (1 item, or 3 items in 3 buckets): created when absent, never rewritten")
     ceiling: dict[str, Any] = {}
     if runpod:
@@ -1077,10 +1130,11 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
         if ceiling.get("priced_gpu_type_ids"):
             gpu = tuple(ceiling["priced_gpu_type_ids"])
             print(f"  RunPod GPUs with a current price, the only ones the runs ask for: {', '.join(gpu)}")
-        print(f"  RunPod: {len(SCENARIO)} Pods one after another, each deleted by its maximum lease ({ceiling['max_lease']}) at the latest")
+        pods = len(plans[backends[0]])
+        print(f"  RunPod: {pods} Pods one after another, each deleted by its maximum lease ({ceiling['max_lease']}) at the latest")
         print(f"  cost ceiling per Pod: {format_cost_ceiling(ceiling)}")
         if ceiling.get("max_cost") is not None:
-            print(f"  cost ceiling for all {len(SCENARIO)} Pods: about ${ceiling['max_cost'] * len(SCENARIO):.2f}; a Pod trains for minutes and is deleted when its run is collected, so a pass costs far less")
+            print(f"  cost ceiling for all {pods} Pods: about ${ceiling['max_cost'] * pods:.2f}; a Pod trains for minutes and is deleted when its run is collected, so a pass costs far less")
     unknown_ceiling = (
         f"the RunPod pass launches only under a known cost ceiling, and this one is unknown: {ceiling.get('reason')}; "
         "fix that (or choose a --gpu RunPod has a current price for) and run again"
@@ -1102,8 +1156,8 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
         def fail(promise: str, messages: list[str], key: str) -> None:
             results[promise] = (results[promise] or []) + [f"{key}: {message}" for message in messages]
         ids: dict[str, str] = {}
-        for run in SCENARIO:
-            smoke = conformance_smoke(backend, run.dataset)
+        for run in plans[backend]:
+            smoke = conformance_smoke(backend, run.dataset, accumulation=run.accumulation)
             if runpod:
                 smoke = replace(smoke, executor="runpod", gpu=gpu)
             slug = f"conf-{backend.split('-')[0]}-{run.key}"
@@ -1130,11 +1184,15 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str 
             source = next((item for item in SCENARIO if item.key == run.resume_of), None)
             for promise, messages in check_run(workspace, run_id, source.steps if source else 0, run.steps).items():
                 fail(promise, messages, run.key)
+            if run.accumulation != 1:
+                fail("P1", accumulation_problems(workspace, run_id, run.steps), run.key)
             if not runpod:
                 # The disk peak and the model cache are sampled on this machine, not on a Pod.
                 fail("P8", disk_problems(peak, _checkpoint_estimate(workspace / "runs" / run_id)), run.key)
                 fail("P4", model_revision_problems(hf_cache, smoke), run.key)
         for resumed, controls in COMPARISONS.items():
+            if resumed not in {run.key for run in plans[backend]}:
+                continue
             # A Resume, or a control it is held to, that did not complete leaves P3 unproven: a failure.
             missing = [key for key in (resumed, *controls) if key not in ids]
             if missing:
@@ -1181,10 +1239,11 @@ def main() -> int:
     conformance_parser.add_argument("--backend", action="append", choices=CONFORMANCE_BACKENDS, help="Only this backend (repeatable); default all")
     conformance_parser.add_argument("--runpod", action="store_true", help="The billed RunPod pass of one backend; shows the cost ceiling first")
     conformance_parser.add_argument("--gpu", action="append", help=f"RunPod GPU type for --runpod, repeatable; the Pod lands on one with stock (default: {', '.join(CONFORMANCE_GPUS)}; the models are tiny)")
+    conformance_parser.add_argument("--run", action="append", choices=[run.key for run in SCENARIO], help="Only this scenario run (repeatable); a Resume needs its source named too; default all")
     conformance_parser.add_argument("--yes", action="store_true", help="Launch the runs after showing the plan")
     args = parser.parse_args()
     if args.command == "conformance":
-        return conformance(args.workspace.resolve(), args.backend or list(CONFORMANCE_BACKENDS), runpod=args.runpod, gpu=tuple(args.gpu) if args.gpu else CONFORMANCE_GPUS, yes=args.yes)
+        return conformance(args.workspace.resolve(), args.backend or list(CONFORMANCE_BACKENDS), runpod=args.runpod, gpu=tuple(args.gpu) if args.gpu else CONFORMANCE_GPUS, yes=args.yes, runs=args.run)
     workspace = Path.cwd()
     if not (workspace / "workspace.yaml").is_file():
         raise SystemExit("run from a Kura workspace root")

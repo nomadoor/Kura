@@ -6,6 +6,7 @@ must not save state Kura cannot use (capability "unsupported").
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from kura.backends.sd_scripts import command_sd_scripts
+from kura.run_commands.common import backend_command_lock
 from kura.training_artifacts import training_state_capture_required, training_state_contract, training_state_managed
 from tests.test_sd_scripts_backend import base_run
 
@@ -103,8 +105,24 @@ class EveryBackendTests(unittest.TestCase):
                     run = make()
                     run["recovery"] = {"training_state": {"enabled": enabled, "keep_generations": 2}}
                     run_dir = _compiled(directory, run)
-                    argv = " ".join(get_backend(run["backend"]["name"]).command(run)["argv"])
-                    self.assertEqual(saves(argv), training_state_capture_required(run_dir))
+                    command = get_backend(run["backend"]["name"]).command(run)
+                    # Compile freezes the decision with the command, and collection reads it there.
+                    lock = backend_command_lock(run, command, {"kind": "test"})
+                    self.assertEqual(lock["training_state_managed"], saves(" ".join(command["argv"])))
+                    (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+                    self.assertEqual(training_state_capture_required(run_dir), saves(" ".join(command["argv"])))
+
+    def test_a_lock_written_before_compile_froze_the_decision_reads_the_rule_of_its_time(self) -> None:
+        # AI-Toolkit did not capture state under gradient accumulation before it compiled the
+        # trainer's real accumulation; its frozen command saves none, so none is required.
+        for accumulation, required in ((2, False), (1, True)):
+            with self.subTest(accumulation=accumulation), tempfile.TemporaryDirectory() as directory:
+                run = _ai_toolkit(gradient_accumulation_steps=accumulation)
+                run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+                run_dir = _compiled(directory, run)
+                lock = {"backend": "ai-toolkit", "cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "x.yaml"], "env": {}, "adapter_source": {}}
+                (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+                self.assertEqual(training_state_capture_required(run_dir), required)
 
 
 if __name__ == "__main__":

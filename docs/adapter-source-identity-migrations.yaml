@@ -8,6 +8,70 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-real-accumulation-2026-10-18
+    backend: ai-toolkit
+    reason: 'backend.config.gradient_accumulation_steps now compiles to AI-Toolkit''s train.gradient_accumulation, where each step runs N micro-batches and one optimizer update, instead of the legacy train.gradient_accumulation_steps, which counted every micro-batch as a step (a 750-step run with accumulation 2 made 375 updates). A run with accumulation other than 1 now trains its recipe steps as optimizer updates and captures Resume state; the Resume limitation for accumulation other than 1 is removed. A run compiled earlier keeps its frozen resolved/ai-toolkit.yaml and command, and the adapter''s legacy_training_state contract reads its command lock, which has no training_state_managed, as keeping no state under accumulation other than 1, as it was compiled. No evidence is listed because none reaches the previous identity: the ai-toolkit-models-in-hf-cache-2026-10-17 record changed behavior, so every earlier AI-Toolkit evidence chain already ends there.'
+    behavior_changed: true
+    evidence_ids: []
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f86b9ae5dfb6b28f2946a7acf38f54ef1d87e7716eed1f2dab082d6d691b61ff
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: abfd8a5dc62347219f75d1ca1e3830e0e1bfa16176a0bc56d174b5e7ab8ab4b4
+  - id: legacy-training-state-field-sd-scripts-2026-10-18
+    backend: sd-scripts
+    reason: 'The backend adapter record gains an optional legacy_training_state contract, which only AI-Toolkit sets, for runs whose command lock predates the frozen training_state_managed decision. This adapter sets none, so its compiled files, command, and training-state contract are unchanged for every configuration.'
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-release-conformance-docker-2026-10-17
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: df29212c647ee67c13e19f39a538cafc0bab1de2a49c5b087fd0be3ed48016c2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: c3ef5ae9bb5b2a7257bf4ccc38ee5d8d48fd9cdfafd4dd615c664f31dc23d620
+  - id: legacy-training-state-field-musubi-tuner-2026-10-18
+    backend: musubi-tuner
+    reason: 'The backend adapter record gains an optional legacy_training_state contract, which only AI-Toolkit sets, for runs whose command lock predates the frozen training_state_managed decision. This adapter sets none, so its compiled files, command, and training-state contract are unchanged for every configuration.'
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-tuner-release-conformance-docker-2026-10-17
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f95a67d3b05ecf52857de4cb55eef077e7c0ce2f14265c32027a11956f9cf454
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8215a8596edd0ffbab5be1ef2b3f34ac0d67cb9ef4a08abf24f4f42542fc8306
   - id: declared-model-download-runpod-executor-2026-10-18
     executor: runpod
     reason: 'The executor identity changes because run_envelope.py''s TRAIN_RUN_SCHEMA gains one safety key, safety.model_download_estimate_gb. The RunPod container-disk check counts the model files AI-Toolkit downloads itself at safety.model_download_estimate_gb when the run declares it, through the one helper that also sizes a declared disk cache; an undeclared download adds nothing, as before, and is shown in the plan as not counted. No recorded smoke declares the key, so each would stage, launch, run, and collect exactly as it did; the Pod, the transfer, the trainer command, output collection, and every record are unchanged.'

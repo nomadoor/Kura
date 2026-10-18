@@ -10,6 +10,12 @@ Torch archives (optimizer.bin, optimizer.pt) are loaded with torch.load and
 safetensors weights with safetensors.torch.load_file, so two saves of equal tensors
 compare equal although their archive bytes differ. It prints one JSON object:
 {file: [differing leaves, leaves]}.
+
+    python -I compare_state_values.py --optimizer-steps <payload> <file>...
+
+prints each optimizer archive's completed-update counters instead, one per distinct value
+across its parameter states: {file: [steps]} (the conformance check of P1 under gradient
+accumulation).
 """
 
 from __future__ import annotations
@@ -41,6 +47,17 @@ def leaves(a: Any, b: Any, *, torch: Any = None, numpy: Any = None) -> tuple[int
     return (0 if same else 1), 1
 
 
+def optimizer_steps(state: Any) -> list[int]:
+    """The distinct completed-update counters (`step`) of a loaded optimizer state's parameters."""
+    values = state.get("state") if isinstance(state, dict) else None
+    steps = set()
+    for value in (values or {}).values():
+        step = value.get("step") if isinstance(value, dict) else None
+        if step is not None:
+            steps.add(int(step.item() if hasattr(step, "item") else step))
+    return sorted(steps)
+
+
 def main(argv: list[str]) -> int:
     import torch
     from safetensors.torch import load_file
@@ -55,6 +72,10 @@ def main(argv: list[str]) -> int:
             return load_file(str(path))
         return torch.load(path, map_location="cpu", weights_only=False)
 
+    if argv[:1] == ["--optimizer-steps"]:
+        _, payload, *names = argv
+        print(json.dumps({name: optimizer_steps(load(Path(payload) / name)) for name in names}))
+        return 0
     first, second, *names = argv
     result = {name: list(leaves(load(Path(first) / name), load(Path(second) / name), torch=torch, numpy=numpy)) for name in names}
     print(json.dumps(result))

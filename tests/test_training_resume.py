@@ -232,6 +232,26 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
         self.assertIn('"rng_required":true', " ".join(command["argv"]))
 
+    def test_ai_toolkit_accumulated_resume_runs_the_same_state_runner_on_docker_and_runpod(self) -> None:
+        argv = {}
+        for executor in ("docker", "runpod"):
+            run = {
+                "id": "derived", "parent_run": "source",
+                "backend": {"name": "ai-toolkit", "config": {"gradient_accumulation_steps": 2}},
+                "recipe": {"steps": 100, "seed": 1}, "compute": {"executor": executor},
+            }
+            run["continuation"] = {
+                "mode": "resume",
+                "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 50, "recipe_sha256": "b" * 64},
+                "additional_steps": 50, "target_step": 100,
+                "restoration_contract": training_state_contract_ai_toolkit(run)["restoration_contract"],
+            }
+            argv[executor] = command_ai_toolkit(run)["argv"]
+        self.assertEqual(argv["docker"], argv["runpod"])
+        script = " ".join(argv["docker"])
+        self.assertIn(script_source("ai_toolkit_state.py").splitlines()[0], script)
+        self.assertIn('"resume":{"payload":"/workspace/artifacts/training-state/state-1/payload","source_step":50,"rng_required":true}', script)
+
     def test_ai_toolkit_disabled_capture_uses_the_native_runner(self) -> None:
         run = {
             "id": "source",
@@ -247,7 +267,9 @@ class TrainingStateArtifactTests(unittest.TestCase):
             "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
         })
 
-    def test_ai_toolkit_accumulated_training_does_not_capture_mislabeled_optimizer_updates(self) -> None:
+    def test_ai_toolkit_accumulated_training_captures_state_counted_in_optimizer_updates(self) -> None:
+        # Accumulation compiles to the trainer's real accumulation, where a step is one optimizer
+        # update, so a step save's name equals the update counter the state runner checks.
         run = {
             "id": "source",
             "backend": {"name": "ai-toolkit", "config": {"gradient_accumulation_steps": 2}},
@@ -256,7 +278,10 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
         command = command_ai_toolkit(run)
 
-        self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
+        self.assertIn("ai_toolkit_state", " ".join(command["argv"]))
+        contract = training_state_contract_ai_toolkit(run)
+        self.assertEqual(contract["capability"], "partial_resume")
+        self.assertNotIn("limitations", contract["restoration_contract"])
 
     @posix_only(DATASET_IO)
     def test_ai_toolkit_unsupported_capture_contract_does_not_reject_native_ema_training(self) -> None:
@@ -266,7 +291,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "name": "ai-toolkit",
                 "config": {
                     "model_arch": "sdxl",
-                    "gradient_accumulation_steps": 2,
+                    "optimizer_type": "prodigy",
                     "native_config": {"ema_config": {"use_ema": True}},
                 },
             },
@@ -2046,6 +2071,61 @@ class ResumeRunTests(unittest.TestCase):
             self.assertEqual(status["publication_state"], "blocked")
             self.assertIn("no valid training-state artifact", status["training_state_sync_error"])
             self.assertTrue(list((run_dir / "realizations").glob("launch.publication-attempt-*.json")))
+
+    def _legacy_accumulated_ai_toolkit_run(self, root: Path) -> Path:
+        """An AI-Toolkit run with accumulation 2 compiled before compile froze whether it keeps
+        training state: its command lock has no such key and its command saves none."""
+        run_dir = root / "runs" / "source"
+        (run_dir / "resolved").mkdir(parents=True)
+        (run_dir / "realizations").mkdir()
+        manifest = {
+            "id": "source", "type": "train",
+            "backend": {"name": "ai-toolkit", "config": {"gradient_accumulation_steps": 2}},
+            "model": {"base": "example/model"}, "datasets": [{"id": "tiny", "digest": "sha256:data"}],
+            "recipe": {"steps": 20, "seed": 1},
+            "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+        }
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+        (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+            "backend": "ai-toolkit", "cwd": "/opt/ai-toolkit", "env": {}, "adapter_source": {},
+            "argv": ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"],
+        }), encoding="utf-8")
+        return run_dir
+
+    def test_an_old_lock_that_saved_no_state_is_collected_without_a_state_error_on_docker_and_runpod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._legacy_accumulated_ai_toolkit_run(Path(directory))
+            (run_dir / "realizations" / "launch.json").write_text(json.dumps({"id": "launch", "container": {"id": "container-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/launch.json"}), encoding="utf-8")
+            docker_state = {"Running": False, "ExitCode": 0, "FinishedAt": "2026-08-27T00:00:00Z", "Error": ""}
+            with patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, json.dumps(docker_state), "")):
+                status = reconcile_docker(run_dir)
+            self.assertNotIn("training_state_sync_error", status)
+            self.assertNotEqual(status["state"], "recovery_required")
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            run_dir = self._legacy_accumulated_ai_toolkit_run(root)
+            downloaded = run_dir / "downloads" / "source"
+            (downloaded / "outputs").mkdir(parents=True)
+            (downloaded / "realizations").mkdir()
+            (downloaded / "realizations" / "remote-exit-20260101.json").write_text(
+                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8"
+            )
+            (run_dir / "realizations" / "launch.json").write_text(json.dumps({"id": "launch", "executor": "runpod"}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/launch.json"}), encoding="utf-8")
+            os.chdir(root)
+            stderr = io.StringIO()
+            try:
+                with patch("sys.stderr", stderr):
+                    _download_run_unlocked("source")
+            finally:
+                os.chdir(previous)
+            self.assertNotIn("no valid training-state artifact", stderr.getvalue())
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertNotIn("training_state_sync_error", status)
+            self.assertNotEqual(status["state"], "recovery_required")
 
     def test_runpod_download_never_holds_a_run_whose_backend_saves_no_usable_state(self) -> None:
         # sd-scripts Anima declares training state unsupported: Docker never required it, and RunPod must not either.

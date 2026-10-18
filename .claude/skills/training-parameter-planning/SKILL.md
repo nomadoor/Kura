@@ -117,7 +117,9 @@ When it does not fit, stop at the first sufficient rung:
    established as neutral for the requested training contract.
 2. **Execution-only:** checkpointing, a smaller micro-batch with accumulation
    preserving effective batch, then supported offload or swap. State the
-   expected slowdown.
+   expected slowdown. `recipe.steps` counts optimizer updates on every
+   backend, so with `gradient_accumulation_steps: N` each step runs N
+   micro-batches and takes about N times as long.
 3. **Recipe-changing:** resolution, effective batch, rank, learning rate,
    model size, precision with quality impact, or dataset reduction. Present
    concrete alternatives and recommend one before editing the approved plan.

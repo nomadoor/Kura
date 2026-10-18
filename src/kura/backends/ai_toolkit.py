@@ -1068,12 +1068,9 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     native = backend_config(run, "ai-toolkit")
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     train = config.get("train") if isinstance(config.get("train"), dict) else {}
-    accumulation = native.get("gradient_accumulation_steps", 1)
     # Every pinned baseline entry fills adamw8bit when optimizer_type is unset.
     optimizer = native.get("optimizer_type", "adamw8bit")
     limitations = []
-    if accumulation != 1:
-        limitations.append("AI-Toolkit Resume initially requires gradient_accumulation_steps=1")
     if optimizer not in {"adamw", "adamw8bit"}:
         limitations.append("AI-Toolkit Resume initially requires AdamW or AdamW8bit optimizer state with a verified update counter")
     if limitations:
@@ -1126,6 +1123,18 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "scheduler_behavior": "reconstructed to the saved step; initial Resume execution limited to constant scheduler",
         },
     }
+
+
+def training_state_contract_ai_toolkit_before_frozen_decision(run: dict[str, Any]) -> dict[str, Any]:
+    """The contract of a run compiled before compile froze whether it keeps training state.
+
+    Then gradient_accumulation_steps compiled to the trainer's legacy accumulation, which counts
+    every micro-batch as a step, so Kura captured no state for an accumulation other than 1 and
+    the run's frozen command saves none."""
+    contract = training_state_contract_ai_toolkit(run)
+    if backend_config(run, "ai-toolkit").get("gradient_accumulation_steps", 1) == 1:
+        return contract
+    return {**contract, "capability": "unsupported"}
 
 
 def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
@@ -1256,7 +1265,10 @@ _AI_TOOLKIT_TYPED_FIELDS = {
     "train": {
         "lr": "learning_rate", "lr_scheduler": "lr_scheduler", "optimizer": "optimizer_type",
         "dtype": "mixed_precision", "batch_size": "batch_size",
-        "gradient_accumulation_steps": "gradient_accumulation_steps",
+        # The trainer's real accumulation: each step runs N micro-batches and one optimizer update
+        # (config_modules.py:460-465). Its legacy gradient_accumulation_steps counts every
+        # micro-batch as a step, so a save named by steps would hold fewer updates.
+        "gradient_accumulation": "gradient_accumulation_steps",
         "gradient_checkpointing": "gradient_checkpointing",
         "bypass_guidance_embedding": "bypass_guidance_embedding",
     },

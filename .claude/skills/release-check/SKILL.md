@@ -36,7 +36,8 @@ uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes  #
 The workspace is a separate one (`kura init`), never this checkout; set its
 `docker.hf_cache` to the cache that already holds the models, which the plan
 lists with their cache state. `--backend` limits it to the backends the change
-touches. Put the pass/fail table in the pull request; a FAIL is a bug in the
+touches, and `--run <key>` (repeatable) to the scenario runs it names, for
+example `--backend ai-toolkit --run multi-accum-2` for the accumulation case. Put the pass/fail table in the pull request; a FAIL is a bug in the
 promise it names, or a deviation the ADR already accepts.
 
 Before publishing, check `git status --ignored --short` so datasets, runs,

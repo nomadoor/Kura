@@ -185,7 +185,7 @@ restoration contract:
 
 | Backend path | Initial Resume level | Restored | Known gap / restriction |
 | --- | --- | --- | --- |
-| AI-Toolkit standard LoRA | Partial | full-precision Resume weight, optimizer, step, epoch, and Kura RNG snapshot restored at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position and exact data position are not restored; AdamW/AdamW8bit, constant scheduler, and gradient accumulation 1 only |
+| AI-Toolkit standard LoRA | Partial | full-precision Resume weight, optimizer, step, epoch, and Kura RNG snapshot restored at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position and exact data position are not restored; AdamW/AdamW8bit and constant scheduler only |
 | Musubi built-ins | Best effort | Accelerate model, optimizer, scheduler, RNG and supported auxiliary state; the step counter continues from the scheduler | application epoch and exact data position are not restored (the epoch restarts); constant scheduler only |
 | sd-scripts SD 1.5 / SDXL / FLUX.1 LoRA | Best effort | Accelerate model, optimizer, scheduler, RNG and compatible scaler | Kura normalizes cumulative step metadata; application epoch and exact data position are not restored; constant scheduler and gradient accumulation 1 only |
 | sd-scripts Anima LoRA / LLLite | Unsupported | no state is saved | Kura refuses Resume rather than silently degrading to weight-only training |

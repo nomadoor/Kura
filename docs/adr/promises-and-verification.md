@@ -52,8 +52,10 @@ table:
   epochs;
 - runs: a fresh run with a save cadence; a split run and its Resume to a target
   that is not a multiple of the steps per epoch; uninterrupted controls (two on
-  the one-item dataset);
-- checks: steps trained, saved steps and names, published state steps,
+  the one-item dataset); on AI-Toolkit and sd-scripts, a fresh run with
+  gradient accumulation 2;
+- checks: steps trained (under accumulation, the optimizer's own update counter
+  in the final state against the recipe steps), saved steps and names, published state steps,
   Resume against the controls (a Resume or control that did not complete fails
   P3), disk peak against the estimate.
 

@@ -9,6 +9,7 @@ from typing import Any
 from kura.images import effective_image
 from kura.executors.common import _redact_secret_text
 from kura.backends import get_backend
+from kura.training_artifacts import training_state_managed
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import run_datasets as _run_datasets
@@ -53,6 +54,17 @@ def runpod_settings_for_adapter(source: Any, adapter: Any, image_name: str) -> d
 
 def _backend_image_name(backend_name: Any) -> str:
     return get_backend(backend_name).image_name
+
+
+def backend_command_lock(run: dict[str, Any], command_spec: dict[str, Any], adapter_source: dict[str, Any]) -> dict[str, Any]:
+    """resolved/backend-command.lock.json for a compiled run: the adapter's command, and whether
+    that command keeps training state, decided once here by the rule the adapter built it with
+    and read back at collection (`frozen_training_state_managed`)."""
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    return {
+        **command_spec, "backend": backend.get("name"), "adapter_source": adapter_source,
+        "training_state_managed": training_state_managed(run),
+    }
 
 
 def _load_frozen_command(run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
