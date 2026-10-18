@@ -75,7 +75,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import migrate_workspace_config
-from kura.run_commands.common import _backend_image_name
+from kura.run_commands.common import _backend_image_name, backend_command_lock
 from kura.run_envelope import run_datasets as _run_datasets
 
 
@@ -701,7 +701,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         if kura_warning:
             print(f"warning: Resume runs on another Kura: {kura_warning}", file=sys.stderr)
         atomic_write_json(resolved / "backend-display.lock.json", adapter.display(locked))
-        atomic_write_json(resolved / "backend-command.lock.json", {**command_spec, "backend": backend.get("name"), "adapter_source": source_identity})
+        atomic_write_json(resolved / "backend-command.lock.json", backend_command_lock(locked, command_spec, source_identity))
         env = {
             **kura_provenance(), "python_version": platform.python_version(),
             "platform": platform.platform(), "backend_name": backend.get("name"),

@@ -1023,11 +1023,37 @@ def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None 
     return contract.get("capability") != "unsupported"
 
 
+def frozen_training_state_managed(run: dict[str, Any], command_lock: dict[str, Any]) -> bool:
+    """Whether a compiled run keeps training state: the decision compile froze with its command
+    (`training_state_managed` in resolved/backend-command.lock.json), so collection holds a run
+    to what its command was built to do. A lock written before compile froze it is read by the
+    rule of that time: the adapter's `legacy_training_state` contract when it has one."""
+    value = command_lock.get("training_state_managed")
+    if isinstance(value, bool):
+        return value
+    from kura.backends import get_backend
+
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    legacy = get_backend(backend.get("name")).legacy_training_state
+    return training_state_managed(run, legacy(run) if legacy is not None else None, frozen=True)
+
+
+def _frozen_command_lock(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "resolved" / "backend-command.lock.json"
+    if not path.is_file():
+        return {}
+    try:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read {path.name} for {run_dir.name}") from exc
+    return lock if isinstance(lock, dict) else {}
+
+
 def training_state_capture_required(run_dir: Path) -> bool:
     """Return whether a completed run is expected to publish recoverable state."""
 
     run, _, _ = _published_run_context(run_dir)
-    return training_state_managed(run, frozen=True)
+    return frozen_training_state_managed(run, _frozen_command_lock(run_dir))
 
 
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:

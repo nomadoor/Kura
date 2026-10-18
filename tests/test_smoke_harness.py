@@ -546,15 +546,92 @@ class RealSmokeHarnessTests(unittest.TestCase):
                         MODULE.ensure_dataset(workspace, dataset)
                 self.assertEqual(validate_manifest(workspace / "datasets" / MODULE.BUCKET_DATASET), (3, []))
                 for backend in MODULE.CONFORMANCE_BACKENDS:
-                    for run in MODULE.SCENARIO:
+                    for run in MODULE.scenario_runs(backend):
                         if run.resume_of:
                             continue
                         with self.subTest(backend=backend, run=run.key):
-                            smoke = MODULE.conformance_smoke(backend, run.dataset)
+                            smoke = MODULE.conformance_smoke(backend, run.dataset, accumulation=run.accumulation)
                             run_id = MODULE._create_run(workspace, "conformance", f"c-{run.key}", smoke, MODULE.build_run_fields("c", smoke, steps=run.steps))
                             status = json.loads((workspace / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
                             self.assertEqual(status["state"], "compiled")
+                            # Every scenario run keeps training state; compile froze that with its command.
+                            lock = json.loads((workspace / "runs" / run_id / "resolved" / "backend-command.lock.json").read_text(encoding="utf-8"))
+                            self.assertIs(lock["training_state_managed"], True)
                             self.assertGreater(MODULE._checkpoint_estimate(workspace / "runs" / run_id)["count"], 0)
+
+    def test_the_accumulation_case_runs_on_ai_toolkit_and_sd_scripts_only(self) -> None:
+        accumulated = [run for run in MODULE.SCENARIO if run.accumulation != 1]
+        self.assertEqual([(run.key, run.accumulation, run.resume_of) for run in accumulated], [("multi-accum-2", 2, None)])
+        for backend in MODULE.CONFORMANCE_BACKENDS:
+            with self.subTest(backend=backend):
+                keys = [run.key for run in MODULE.scenario_runs(backend)]
+                self.assertEqual("multi-accum-2" in keys, backend in ("ai-toolkit", "sd-scripts"))
+        for backend in ("ai-toolkit", "sd-scripts"):
+            smoke = MODULE.conformance_smoke(backend, "multi", accumulation=2)
+            self.assertEqual(MODULE.build_run_fields("c", smoke, steps=4)["backend"]["config"]["gradient_accumulation_steps"], 2)
+            self.assertNotIn("gradient_accumulation_steps", MODULE.conformance_smoke(backend, "multi").config)
+
+    def test_accumulation_problems_hold_the_optimizer_counter_to_the_recipe_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_id = "20260101-0000_conf-ai-multi-accum-2_abcd"
+            _finished_run(workspace, run_id, weights=[f"{run_id}.safetensors"], states=[2, 4], last_step=4)
+            answer = subprocess.CompletedProcess([], 0, json.dumps({"optimizer.bin": [4]}) + "\n", "")
+            with patch.object(MODULE.subprocess, "run", return_value=answer) as run:
+                self.assertEqual(MODULE.accumulation_problems(workspace, run_id, 4), [])
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[:3], ["docker", "run", "--rm"])
+            self.assertEqual(argv[argv.index("--network") + 1], "none")
+            self.assertEqual(argv[argv.index("kura-sd-scripts@sha256:" + "a" * 64) + 1:], ["-I", f"/c/{MODULE.COMPARE_VALUES.name}", "--optimizer-steps", "/a", "optimizer.bin"])
+            # The legacy AI-Toolkit accumulation: 4 steps made 2 optimizer updates.
+            halved = subprocess.CompletedProcess([], 0, json.dumps({"optimizer.bin": [2]}) + "\n", "")
+            with patch.object(MODULE.subprocess, "run", return_value=halved):
+                self.assertEqual(MODULE.accumulation_problems(workspace, run_id, 4), ["optimizer.bin holds [2] optimizer updates, recipe steps 4"])
+            failed = subprocess.CompletedProcess([], 1, "", "no such image")
+            with patch.object(MODULE.subprocess, "run", return_value=failed):
+                self.assertEqual(MODULE.accumulation_problems(workspace, run_id, 4), ["cannot read the optimizer's update counter in the trainer image: no such image"])
+            self.assertEqual(MODULE.accumulation_problems(workspace, run_id, 6), ["no training state at step 6 to read the optimizer's update counter from"])
+
+    def test_the_optimizer_counter_reader_returns_each_distinct_step(self) -> None:
+        spec = importlib.util.spec_from_file_location("compare_state_values", MODULE.COMPARE_VALUES)
+        assert spec is not None and spec.loader is not None
+        compare = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(compare)
+
+        class Scalar:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+            def item(self) -> float:
+                return self.value
+
+        self.assertEqual(compare.optimizer_steps({"state": {0: {"step": Scalar(4.0)}, 1: {"step": 4}}}), [4])
+        self.assertEqual(compare.optimizer_steps({"state": {0: {"step": 2}, 1: {"step": 4}}}), [2, 4])
+        self.assertEqual(compare.optimizer_steps({"state": {}}), [])
+
+    def test_one_scenario_run_can_be_run_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "workspace.yaml").write_text("{}\n", encoding="utf-8")
+            passing = {"P1": [], "P2": [], "P4": [], "P7": []}
+            created = []
+            with (
+                patch.object(MODULE, "ensure_dataset"), patch.object(MODULE, "_tree_digest", return_value="d"),
+                patch.object(MODULE, "_create_run", side_effect=lambda workspace, experiment, slug, smoke, fields: created.append((slug, fields)) or slug),
+                patch.object(MODULE, "_execute", return_value=(0, {"count": 1}, "")),
+                patch.object(MODULE, "check_run", return_value=passing), patch.object(MODULE, "_checkpoint_estimate", return_value={"count": 5}),
+                patch.object(MODULE, "model_revision_problems", return_value=[]),
+                patch.object(MODULE, "accumulation_problems", return_value=["optimizer.bin holds [2] optimizer updates, recipe steps 4"]) as accumulation,
+                contextlib.redirect_stdout(io.StringIO()) as out,
+            ):
+                self.assertEqual(MODULE.conformance(workspace, ["ai-toolkit"], runpod=False, gpu="x", yes=True, runs=["multi-accum-2"]), 1)
+            self.assertEqual([slug for slug, _ in created], ["conf-ai-multi-accum-2"])
+            self.assertEqual(created[0][1]["backend"]["config"]["gradient_accumulation_steps"], 2)
+            accumulation.assert_called_once_with(workspace, "conf-ai-multi-accum-2", 4)
+            rows = {line.split()[0]: line.split()[1] for line in out.getvalue().splitlines() if line[:1] == "P" and len(line.split()) == 2}
+            self.assertEqual((rows["P1"], rows["P3"]), ("FAIL", "-"))
+            with self.assertRaisesRegex(SystemExit, "no scenario run"):
+                MODULE.conformance(workspace, ["musubi-tuner"], runpod=False, gpu="x", yes=False, runs=["multi-accum-2"])
 
     def test_conformance_refuses_this_checkout_and_launches_nothing_without_yes(self) -> None:
         with self.assertRaisesRegex(SystemExit, "separate workspace"):

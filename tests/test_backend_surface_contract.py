@@ -1062,7 +1062,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "train": {
                         "steps": 1, "train_unet": True, "train_text_encoder": False, "disable_sampling": True,
                         "seed": 1, "lr": 1.0e-6, "optimizer": "adamw8bit", "dtype": "bf16",
-                        "batch_size": 1, "gradient_accumulation_steps": 1, "gradient_checkpointing": True,
+                        "batch_size": 1, "gradient_accumulation": 1, "gradient_checkpointing": True,
                         "noise_scheduler": "ddpm", "timestep_type": "sigmoid", "optimizer_params": {"weight_decay": 0.0001},
                         "content_or_style": "balanced", "loss_type": "mse",
                         "unload_text_encoder": False, "cache_text_embeddings": False,
@@ -1426,7 +1426,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
                         compiled = yaml.safe_load((root / "ai-toolkit" / "ai-toolkit.yaml").read_text(encoding="utf-8"))
                         self.assertEqual(compiled["config"]["process"][0]["train"]["optimizer"], "adamw8bit")
                         self.assertEqual(compiled["config"]["process"][0]["train"]["lr_scheduler"], "constant")
-                        self.assertEqual(compiled["config"]["process"][0]["train"]["gradient_accumulation_steps"], 2)
+                        # The trainer's real accumulation: one optimizer update per step (config_modules.py:460-465).
+                        self.assertEqual(compiled["config"]["process"][0]["train"]["gradient_accumulation"], 2)
+                        self.assertNotIn("gradient_accumulation_steps", compiled["config"]["process"][0]["train"])
                     else:
                         argv = " ".join(spec["argv"]).lower()
                         self.assertIn("adamw8bit", argv)
@@ -1438,6 +1440,32 @@ class BackendSurfaceContractTests(unittest.TestCase):
                             self.assertIn("batch_size = 1", dataset_toml)
                             self.assertIn("resolution = [64, 64]", dataset_toml)
 
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_accumulation_compiles_the_same_on_docker_and_runpod(self) -> None:
+        # One compile owns the native accumulation key; both executors run its frozen output and
+        # capture training state with the same runner.
+        compiled = {}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = root / "datasets" / "tiny" / "images"
+            images.mkdir(parents=True)
+            (images / "1.png").write_bytes(b"image")
+            (images / "1.txt").write_text("caption\n", encoding="utf-8")
+            for executor in ("docker", "runpod"):
+                run = {
+                    "id": "accum-ai", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "gradient_accumulation_steps": 2}},
+                    "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 4, "seed": 1},
+                    "compute": {"executor": executor},
+                }
+                self._write_ai_toolkit_projection(run, root / executor)
+                spec = BACKENDS["ai-toolkit"].compile(run, root / executor)
+                self.assertIn("ai_toolkit_state", " ".join(spec["argv"]))
+                compiled[executor] = yaml.safe_load((root / executor / "ai-toolkit.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(compiled["docker"], compiled["runpod"])
+        train = compiled["docker"]["config"]["process"][0]["train"]
+        self.assertEqual((train["gradient_accumulation"], train["steps"]), (2, 4))
+        self.assertNotIn("gradient_accumulation_steps", train)
 
 if __name__ == "__main__":
     unittest.main()

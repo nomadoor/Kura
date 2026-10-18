@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_PINNED_MODEL_ARCHS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_PINNED_MODEL_ARCHS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, musubi_disk_cache, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
@@ -126,6 +126,9 @@ class BackendAdapter:
     download_specs: Callable[..., tuple[list[dict[str, Any]], dict[str, str]]] | None = None
     validate_dataset: Callable[[dict[str, Any], Path], None] | None = None
     training_state: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # The contract a run whose command lock predates the frozen `training_state_managed` was
+    # compiled under, where it differs from `training_state`.
+    legacy_training_state: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     # Planning facts the adapter owns; plan renders them without backend tables.
     runtime_checks: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
     # What run-scoped disk cache the trainer writes (a phrase), or None; its size is the
@@ -405,6 +408,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         validate_authored=validate_ai_toolkit_config,
         project_dataset=project_ai_toolkit_dataset,
         training_state=training_state_contract_ai_toolkit,
+        legacy_training_state=training_state_contract_ai_toolkit_before_frozen_decision,
         runtime_checks=runtime_checks_ai_toolkit,
         disk_cache=ai_toolkit_disk_cache,
         model_facts=ai_toolkit_model_facts,
