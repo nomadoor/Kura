@@ -1833,6 +1833,7 @@ class RunPlanTests(unittest.TestCase):
 
     def test_runpod_capacity_plan_survives_invalid_runpod_settings(self) -> None:
         run = {
+            "backend": {"name": "musubi-tuner"},
             "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
         }
         with patch(

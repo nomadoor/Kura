@@ -26,13 +26,12 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.images import launch_image
-from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error, requested_gpu_types, runpod_settings_for_adapter
+from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error, runpod_launch_settings
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
 from kura.paths import local_docker_mounts
 from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, max_lease_seconds, stage_run
 from kura.run_commands.render_runpod import launch_render_runpod
-from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
 from kura.dataset_transfer import TransferRefused
 from kura.run_envelope import capacity_policy, run_executor
@@ -484,7 +483,6 @@ def launch_run(
             append_run_event(run_dir, input_preflight)
         config = _workspace_config()
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
-        adapter = get_backend(backend_name)
         image_name = _backend_image_name(backend_name)
         try:
             env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
@@ -518,16 +516,12 @@ def launch_run(
                 controlled_by=controlled_by,
             )
         else:
-            runpod_config = runpod_settings_for_adapter(config.get("runpod", {}), adapter, image_name)
+            runpod_config = runpod_launch_settings(locked, config)
             if continuation is not None and continuation.get("mode") == "resume" and not selected["frozen"]:
                 raise ValueError("Resume remote runtime has no compile-time frozen image; recompile the run")
             remote_image = selected["reference"]
             if image:
                 remote_image = image
-            requested = requested_gpu_types(locked.get("compute"))
-            if requested is not None:
-                runpod_config["gpu_type_ids"] = requested
-                runpod_config["gpu_type_priority"] = "custom"
             if runpod_config_override is not None:
                 # A runner launch uses the settings the user confirmed, not workspace.yaml as it is now.
                 runpod_config = dict(runpod_config_override)

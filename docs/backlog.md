@@ -15,6 +15,9 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-19 | RunPod ports | Nothing checks that `runpod.ports` (or `backend_ports.<image>`) keeps `22/tcp`, so a list without it creates a billed Pod Kura cannot reach over SSH; refuse it in `validate_workspace_config` | review of the one RunPod launch settings owner | P6
+- 2026-10-19 | RunPod settings | Staging still validates the raw workspace `runpod` section, so a run whose `compute.gpu` names GPUs while workspace.yaml lists none is refused at staging; drop that check once stop and reconcile no longer require Pod-creation settings (they would otherwise fail to stop such a Pod) | review of the one RunPod launch settings owner | P6
+- 2026-10-19 | tests | No launch-level test shows `launch_run` and `launch_render_runpod` hand the owner's settings to `launch_runpod` / `launch_runpod_session` / `confirm_runpod_billing`; the identity test only checks the import | review of the one RunPod launch settings owner | -
 - 2026-10-19 | tests | The moved-lease-during-retry test stubs `kura_pod_self_delete`, so the real `kura_lease_moved` check never runs in a test, and it runs under bash, not sh; drive the real self-delete against the 503 sandbox with a stubbed sleep that moves the deadline | review of the self-delete retry | P6
 - 2026-10-19 | RunPod lease | A delete attempt already in flight when `kura run lease` moves the deadline can still delete the Pod (a window of one attempt, at most about 60 s) | review of the self-delete retry | P6
 - 2026-10-19 | render cost | `kura render launch` has no way to shorten the RunPod lease, so the cost ceiling of a render that takes minutes is computed over the 12 h default lease (about $7 on an A40) | ComfyUI v0.41.3 upgrade | -
