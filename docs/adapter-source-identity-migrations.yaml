@@ -30,11 +30,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
+      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 2d5fd3254ef31a4c5ffa0081873fe464db57c1138f04a1224908c8ba7f0de1ad
+      value: 7b58c15f3d2498965674fb6866dad50fbd344882397c254d1b64de4844b1bb09
   - id: sd-scripts-guidance-wording-2026-10-18
     backend: sd-scripts
     reason: "The identity changes because two shared files change wording only: backends/registry.py adds to the refusal of a missing required backend.config value where a recommended value is read (REQUIRED_VALUE_SOURCES), and container_scripts/hf_download.py adds the user's two actions (accept the model license, set HF_TOKEN in their own terminal) to the text of an in-container Hugging Face authentication failure. Which runs are refused, compile output, generated argv, model downloads, and recorded smoke behavior are unchanged."
@@ -130,7 +130,7 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
+      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
@@ -162,7 +162,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
+      value: 422906584328aadbed0f06bd3c8c12e7bfcb395b3ad0abdc77b65d5c11e5b160
   - id: sd-scripts-family-card-hint-2026-10-18
     backend: sd-scripts
     reason: >-

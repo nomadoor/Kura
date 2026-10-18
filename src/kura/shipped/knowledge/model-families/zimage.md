@@ -25,6 +25,12 @@
   step at 9.6 GB, and 600 steps took 28 minutes.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
 
+- Disk: AI-Toolkit's `zimage` downloads the `Tongyi-MAI/Z-Image` diffusers
+  shards (about 19 GB) and Musubi's files come from `Comfy-Org/z_image` (about
+  19 GB); the transformer layouts differ, so training on both backends stores
+  both.
+  source: Hugging Face cache measurement 2026-10-18 (blob sha256 compared)
+
 ## Model files
 
 - musubi-tuner `architecture: zimage` trained from these files. Write them in

@@ -6,6 +6,12 @@
   recorded, and 1024px is unmeasured.
   source: run 20260801-0932_sd-scripts-smoke-sdxl_4d96 (Kura smoke evidence, 2026-08-01)
 
+- Disk: sd-scripts reads the single file `sd_xl_base_1.0.safetensors` (6.9 GB,
+  fp16); AI-Toolkit's `sdxl` loads the diffusers tree of
+  `stabilityai/stable-diffusion-xl-base-1.0` (13.2 GB, fp32 U-Net) from the same
+  repository, so training on both stores about 20 GB.
+  source: Hugging Face cache measurement 2026-10-18 (blob sha256 compared)
+
 ## character
 
 - rank: 16–32
