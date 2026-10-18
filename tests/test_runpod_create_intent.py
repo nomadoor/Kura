@@ -307,6 +307,146 @@ class CreateIntentRuleTests(unittest.TestCase):
         self.assertEqual(outcomes["runpod"], ("running", f"realizations/{RID}.json", False, []))
 
 
+# A clock set back one hour (a DST fall-back): the later launch gets the smaller id.
+EARLIER, LATER = "20261101-013000-000001", "20261101-011000-000001"
+EARLIER_AT, LATER_AT = "2026-11-01T01:30:00-07:00", "2026-11-01T01:10:00-08:00"
+
+
+def _timed_launch(run_dir: Path, rid: str, at: str, *, recorded: bool = True) -> Path:
+    directory = run_dir / "realizations"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{rid}.create-intent.json"
+    path.write_text(json.dumps({"realization_id": rid, "executor": "runpod", "pod_name": f"kura-example-{rid}", "requested_at": at}), encoding="utf-8")
+    if recorded:
+        (directory / f"{rid}.json").write_text(json.dumps({"id": rid, "executor": "runpod", "state": "running", "launched_at": at, "pod": {"id": f"pod-{rid[-1]}{rid[9:13]}"}}), encoding="utf-8")
+    return path
+
+
+class LaunchOrderTests(unittest.TestCase):
+    """The newest launch is the one its records say started last, not the one with the largest id."""
+
+    def test_a_launch_after_the_clock_went_back_is_still_the_newest(self) -> None:
+        from kura.executors import common
+        from kura import status_projection
+
+        self.assertIs(status_projection.latest_launch_id, common.latest_launch_id)
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "example"
+            _timed_launch(run_dir, EARLIER, EARLIER_AT)
+            later = _timed_launch(run_dir, LATER, LATER_AT)
+            self.assertEqual(common.latest_launch_id(run_dir / "realizations"), LATER)
+            # Both settled: status follows the later launch, and the earlier one never pulls it back.
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": f"realizations/{LATER}.json"}), encoding="utf-8")
+            self.assertEqual(unresolved_create_intents(run_dir), [])
+            self.assertEqual(status_projection.project_status(run_dir)["last_realization"], f"realizations/{LATER}.json")
+            # The later launch crashed before status followed it: it is the one left to settle.
+            (run_dir / "status.json").write_text(json.dumps({"state": "launching", "last_realization": f"realizations/{EARLIER}.json"}), encoding="utf-8")
+            self.assertEqual(unresolved_create_intents(run_dir), [later])
+
+    def test_a_record_without_a_readable_time_is_ordered_by_its_id(self) -> None:
+        from kura.executors import common
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "realizations" / "20261004-101010-000001.json").write_text(json.dumps({"id": "x"}), encoding="utf-8")
+            (run_dir / "realizations" / "20261004-111010-000001.json").write_text("not json", encoding="utf-8")
+            self.assertEqual(common.latest_launch_id(run_dir / "realizations"), "20261004-111010-000001")
+
+
+class InterruptAfterCreateTests(unittest.TestCase):
+    def test_an_interrupt_after_runpod_returned_the_pod_leaves_the_create_unconfirmed(self) -> None:
+        """Never record "no Pod exists" once the create returned one."""
+        import sys
+
+        from kura.executors.runpod import launch_runpod
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+
+            def interrupt_once_the_pod_is_returned(frame, event, _arg):
+                if frame.f_code is launch_runpod.__code__ and event == "line" and frame.f_locals.get("pod") is not None \
+                        and frame.f_locals.get("controller_phase") == "probe":
+                    sys.settrace(None)
+                    frame.f_trace = None
+                    raise KeyboardInterrupt
+                return interrupt_once_the_pod_is_returned
+
+            def tracer(frame, event, _arg):
+                return interrupt_once_the_pod_is_returned if frame.f_code is launch_runpod.__code__ else None
+
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod.time.sleep"), \
+                    patch("kura.executors.runpod.runpod_gpu_availability", return_value=AVAILABLE), \
+                    patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
+                sys.settrace(tracer)
+                try:
+                    with self.assertRaisesRegex(ValueError, "kura run reconcile"):
+                        launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                                      image="registry/image:tag", config={"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
+                                      wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
+                finally:
+                    sys.settrace(None)
+            self.assertEqual([path for path in (run_dir / "realizations").glob("*.json") if "." not in path.stem], [])
+            self.assertEqual(len(list((run_dir / "realizations").glob("*.create-unconfirmed.json"))), 1)
+            self.assertEqual(len(unresolved_create_intents(run_dir)), 1)
+
+
+class SettlingNeedsNoSecretTests(unittest.TestCase):
+    def test_a_recorded_pod_is_settled_without_the_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "example"
+            _intent(run_dir, RID, "runpod", recorded={"state": "running", "launched_at": "2026-10-04T10:10:11+09:00", "pod": {"id": "pod-1"}})
+            (run_dir / "status.json").write_text(json.dumps({"state": "launching"}), encoding="utf-8")
+            with patch("kura.executors.runpod.runpod_api_key", side_effect=ValueError("no RUNPOD_API_KEY")) as key, \
+                    patch("kura.executors.runpod._runpod_pods_named") as listed:
+                lines = resolve_runpod_create_intents(run_dir, CONFIG)
+            key.assert_not_called()
+            listed.assert_not_called()
+            self.assertIn("status now does", lines[0])
+            self.assertEqual(_status(run_dir)["pod_id"], "pod-1")
+
+
+class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
+    def test_a_render_session_that_crashed_before_status_followed_is_deleted_by_the_runner(self) -> None:
+        from kura import runner
+        from kura.executors.runpod import launch_runpod_session
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                    patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-9", "desiredStatus": "RUNNING"}), \
+                    patch("kura.executors.runpod._write_status", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"):
+                with self.assertRaises(KeyboardInterrupt):
+                    launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
+            self.assertNotIn("pod_id", _status(run_dir))
+            self.assertEqual(len(unresolved_create_intents(run_dir)), 1)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                    patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.runpod._runpod_request") as request:
+                self.assertTrue(runner._delete_pod(root, run_dir, {"runpod_config": CONFIG}, why="the render ended"))
+            listed.assert_not_called()
+            self.assertEqual([call.args[:2] for call in request.call_args_list], [("DELETE", "/pods/pod-9")])
+            self.assertTrue(_status(run_dir).get("pod_stopped_at"))
+
+    def test_a_stop_through_the_runner_settles_the_crashed_capacity_wait_and_deletes_its_pod(self) -> None:
+        from kura import runner
+
+        with _crash_after_capacity_wait() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="runpod", extra={
+                "options": {"max_lease": "3h"}, "runpod_config": CONFIG, "billing_confirmed_at": "2026-10-04T00:00:00+00:00",
+            })
+            runner.claim_request(request, 1)
+            with patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.runpod._runpod_request") as request_api:
+                self.assertTrue(runner._stop_runpod_on_request(root, run_dir, request, runner._read_json(request)))
+            listed.assert_not_called()
+            self.assertEqual([call.args[:2] for call in request_api.call_args_list], [("DELETE", "/pods/pod-1")])
+            self.assertTrue(runner._sibling(request, ".stop-done.json").exists())
+
+
 class UnconfirmedCreateTests(unittest.TestCase):
     def test_a_failed_lookup_still_hands_the_run_over(self) -> None:
         from kura.executors.runpod import RunPodAPIError, launch_runpod_session

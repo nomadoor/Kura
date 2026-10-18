@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
 
@@ -210,6 +210,8 @@ def sleep_checking_stop(seconds: float, *, step: float = 2.0) -> None:
 # A launch writes `<realization id>.create-intent.json` before it creates a Pod
 # or a container, so a crash between the two leaves something to discover.
 CREATE_INTENT_SUFFIX = ".create-intent.json"
+# A capacity wait appends its rounds to `<realization id>.capacity-wait.jsonl`.
+CAPACITY_WAIT_SUFFIX = ".capacity-wait.jsonl"
 
 
 def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> list[Path]:
@@ -374,7 +376,7 @@ def remote_job_started(run_dir: Path, realization_id: str) -> bool:
 
 def append_capacity_wait(run_dir: Path, realization_id: str, line: dict[str, Any]) -> None:
     """Append one capacity-wait fact; the last line says where the wait stands."""
-    path = run_dir / "realizations" / f"{realization_id}.capacity-wait.jsonl"
+    path = run_dir / "realizations" / f"{realization_id}{CAPACITY_WAIT_SUFFIX}"
     path.parent.mkdir(exist_ok=True)
     append_line_durably(path, json.dumps(_redact_secrets(line), ensure_ascii=False, sort_keys=True) + "\n")
 
@@ -390,12 +392,57 @@ def is_realization_record(path: Path) -> bool:
 
 
 def latest_launch_id(directory: Path) -> str | None:
-    """The newest launch in a run's `realizations/`: a realization, a create intent, or a capacity
-    wait, whichever has the latest id (ids are timestamps)."""
+    """The newest launch in a run's `realizations/`: a realization, a create intent, or a capacity wait.
+
+    Ordered by the time its records state (`launch_started_at`); ids are local
+    clock times, which repeat or run backwards when the clock is set back (a
+    daylight-saving fall-back), so an id decides only between equal times.
+    """
     ids = {path.stem for path in directory.glob("*.json") if is_realization_record(path)}
     ids |= {path.name[: -len(CREATE_INTENT_SUFFIX)] for path in directory.glob(f"*{CREATE_INTENT_SUFFIX}")}
-    ids |= {path.name[: -len(".capacity-wait.jsonl")] for path in directory.glob("*.capacity-wait.jsonl")}
-    return max(ids) if ids else None
+    ids |= {path.name[: -len(CAPACITY_WAIT_SUFFIX)] for path in directory.glob(f"*{CAPACITY_WAIT_SUFFIX}")}
+    return max(ids, key=lambda rid: (launch_started_at(directory, rid), rid)) if ids else None
+
+
+_EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def launch_started_at(directory: Path, realization_id: str) -> datetime:
+    """When a launch started, as its records state it: the create intent's `requested_at`, else the
+    realization's `launched_at`, `attempted_at`, or a render's `timestamp`, else the capacity wait's
+    `started_at`. A launch with no readable time falls back to its id read as local time."""
+    def readable(value: Any) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return moment if moment.tzinfo else moment.astimezone()
+
+    def record(name: str) -> dict[str, Any]:
+        try:
+            value = json.loads((directory / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    intent = record(f"{realization_id}{CREATE_INTENT_SUFFIX}")
+    realization = record(f"{realization_id}.json")
+    candidates = [intent.get("requested_at"), *(realization.get(key) for key in ("launched_at", "attempted_at", "timestamp"))]
+    try:
+        first = (directory / f"{realization_id}{CAPACITY_WAIT_SUFFIX}").read_text(encoding="utf-8").partition("\n")[0]
+        wait = json.loads(first) if first.strip() else {}
+        candidates.append(wait.get("started_at") if isinstance(wait, dict) else None)
+    except (OSError, ValueError):
+        pass
+    for value in candidates:
+        if (moment := readable(value)) is not None:
+            return moment
+    try:
+        return datetime.strptime(realization_id, "%Y%m%d-%H%M%S-%f").astimezone()
+    except ValueError:
+        return _EARLIEST
 
 
 # Launch timing is diagnostic: each realization gets an append-only
