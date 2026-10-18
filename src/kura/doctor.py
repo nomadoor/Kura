@@ -23,7 +23,7 @@ from kura.container_scripts import script_source
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
 from kura.secrets import declared_secret, is_secret_name
-from kura.executors.docker import docker_daemon_problem
+from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_daemon_problem, docker_data_location
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
@@ -40,8 +40,29 @@ def _image_reference(name: str) -> str:
     return effective_image(_workspace_config(), name)["reference"]
 
 
-def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, capture_output=capture, check=False)
+# A container the doctor starts (the GPU probe) loads torch, so it gets longer than a daemon query.
+DOCKER_PROBE_TIMEOUT_SEC = 300
+
+
+def _docker_run(command: list[str], *, capture: bool = False, timeout: int = DOCKER_INFO_TIMEOUT_SEC) -> subprocess.CompletedProcess[str]:
+    """A docker command for a doctor report; one that does not answer within `timeout` returns
+    exit code 124 with the reason as its stderr, so a hung daemon is reported, never waited on."""
+    try:
+        return subprocess.run(command, text=True, capture_output=capture, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            command, 124, "", f"`{' '.join(command[:3])}` did not answer within {timeout} seconds; the Docker daemon may be hung or still starting",
+        )
+
+
+def _docker_root_dir(report: dict[str, Any]) -> None:
+    """Where the engine keeps its data, from the one place Kura asks (`docker_data_location`):
+    `root_dir` when this host can measure it, else `root_dir_not_measured` with why."""
+    root, unseen = docker_data_location()
+    if root is not None:
+        report["root_dir"] = str(root)
+    else:
+        report["root_dir_not_measured"] = unseen
 
 
 # A doctor report's conclusion leads, so a reader that stops early has read the answer.
@@ -227,9 +248,7 @@ def _docker_storage_summary() -> dict[str, Any]:
     if problem:
         summary["diagnosis"] = problem
         return summary
-    root_dir = _docker_run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture=True)
-    if root_dir.returncode == 0:
-        summary["root_dir"] = root_dir.stdout.strip()
+    _docker_root_dir(summary)
     usage = _docker_run(["docker", "system", "df", "--format", "{{json .}}"], capture=True)
     items: list[dict[str, Any]] = []
     if usage.returncode == 0:
@@ -447,9 +466,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             else:
                 diagnosis = f"Docker CLI is available but the daemon is unreachable ({problem}). If Docker Desktop settings look correct, restart Docker Desktop and this WSL distro; confirm the active Docker context points at the Desktop Linux engine."
         if checks["daemon_reachable"]:
-            root_dir = _docker_run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture=True)
-            if root_dir.returncode == 0:
-                docker_storage["root_dir"] = root_dir.stdout.strip()
+            _docker_root_dir(docker_storage)
             usage = _docker_run(["docker", "system", "df", "--format", "{{json .}}"], capture=True)
             if usage.returncode == 0:
                 docker_storage["usage"] = [json.loads(line) for line in usage.stdout.splitlines() if line.strip()]
@@ -465,14 +482,14 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
                 # Every Kura image has python with torch; the entrypoint differs, so name python.
                 probe_image = images[present[0]]
                 diagnostics["gpu_probe_image"] = probe_image
-                gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", "--entrypoint", "python", probe_image, "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True)
+                gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", "--entrypoint", "python", probe_image, "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True, timeout=DOCKER_PROBE_TIMEOUT_SEC)
                 checks["gpu_available"] = gpu_probe.returncode == 0
                 if gpu_probe.returncode:
                     # What the probe said is the only evidence of why; a later probe may pass.
                     diagnostics["gpu_probe_error"] = _redact_secret_text((gpu_probe.stderr or gpu_probe.stdout).strip())[-2000:]
                 if "ai-toolkit" in present:
                     # Only the AI-Toolkit image records its runtime here.
-                    runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", images["ai-toolkit"], "/opt/kura-runtime.json"], capture=True)
+                    runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", images["ai-toolkit"], "/opt/kura-runtime.json"], capture=True, timeout=DOCKER_PROBE_TIMEOUT_SEC)
                     if runtime_result.returncode == 0:
                         try:
                             runtime = json.loads(runtime_result.stdout)
