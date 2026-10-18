@@ -1,0 +1,37 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-18'
+executor: docker
+kura_commit: e4ad6d8
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on every backend
+  on local Docker, on main at e4ad6d8 (Kura 0.6.0, clean editable checkout, as every run's
+  realization records), including the gradient-accumulation run on sd-scripts and AI-Toolkit.
+backends:
+  sd-scripts:
+    model: Comfy-Org/stable-diffusion-v1-5-archive (sd15)
+    runtime_image_digest: sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06
+    adapter_source: 7a50ae12e97b15411c80cf6f4231a04c27ec9b816ddadecb1df40077f1cf2bff
+    runs: [20261018-1536_conf-sd-one-control_614d, 20261018-1537_conf-sd-one-control-2_6301, 20261018-1537_conf-sd-one-split_66e8, 20261018-1538_conf-sd-one-resume_016f, 20261018-1538_conf-sd-multi-fresh_fad8, 20261018-1539_conf-sd-multi-split_fe18, 20261018-1540_conf-sd-multi-resume_9af7, 20261018-1540_conf-sd-multi-accum-2_9680]
+  ai-toolkit:
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c
+    adapter_source: da6bf5ce2c5f9c1f054687e58aaeecae47e7e1a8903ab3ab6d00fc1b3b83484e
+    runs: [20261018-1541_conf-ai-one-control_fda8, 20261018-1542_conf-ai-one-control-2_0bdc, 20261018-1542_conf-ai-one-split_1d05, 20261018-1542_conf-ai-one-resume_5298, 20261018-1543_conf-ai-multi-fresh_94e9, 20261018-1543_conf-ai-multi-split_5401, 20261018-1544_conf-ai-multi-resume_7dcb, 20261018-1544_conf-ai-multi-accum-2_328d]
+  musubi-tuner:
+    model: Comfy-Org/Wan_2.1_ComfyUI_repackaged (wan 2.1 t2v 1.3B)
+    runtime_image_digest: sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472
+    adapter_source: 6fbc2676c13d6ec5dd72ae6692d503a442869c2d0a21eaad73f7da1eaa7286f0
+    runs: [20261018-1545_conf-musubi-one-control_d6a8, 20261018-1546_conf-musubi-one-control-2_e473, 20261018-1547_conf-musubi-one-split_4a5c, 20261018-1548_conf-musubi-one-resume_b42d, 20261018-1549_conf-musubi-multi-fresh_3789, 20261018-1550_conf-musubi-multi-split_2694, 20261018-1551_conf-musubi-multi-resume_1f06]
+results:
+  P1: pass on every backend
+  P2: pass on every backend
+  P3: pass on every backend
+  P4: pass on every backend
+  P6: not checked (local Docker; the harness checks it on RunPod only)
+  P7: pass on every backend
+  P8: pass on every backend
