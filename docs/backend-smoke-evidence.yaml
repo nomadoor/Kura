@@ -14,6 +14,39 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-0.13.32-conformance-docker-2026-10-18
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: ddfec4da21ab68f7cc13f978a044b4213349273dfb445204526a6acf89f25613
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs, and gradient accumulation 2)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-ai-toolkit-0.13.32-conformance.yaml
+  - id: ai-toolkit-0.13.32-class-import-2026-10-18
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: ddfec4da21ab68f7cc13f978a044b4213349273dfb445204526a6acf89f25613
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f
+    native_path:
+      probe: registered-diffusion-class-imports
+      imported_classes: 49
+    evidence_kind: parser
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-ai-toolkit-0.13.32-class-import.yaml
   - id: sd-scripts-main-conformance-docker-2026-10-18
     backend: sd-scripts
     adapter_source:

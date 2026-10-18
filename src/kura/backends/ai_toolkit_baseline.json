@@ -1119,6 +1119,42 @@
     "unload_text_encoder": false
    }
   },
+  "moss_image:edit": {
+   "arch": "moss_image",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "edit": true,
+     "kv_cache": true,
+     "match_target_res": true,
+     "uncond_skip_layers": [
+      22
+     ]
+    },
+    "qtype": "convrot8",
+    "qtype_te": "convrot8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "OpenMOSS-Team/MOSS-Image-SFT",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "shift",
+    "unload_text_encoder": false
+   }
+  },
   "nucleus_image": {
    "arch": "nucleus_image",
    "dataset": {
@@ -1899,11 +1935,11 @@
  "schema_version": 1,
  "upstream": {
   "base_arch": "flex1",
-  "commit": "dcebc7442df70e5239c68167919fd2909c615769",
-  "image": "nomadoor/kura-ai-toolkit@sha256:d7950037664228a57c1a30ac83d4eee6aa3ef2e75261e056e54ddd88db36150c",
+  "commit": "9d408eb64d61e7b47e509e29f5da99bfab1afac0",
+  "image": "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f",
   "sources": {
    "extensions_built_in/audio_models/ui.tsx": "34bb12d8f876b9f9aca18a2e7f08e39f881ed07df27b9c300154d186250c0608",
-   "extensions_built_in/diffusion_models/ui.tsx": "04cf84a81359d62adf5853e733c42709e7567b1c9bdc15cb448c2e8622760648",
+   "extensions_built_in/diffusion_models/ui.tsx": "2f583d75f6e45fc5d79ed1000b635b4b7ccf5d05fc2db698aed843451e64acbe",
    "extensions_built_in/flex2/ui.tsx": "77d3198d85a78db1f22dc76f23326105caa6baa5d5bc9354d4ab37a168a4058e",
    "extensions_built_in/llm_models/ui.tsx": "78b9311108a1998058df4b6e40208fc2e2986055e992df3de5e934c4d66d37d7",
    "ui/src/app/jobs/new/jobConfig.ts": "5621c6bb0e45a01327468f8c24e148b9a9c54a0bd809a99222356cb6af731cb8",

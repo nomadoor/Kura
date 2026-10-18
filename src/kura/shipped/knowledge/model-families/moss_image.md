@@ -19,6 +19,15 @@
   took about 2 s per step and about 8.5 GB of VRAM; 1000 steps at 768 px,
   rank 16, finished in 32 minutes.
   source: run 20261017-1752_myakumyaku-moss-image-te-cache_1b4d
+- The runs above used AI-Toolkit 0.13.30. From 0.13.32 the trainer saves a MOSS
+  LoRA with separate q, k, and v keys instead of fused qkv keys, so its files
+  differ from those runs' files; no MOSS run has used 0.13.32 yet.
+  source: AI-Toolkit commit 9a1828f (moss_image.py `convert_lora_weights_before_save`)
+- Edit on the SFT weights: `model_arch: moss_image:edit` with
+  `model.base: OpenMOSS-Team/MOSS-Image-SFT` and `model_edit: true` fills the
+  upstream UI's `kv_cache` and `match_target_res`. It is untested: Kura only
+  compiles it.
+  source: AI-Toolkit baseline entry `moss_image:edit` (pinned commit 9d408eb6)
 
 ## character
 

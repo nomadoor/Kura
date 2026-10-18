@@ -157,7 +157,7 @@ can spill into shared system memory: the run does not fail, it runs tens of
 times slower (Z-Image and MOSS-Image on 12 GB ran 35 to 55 times slower). For a local AI-Toolkit run on such a GPU, set
 `native_config.train.cache_text_embeddings: true` unless a limit below
 applies; the family cards give measured figures. In the pinned AI-Toolkit
-(dcebc744) it encodes each item's caption once before training, writes the
+(9d408eb6) it encodes each item's caption once before training, writes the
 embeddings to a `_t_e_cache` folder beside the images, and removes the text
 encoder from the GPU. Its limits:
 
