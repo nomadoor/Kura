@@ -19,6 +19,10 @@
   took about 2 s per step and about 8.5 GB of VRAM; 1000 steps at 768 px,
   rank 16, finished in 32 minutes.
   source: run 20261017-1752_myakumyaku-moss-image-te-cache_1b4d
+- Recorded: a context-free acceptance test on the same GPU, with the text
+  encoder cached and unloaded, reported 1000 steps in 38 minutes (1.87 s per
+  step) and a 63 MiB LoRA. The run folder was not kept.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 - The runs above used AI-Toolkit 0.13.30. From 0.13.32 the trainer saves a MOSS
   LoRA with separate q, k, and v keys instead of fused qkv keys, so its files
   differ from those runs' files; no MOSS run has used 0.13.32 yet.

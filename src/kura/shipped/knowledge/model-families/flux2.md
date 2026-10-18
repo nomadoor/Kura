@@ -21,6 +21,9 @@ source: owner (2026-08-15)
   2.6 s per step at 11.15 GB; with `native_config.train.cache_text_embeddings:
   true` 1.3 to 2.3 s per step at 7.9 GB.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
+- Recorded: in that acceptance test the AI-Toolkit Klein 4B LoRA ran 650 steps
+  in 21 minutes on AI-Toolkit 0.13.30. The run folder was not kept.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 - Disk: for Klein 4B, AI-Toolkit downloads `black-forest-labs/FLUX.2-klein-base-4B`,
   `Qwen/Qwen3-4B` and `ai-toolkit/flux2_vae`; Musubi's bundle downloads
   `Comfy-Org/vae-text-encorder-for-flux-klein-4b`. The transformer and VAE files
@@ -30,6 +33,9 @@ source: owner (2026-08-15)
 - Musubi `architecture: flux2` Klein 4B on the same GPU with `fp8_base` and
   `fp8_scaled`, 768 px: 1.74 s per step on the first try.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
+- Recorded: that Musubi Klein 4B LoRA ran 1000 steps in 35 minutes on Musubi
+  Tuner v0.3.5. The run folder was not kept.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 - Musubi 9B on an NVIDIA A40 (48 GB): at 1024-class resolution and rank 32,
   training without gradient checkpointing ran out of memory even at
   batch_size 1, and batch_size above 1 (a GPU micro-batch in Musubi) ran out of

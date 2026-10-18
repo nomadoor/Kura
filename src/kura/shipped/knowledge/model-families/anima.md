@@ -21,6 +21,12 @@ source: owner (2026-08-15)
   with 12 GB VRAM. Observed speed was about 1.0 second per optimizer step after
   initialization.
   source: run 20260803-2140_vivi-anima-7e5-2000_d8d3
+- Recorded: on the same GPU, a context-free acceptance test trained an
+  sd-scripts Anima LoRA for 1200 steps in 17 minutes (0.78 s per step); the
+  LoRA file was 88 MiB. It used the sd-scripts image pinned at the time
+  (commit 37a1cbbc); the run folder was not kept, so its settings beyond these
+  are not recorded.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 
 ## Model files
 
