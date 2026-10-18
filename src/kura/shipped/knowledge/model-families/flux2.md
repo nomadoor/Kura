@@ -50,3 +50,27 @@ source: owner (2026-08-15)
   `architecture: flux2` because the trainer's generic default is `sigma`.
   source: upstream (Musubi Tuner flux_2.md guide at the pinned v0.3.5)
 - No evaluated task entries yet.
+
+## Model files
+
+- musubi-tuner `architecture: flux2` Klein Base 4B trained from Kura's model
+  bundle, which downloads `dit`, `vae` and `text_encoder` from
+  `Comfy-Org/vae-text-encorder-for-flux-klein-4b`. Write it in the run's
+  `backend.config` next to your other settings:
+
+  ```yaml
+  backend:
+    name: musubi-tuner
+    config:
+      architecture: flux2
+      model_version: klein-base-4b
+      model_bundle: flux2-klein-base-4b
+  ```
+
+  These are the files of Kura's real smoke `musubi-flux2-klein-4b`, which
+  completed an optimizer step with a published adapter on RunPod, and of a
+  100-step acceptance run on RunPod. The bundle pins no revision, so each
+  download takes the repository's current files. The other bundles
+  (`flux2-klein-4b`, `flux2-klein-base-9b`, `flux2-klein-9b`) exist, but no
+  recorded run trained from them.
+  source: real smoke musubi-flux2-klein-4b (evidence musubi-flux2-klein-4b-2026-09-29); acceptance test 2026-10-19, run 20261019-0751_vivi-klein4b-runpod_8992

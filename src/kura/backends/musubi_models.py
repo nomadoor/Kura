@@ -85,8 +85,26 @@ def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
     clean = _musubi_explicit_model_paths(override)
     clean.update(musubi_model_download_specs(run)[1])
     if not clean:
-        raise ValueError(f"Musubi Tuner requires model_paths, model_downloads, or model_bundle; {family_card_hint(_musubi_architecture(run))}")
+        architecture = _musubi_architecture(run)
+        raise ValueError(
+            f"Musubi Tuner requires model_paths, model_downloads, or model_bundle; {family_card_hint(architecture)}"
+            + _bundle_hint(architecture, override.get("model_version"))
+        )
     return clean
+
+
+def bundles_for(architecture: str) -> list[str]:
+    """The model_bundle names Kura knows for `architecture`, in MUSUBI_BUNDLES order."""
+    return [name for name, (bundle_architecture, _) in MUSUBI_BUNDLES.items() if bundle_architecture == architecture]
+
+
+def _bundle_hint(architecture: str, model_version: Any) -> str:
+    names = bundles_for(architecture)
+    if not names:
+        return ""
+    listed = f"model_bundle values for {architecture}: {', '.join(names)}"
+    matching = f"{architecture}-{model_version}"
+    return f"; model_bundle {matching} downloads this model_version's files ({listed})" if matching in names else f"; {listed}"
 
 
 def _musubi_explicit_model_paths(override: dict[str, Any]) -> dict[str, str]:
@@ -396,9 +414,16 @@ def musubi_model_facts(architecture_filter: str | None = None) -> dict[str, Any]
         for version in FLUX2_MODEL_VERSIONS if architecture == "flux2" else (None,):
             key = f"architecture={architecture}" + (f", model_version={version}" if version else "")
             roles[key] = {"formats": _musubi_role_formats(architecture, version)}
+    sources = model_source_facts()
+    bundled = [architecture for architecture in dict.fromkeys(architecture for architecture, _ in MUSUBI_BUNDLES.values())
+               if architecture_filter in (None, architecture)]
+    if bundled:
+        sources["model_bundle"] = "one name that downloads every role's files, instead of model_downloads; " + "; ".join(
+            f"architecture={architecture}: {', '.join(bundles_for(architecture))}" for architecture in bundled
+        )
     return {
         "model_roles": roles,
-        "model_sources": model_source_facts(),
+        "model_sources": sources,
     }
 
 

@@ -518,7 +518,8 @@ def _print_model_facts(facts: dict[str, Any]) -> None:
         print("native_config: " + facts["native_config"])
     roles = facts.get("model_roles")
     if isinstance(roles, dict):
-        print("model roles, each named in backend.config.model_paths or model_downloads:")
+        sources = facts.get("model_sources") if isinstance(facts.get("model_sources"), dict) else {}
+        print("model roles, each named in backend.config.model_paths or model_downloads" + (", or downloaded by a model_bundle" if "model_bundle" in sources else "") + ":")
         for selector, contract in roles.items():
             if "required" in contract:
                 print(f"  {selector}: required {', '.join(contract['required'])}; optional {', '.join(contract['optional']) or 'none'}")
