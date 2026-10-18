@@ -9,6 +9,17 @@
   the same GPU at 512px, batch 1, dim 4, U-Net only, bf16, AdamW8bit, with
   latents and text-encoder outputs cached to disk.
   source: real smoke sd-scripts-sdxl (evidence sd-scripts-sdxl-2026-10-19-0211)
+- Recorded: a context-free acceptance test on the same GPU trained an
+  sd-scripts SDXL LoRA for 750 steps in 32 minutes (2.27 s per step), on the
+  sd-scripts image pinned at the time (commit 37a1cbbc). The run folder was not
+  kept, so its settings are not recorded.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
+- Recorded: the same test trained an AI-Toolkit `sdxl` LoRA for 750 counted
+  steps in 16 minutes (about 1 s per step) on AI-Toolkit 0.13.30. Kura at that
+  time miscounted steps under gradient accumulation, so only 375 optimizer
+  updates happened; Kura 0.7.0 counts one step as one optimizer update. The
+  run folder was not kept.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 
 - Disk: sd-scripts reads the single file `sd_xl_base_1.0.safetensors` (6.9 GB,
   fp16); AI-Toolkit's `sdxl` loads the diffusers tree of

@@ -11,6 +11,9 @@
   `native_config.train.cache_text_embeddings: true`, 0.9 to 1.4 s per step at
   7.4 GB.
   source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
+- Recorded: in that acceptance test an AI-Toolkit `iris3b` LoRA ran 650 steps
+  in 15 minutes on AI-Toolkit 0.13.30. The run folder was not kept.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 
 ## character
 

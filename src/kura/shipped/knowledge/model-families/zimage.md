@@ -10,6 +10,10 @@
   gradient checkpointing completed 600 steps locally on an RTX 4070 Ti with
   12 GB VRAM and no block swap, at about 3.25 seconds per step.
   source: owner (2026-10-18)
+- Recorded: a context-free acceptance test on the same GPU reported a Musubi
+  Z-Image LoRA at fp8 without block swap running 600 steps in 40 minutes
+  (3.25 s per step) on Musubi Tuner v0.3.5. The run folder was not kept.
+  source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
 - Upstream's starting timestep values: Musubi's own Z-Image guide trains with
   `timestep_sampling: shift`, `weighting_scheme: none`, and
   `discrete_flow_shift: 2.0`, and says the best Z-Image settings are unclear,

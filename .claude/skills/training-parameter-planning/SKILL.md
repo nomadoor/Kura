@@ -83,6 +83,20 @@ values each shipped card covers:
 | `iris3b` | `iris3b` | — | — |
 | `moss_image` | `moss_image:base` | — | — |
 | `zimage` | `zimage` | — | `zimage` |
+| `chroma` | `chroma` | — | — |
+| `flex2` | `flex2` | — | — |
+| `flux1` | `flux` | `flux1` | — |
+| `framepack` | — | — | `framepack` |
+| `hidream` | `hidream` | — | — |
+| `hidream_o1` | — | — | `hidream_o1` |
+| `hunyuan_video` | — | — | `hunyuan_video` |
+| `hunyuan_video_1_5` | — | — | `hunyuan_video_1_5` |
+| `ideogram4` | — | — | `ideogram4` |
+| `kandinsky5` | — | — | `kandinsky5` |
+| `minimax_h3` | `minimax_h3` | — | `minimax_h3` |
+| `qwen_image` | `qwen_image`, `qwen_image_edit` | — | `qwen_image` |
+| `qwen_image_2` | `qwen_image_2` | — | — |
+| `wan` | — | — | `wan` |
 
 Every other selector value `kura run capabilities <backend>` lists has no
 shipped card; a user card in `knowledge/model-families/` may cover it. For a
