@@ -112,6 +112,18 @@ without answering a questionnaire. Separate:
 - **execution accommodations**: precision or quantized artifacts,
   checkpointing, micro-batch/accumulation, offload, swap, cache, and GPU class.
 
+Saved weight precision is the trainer's unless the run sets it, and Kura does
+not choose it. Musubi Tuner and sd-scripts save LoRA weights in fp32, the
+precision the network trains in, unless `save_precision` is set (for
+sd-scripts, `--full_fp16`/`--full_bf16` also trains and saves the network in
+that precision).
+Musubi Tuner takes `backend.config.save_precision`; sd-scripts has no declared
+field for it, so only its escape hatch sets it (`backend.config.extra_args:
+["--save_precision", "bf16"]`). AI-Toolkit saves fp16 by default (its
+`SaveConfig` dtype `float16`), and `backend.config.native_config.save.dtype`
+changes it. At the same rank an fp32 file is about twice the size of an fp16
+or bf16 one.
+
 ## Fit and adjustment ladder
 
 Use the smallest resource class that should satisfy the declared plan, based on

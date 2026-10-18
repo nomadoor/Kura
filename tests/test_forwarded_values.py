@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from kura.backends import BACKENDS, backend_capabilities, validate_backend_config
+from kura.backends import BACKENDS, REQUIRED_VALUE_SOURCES, backend_capabilities, validate_backend_config
 from kura.backends.shared import argv_value
 from kura.cli import cmd_run_capabilities
 
@@ -120,8 +120,10 @@ class ForwardedValueTests(unittest.TestCase):
                 run["backend"]["config"] = with_required(backend, run["backend"]["config"])
                 validate_backend_config(run)
                 del run["backend"]["config"]["learning_rate"]
-                with self.assertRaisesRegex(ValueError, r"requires learning_rate \(the trainer would otherwise use 2e-6 \(.*\)\)\. Kura adds no training default"):
+                with self.assertRaisesRegex(ValueError, r"requires learning_rate \(the trainer would otherwise use 2e-6 \(.*\)\)\. Kura adds no training default") as caught:
                     validate_backend_config(run)
+                # The refusal says where a recommended value is read, in the capabilities' words.
+                self.assertIn(REQUIRED_VALUE_SOURCES, str(caught.exception))
         lllite = ARGV_RUNS["sd-scripts"]({"architecture": "anima", "mode": "controlnet_lllite"})
         lllite["backend"]["config"]["model_paths"] = {"dit": "/models/dit", "qwen3": "/models/qwen3", "vae": "/models/vae"}
         validate_backend_config({**lllite, "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", lllite["backend"]["config"])}})
@@ -161,6 +163,7 @@ class ForwardedValueTests(unittest.TestCase):
                     self.assertEqual(cmd_run_capabilities(argparse.Namespace(backend=backend, json=False)), 0)
                 self.assertIn("backend.config fields you must write (Kura adds no training default):", stdout.getvalue())
                 self.assertIn(expected, stdout.getvalue())
+                self.assertIn(REQUIRED_VALUE_SOURCES, stdout.getvalue())
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             cmd_run_capabilities(argparse.Namespace(backend="ai-toolkit", json=False))

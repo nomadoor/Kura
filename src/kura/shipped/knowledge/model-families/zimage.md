@@ -10,6 +10,11 @@
   gradient checkpointing completed 600 steps locally on an RTX 4070 Ti with
   12 GB VRAM and no block swap, at about 3.25 seconds per step.
   source: owner (2026-10-18)
+- Upstream's starting timestep values: Musubi's own Z-Image guide trains with
+  `timestep_sampling: shift`, `weighting_scheme: none`, and
+  `discrete_flow_shift: 2.0`, and says the best Z-Image settings are unclear,
+  so these are a base to adjust from.
+  source: upstream (Musubi Tuner zimage.md guide at the pinned v0.3.5)
 
 ## Training on AI-Toolkit
 

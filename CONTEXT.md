@@ -132,7 +132,9 @@ The protected artifact under `artifacts/training-state/` that lets a later run
 resume training.
 
 **Resume**:
-Starting a new derived training run from a source run's training state.
+Starting a new derived training run from a source run's training state. The
+derived run names its source in `parent_run`; `kura run new --from` copies
+settings only and leaves `parent_run` empty.
 _Avoid_: continuation (in user-facing text)
 
 **Publication**:

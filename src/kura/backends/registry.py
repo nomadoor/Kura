@@ -599,8 +599,16 @@ def _validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> No
                     for item in missing
                 )
                 + ". Kura adds no training default; write the value you chose."
-                + f" Run `kura run capabilities {adapter.name}` for required fields."
+                + f" Run `kura run capabilities {adapter.name}` for required fields; {REQUIRED_VALUE_SOURCES}."
             )
+
+
+# Where a value for a required field (one with no upstream training default) is read. The
+# refusal of a missing one and the capabilities listing say it in these words.
+REQUIRED_VALUE_SOURCES = (
+    "the pinned trainer's own guide for the model (in its docs/) and the family card "
+    ".kura/knowledge/model-families/<architecture>.md, when one exists, say what upstream trains with"
+)
 
 
 def backend_capabilities(name: Any, arch: str | None = None) -> dict[str, Any]:

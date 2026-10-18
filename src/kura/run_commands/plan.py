@@ -404,6 +404,26 @@ def _model_download_threshold_bytes(run: dict[str, Any]) -> int:
     return _configured_gib(safety.get("large_model_download_gb"), default=25) * 1024**3
 
 
+def _probe_failure_fact(item: dict[str, Any], extra: str = "") -> str:
+    """What a failed Hugging Face metadata probe says, and what to do about it, keyed on its status."""
+    artifact, status, detail = item.get("artifact"), item.get("status"), item.get("detail")
+    if status == "auth_error":
+        return (
+            f"Hugging Face refused access to {artifact}{extra} ({detail}): the model is gated or private; "
+            "ask the user to accept its license on the model's Hugging Face page and to run "
+            "`kura secrets set HF_TOKEN` in their own terminal (an agent never runs it), then run the plan again"
+        )
+    if status == "not_found":
+        return (
+            f"Hugging Face has no file {artifact}{extra} ({detail}); "
+            "check repo_id, filename, and revision in run.yaml, then run the plan again"
+        )
+    return (
+        f"Hugging Face metadata probe failed for {artifact}{extra} ({status}: {detail}); "
+        "restore controller connectivity and run the plan again"
+    )
+
+
 def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str = "docker") -> None:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     probe_failures = download_estimate.get("probe_failures")
@@ -412,12 +432,7 @@ def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dic
         for item in probe_failures if isinstance(item, dict) and (executor != "runpod" or item.get("status") in {"auth_error", "not_found"})
     ] if isinstance(probe_failures, list) else []
     if blocking_failures:
-        first = blocking_failures[0]
-        raise ValueError(
-            "Hugging Face metadata probe failed for "
-            f"{first.get('artifact')} ({first.get('status')}: {first.get('detail')}); "
-            "restore controller connectivity or credentials and run the plan again"
-        )
+        raise ValueError(_probe_failure_fact(blocking_failures[0]))
     unknown = download_estimate.get("unknown")
     if isinstance(unknown, list) and unknown and safety.get("allow_large_model_downloads") is not True:
         labels = ", ".join(str(item) for item in unknown[:5])
@@ -473,14 +488,8 @@ def _model_download_preflight_report(
         extra = "" if len(probe_failures) == 1 else f" and {len(probe_failures) - 1} more"
         deterministic_failure = any(isinstance(item, dict) and item.get("status") in {"auth_error", "not_found"} for item in probe_failures)
         severity = "warning" if executor == "runpod" and not deterministic_failure else "error"
-        scope = "remote Pod connectivity is not determined by this local probe" if severity == "warning" else "download readiness or disk requirement could not be established"
-        records.append(
-            _preflight_record(
-                "model-metadata-connectivity",
-                severity,
-                f"Hugging Face metadata probe failed for {first.get('artifact')}{extra} ({first.get('status')}: {first.get('detail')}); {scope}",
-            )
-        )
+        scope = "; remote Pod connectivity is not determined by this local probe" if severity == "warning" else ""
+        records.append(_preflight_record("model-metadata-connectivity", severity, _probe_failure_fact(first, extra) + scope))
     unknown = download_estimate.get("unknown")
     if isinstance(unknown, list) and unknown:
         labels = ", ".join(str(item) for item in unknown[:5])

@@ -31,4 +31,10 @@ source: owner (2026-08-15)
   A40, suggest gradient_checkpointing: true and batch_size 1 with gradient
   accumulation for the effective batch, and say why; the user decides.
   source: Kura's former A40 guard (added 2026-07-04, moved here 2026-10-14); the observing run was not recorded
+- Upstream's recommended timestep sampling: Musubi's own FLUX.2 guide trains
+  with `timestep_sampling: flux2_shift` and `weighting_scheme: none`, and
+  names `flux2_shift` as recommended for FLUX.2; it sets no
+  `discrete_flow_shift`. Kura requires `timestep_sampling` for
+  `architecture: flux2` because the trainer's generic default is `sigma`.
+  source: upstream (Musubi Tuner flux_2.md guide at the pinned v0.3.5)
 - No evaluated task entries yet.
