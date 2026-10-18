@@ -412,7 +412,7 @@ class DevelopmentImageTests(unittest.TestCase):
         build = calls[0]
         self.assertEqual(build[build.index("--file") + 1], str(ROOT / "docker" / "sd-scripts" / "Dockerfile"))
         self.assertEqual(build[-1], str(ROOT))
-        self.assertIn("SD_SCRIPTS_REF=37a1cbbc5725ed2a3575506e7bd2001c9908ac92", build)
+        self.assertIn("SD_SCRIPTS_REF=690ea7f96c23182352ec63def76d431c6120bd2f", build)
         self.assertEqual(build[build.index("--tag") + 1], "kura-sd-scripts:dev")
 
     def test_build_refuses_inside_another_checkout_and_names_the_one_it_builds(self) -> None:

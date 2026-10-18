@@ -14,6 +14,132 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: sd-scripts-v0.12.0-flux-prefix-conformance-docker-2026-10-19
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: f8e7a50cd6a250bca49514f79ce9aecac7d616349ed33dc65d83fd44ca19ea84
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef
+    native_path:
+      architecture: sd15
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs, and gradient accumulation 2)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-19'
+    artifact: smoke-evidence/2026-10-19-sd-scripts-v0.12.0-flux-prefix-conformance.yaml
+  - id: sd-scripts-flux1-2026-10-19-0211
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: f8e7a50cd6a250bca49514f79ce9aecac7d616349ed33dc65d83fd44ca19ea84
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef
+    native_path:
+      architecture: flux1
+      mode: lora
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-19'
+    artifact: smoke-evidence/2026-10-19-sd-scripts-v0.12.0-flux-prefix-real-smokes.yaml
+  - id: sd-scripts-sdxl-2026-10-19-0211
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: f8e7a50cd6a250bca49514f79ce9aecac7d616349ed33dc65d83fd44ca19ea84
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef
+    native_path:
+      architecture: sdxl
+      mode: lora
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-19'
+    artifact: smoke-evidence/2026-10-19-sd-scripts-v0.12.0-flux-prefix-real-smokes.yaml
+  - id: sd-scripts-anima-lora-2026-10-19-0211
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: f8e7a50cd6a250bca49514f79ce9aecac7d616349ed33dc65d83fd44ca19ea84
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef
+    native_path:
+      architecture: anima
+      mode: lora
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-19'
+    artifact: smoke-evidence/2026-10-19-sd-scripts-v0.12.0-flux-prefix-real-smokes.yaml
+  - id: sd-scripts-v0.12.0-conformance-docker-2026-10-18
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 47bd4634d9a17b72deb4571245a371189367da043d722d2394bcf2fd1d71709c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8
+    native_path:
+      architecture: sd15
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs, and gradient accumulation 2)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-sd-scripts-v0.12.0-conformance.yaml
+  - id: sd-scripts-sdxl-2026-10-18-2229
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 47bd4634d9a17b72deb4571245a371189367da043d722d2394bcf2fd1d71709c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8
+    native_path:
+      architecture: sdxl
+      mode: lora
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-sd-scripts-v0.12.0-real-smokes.yaml
+  - id: sd-scripts-anima-lora-2026-10-18-2229
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 47bd4634d9a17b72deb4571245a371189367da043d722d2394bcf2fd1d71709c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8
+    native_path:
+      architecture: anima
+      mode: lora
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-18'
+    artifact: smoke-evidence/2026-10-18-sd-scripts-v0.12.0-real-smokes.yaml
   - id: musubi-ideogram4-2026-10-18-2300
     backend: musubi-tuner
     adapter_source:

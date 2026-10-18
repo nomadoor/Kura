@@ -53,6 +53,10 @@ source: owner (2026-08-15)
   step with a published output.
   source: real smoke sd-scripts-anima-lora (evidence sd-scripts-anima-lora-2026-09-29)
   source: real smoke sd-scripts-anima-lllite (evidence sd-scripts-anima-lllite-2026-09-29)
+- Recorded: on the sd-scripts v0.12.0 image the `mode: lora` smoke completed one
+  local Docker optimizer step with a published output again; `mode:
+  controlnet_lllite` has not run on that image.
+  source: real smoke sd-scripts-anima-lora (evidence sd-scripts-anima-lora-2026-10-19-0211)
 
 ## character
 

@@ -354,7 +354,7 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 1), ("gradient_accumulation_steps", 1)),
     decided=(("lr_scheduler", LR_SCHEDULER_DECIDED),),
-    # Defaults of the pinned trainer (37a1cbb) that no one chose for the model: shared ones, and
+    # Defaults of the pinned trainer (v0.12.0) that no one chose for the model: shared ones, and
     # FLUX.1 and Anima LLLite flow values whose argparse defaults differ from what upstream's own
     # guides train with (docs/flux_train_network.md:144-146, docs/anima_train_control_net_lllite.md:112-113).
     # Anima LoRA flow values and the LLLite network values left unset take the trainer's own defaults.
