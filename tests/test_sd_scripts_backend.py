@@ -834,13 +834,13 @@ class SdScriptsBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not contain secrets"):
             command_sd_scripts(secret)
 
-    def test_an_undeclared_disk_cache_is_a_warning_and_never_refused(self) -> None:
+    def test_an_undeclared_disk_cache_is_information_and_never_refused(self) -> None:
         # Every backend reads the same safety.disk_cache_estimate_gb (tests/test_disk_cache.py); none refuses a run for it.
         run = base_run()
         run["backend"]["config"]["cache_latents_to_disk"] = True
         self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
         report = _sd_scripts_cache_preflight_report(run)
-        self.assertEqual(report[0]["severity"], "warning")
+        self.assertEqual(report[0]["severity"], "info")
         self.assertIn("not counted in the disk estimate", report[0]["fact"])
         run["safety"] = {"disk_cache_estimate_gb": 1.5}
         estimate = _sd_scripts_disk_cache_estimate(run)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from kura.paths import AI_TOOLKIT_MODELS_PATH
+from kura.paths import HF_CACHE_CONTAINER_PATH
 from kura.run_commands.plan import _model_download_preflight_report
 
 
@@ -24,10 +24,10 @@ class BackendResolvedModelTests(unittest.TestCase):
         cache = Path("/mnt/e/hf-cache")
         local = _model_download_preflight_report(run, {}, executor="docker", local_cache=cache)[0]["fact"]
         remote = _model_download_preflight_report(run, {}, executor="runpod", local_cache=cache)[0]["fact"]
-        self.assertIn(f"into the Hugging Face cache at {cache / 'ai-toolkit-models'},", local)
-        self.assertIn(f"into the Pod's Hugging Face cache ({AI_TOOLKIT_MODELS_PATH})", remote)
+        self.assertIn(f"into the Hugging Face cache at {cache} (diffusers repositories in hub/, single files in ai-toolkit-models/)", local)
+        self.assertIn(f"into the Pod's Hugging Face cache at {HF_CACHE_CONTAINER_PATH} (diffusers repositories in hub/", remote)
         for fact in (local, remote):
-            self.assertIn("may write tens of GB there", fact)
+            self.assertIn("not counted in the disk estimate (often 10–30 GB)", fact)
 
 
 if __name__ == "__main__":

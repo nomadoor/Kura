@@ -157,7 +157,7 @@ or WSL/VHDX/Windows-side operations.
   risk. It does not waive DNS, timeout, HTTP, authentication, or missing-file
   failures.
 - Treat Hugging Face metadata outcomes distinctly. Local Docker blocks when a
-  required write cannot be measured. RunPod may proceed with an incomplete
+  download Kura makes cannot be measured. RunPod may proceed with an incomplete
   estimate after controller-only DNS, timeout, or transient HTTP failure, but
   shared authentication failure and a missing immutable artifact remain
   errors.
@@ -167,10 +167,20 @@ or WSL/VHDX/Windows-side operations.
   checkpoint retention (`kura run capabilities <backend>` lists it:
   `save_last_n_steps` for sd-scripts and AI-Toolkit,
   `prune_checkpoints_before_step` for Musubi Tuner).
-- A run whose trainer writes a disk cache (every Musubi Tuner run; sd-scripts
-  or AI-Toolkit when the run caches latents or text encodings to disk) gets a
-  plan warning that the cache is not counted until `safety.disk_cache_estimate_gb`
-  declares its size; then both disk checks count it.
+- Writes Kura cannot measure are covered locally by the free-space floor until
+  their size is declared; then both disk checks (local launch and the RunPod
+  container disk) count them. None is refused. The RunPod container-disk check
+  has no floor, so on RunPod an undeclared write is not covered: declare it, or
+  leave headroom in `runpod.container_disk_gb`.
+  - A run whose trainer writes a disk cache (a Musubi Tuner run unless `precache: false` or a custom command; sd-scripts
+    or AI-Toolkit when the run caches latents or text encodings to disk) gets a
+    plan info line that the cache is not counted (image caches are a few MB
+    per item); set `safety.disk_cache_estimate_gb` for large or video datasets.
+  - AI-Toolkit downloads its models itself into the Hugging Face cache
+    (diffusers repositories in `hub/`, single files in `ai-toolkit-models/`),
+    often 10–30 GB. The plan warns that this is not counted; set
+    `safety.model_download_estimate_gb` to count it under the Hugging Face
+    cache locally and in the RunPod container disk.
 
 ## Safety map
 

@@ -88,7 +88,8 @@ Kura mounts that directory at `/workspace/cache/huggingface` in every local
 container, measures free space on its drive before launch, and counts the models
 already in it. `kura cleanup cache` reports a cache outside the workspace but
 never deletes it, since other workspaces may share it. AI-Toolkit's own model
-downloads go to `ai-toolkit-models/` inside this cache. Two local runs that
+downloads go into this cache too: diffusers repositories in `hub/`, single files
+in `ai-toolkit-models/`. Two local runs that
 fetch the same AI-Toolkit model at the same time can collide in the trainer's
 partial-download directories, which a shared cache widens to every workspace
 using it; with the default `runner.local_slots: 1` runs do not overlap.
@@ -134,9 +135,17 @@ A run whose trainer writes a disk cache (Musubi Tuner always caches latents and
 text-encoder outputs; sd-scripts with `cache_latents_to_disk` or
 `cache_text_encoder_outputs_to_disk`; AI-Toolkit when its pinned baseline caches
 latents to disk or `train.cache_text_embeddings` is on, authored or from that baseline) counts
-`safety.disk_cache_estimate_gb` in both disk checks. Without it the plan warns
-that the cache size is unknown and not counted. Cache files stay below the
-individual run; the shared dataset remains unchanged.
+`safety.disk_cache_estimate_gb` in both disk checks. Without it the plan says
+that the cache is not counted (image caches are a few MB per item; set the key
+for large or video datasets). Cache files stay below the individual run; the
+shared dataset remains unchanged.
+
+AI-Toolkit downloads its own models, so Kura cannot size them. The plan warns
+that the download is not counted (often 10–30 GB) until
+`safety.model_download_estimate_gb` declares it; then the local check counts it
+on the Hugging Face cache's drive and the RunPod check in the container disk.
+Until then, as for an undeclared disk cache, `docker.min_free_gb` is the buffer
+and nothing is refused.
 
 All registered training adapters reject unknown top-level `backend.config`
 keys. Use `uv run kura run capabilities <backend>` (or `--json`) to inspect the
