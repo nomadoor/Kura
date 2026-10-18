@@ -167,10 +167,12 @@ or WSL/VHDX/Windows-side operations.
   checkpoint retention (`kura run capabilities <backend>` lists it:
   `save_last_n_steps` for sd-scripts and AI-Toolkit,
   `prune_checkpoints_before_step` for Musubi Tuner).
-- Writes Kura cannot measure are covered by the free-space floor until their
-  size is declared; then both disk checks (local launch and the RunPod
-  container disk) count them. None is refused.
-  - A run whose trainer writes a disk cache (every Musubi Tuner run; sd-scripts
+- Writes Kura cannot measure are covered locally by the free-space floor until
+  their size is declared; then both disk checks (local launch and the RunPod
+  container disk) count them. None is refused. The RunPod container-disk check
+  has no floor, so on RunPod an undeclared write is not covered: declare it, or
+  leave headroom in `runpod.container_disk_gb`.
+  - A run whose trainer writes a disk cache (a Musubi Tuner run unless `precache: false` or a custom command; sd-scripts
     or AI-Toolkit when the run caches latents or text encodings to disk) gets a
     plan info line that the cache is not counted (image caches are a few MB
     per item); set `safety.disk_cache_estimate_gb` for large or video datasets.

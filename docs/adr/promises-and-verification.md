@@ -36,7 +36,7 @@ simplest mechanism) stays in `AGENTS.md`; it is not a promise to users.
 | P5 | The same run behaves the same on every executor and every supported OS: same outputs, states, and final status recorded. | CI (every OS) + conformance RunPod pass (the same expectations as on Docker; outputs are not compared across executors) |
 | P6 | Billing stops: every RunPod Pod Kura creates has its maximum lease armed when it starts, and none is left billing after its run ends. | py tests (the lease is armed at start) + conformance RunPod pass (the Pod is stopped after the run) |
 | P7 | No data is lost: datasets are never rewritten, outputs are collected before a Pod is deleted, and nothing a user made is deleted without their yes. | py tests + conformance |
-| P8 | Kura does not start a run its disk cannot hold: the launch estimate is at least the run's real peak; writes Kura cannot measure (a trainer's own model downloads, a disk cache) are covered by the free-space floor unless their size is declared. | conformance |
+| P8 | Kura does not start a run its disk cannot hold: the launch estimate is at least the run's real peak; writes Kura cannot measure (a trainer's own model downloads, a disk cache) are covered by the local free-space floor unless their size is declared; the RunPod container-disk check has no floor, so there they count only once declared. | conformance |
 | P9 | A record never states something that did not happen, and records written by an earlier Kura stay readable. | py tests |
 | P10 | No secret value reaches a workspace file, a log, an image, or a record. | py tests + release gate |
 | P11 | Every refusal and error says what to do next, clearly enough for an agent with no other context. | acceptance test |
