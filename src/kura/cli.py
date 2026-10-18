@@ -36,6 +36,7 @@ from kura.executors import _redact_secret_text, read_run_status, reconcile_docke
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
+from kura.hf_cache import remove_repository, sweep_payloads
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
 from kura.fsio import atomic_write_yaml as _dump_yaml
 from kura.records import record
@@ -1037,6 +1038,8 @@ def format_reclaim_plan(inventory: dict[str, Any]) -> str:
                 detail.append("used by " + ", ".join(item["referenced_by"]))
             if item.get("in_use_by"):
                 detail.append("IN USE by " + ", ".join(item["in_use_by"]) + ", kept")
+            if item.get("shared_with"):
+                detail.append(f"shares {_display_size(item['shared_bytes'])} with {', '.join(item['shared_with'])}, freed only with them")
             if item["last_used"]:
                 detail.append(f"last used {item['last_used']}")
             if item.get("checkpoints"):
@@ -1056,13 +1059,22 @@ def _apply_reclaim(workspace: Path, inventory: dict[str, Any], action: dict[str,
     item = action["item"]
     kind = item["kind"]
     done: dict[str, Any] = {"action": action["action"], "id": item["id"], "kind": kind}
-    if kind in ("run-scratch", "dataset-view", "model-links", "hf-repository", "ai-toolkit-model-file", "legacy-ai-toolkit-models"):
+    if kind in ("run-scratch", "dataset-view", "model-links", "hf-repository", "hf-unreferenced-blobs", "ai-toolkit-model-file", "legacy-ai-toolkit-models"):
         hf_cache = Path(inventory["hf_cache"])
-        for raw in item["paths"]:
-            path = Path(raw)
-            root = workspace if path.resolve().is_relative_to(workspace.resolve()) else hf_cache
+
+        def remove(path: Path) -> None:
             if path.exists() or path.is_symlink():
-                _remove_tree(root, path)
+                _remove_tree(workspace if path.resolve().is_relative_to(workspace.resolve()) else hf_cache, path)
+
+        paths = [Path(raw) for raw in item["paths"]]
+        if kind == "hf-repository":
+            # Its shared-store payloads go too, but only those no other repository links to.
+            done["removed_shared_blobs"] = len(remove_repository(hf_cache, paths[0], remove))
+        elif kind == "hf-unreferenced-blobs":
+            done["removed_shared_blobs"] = len(sweep_payloads(hf_cache, paths, remove))
+        else:
+            for path in paths:
+                remove(path)
         if kind == "model-links":
             (workspace / "cache" / "models").mkdir(parents=True, exist_ok=True)
     elif kind in ("docker-build-cache", "docker-containers", "docker-volumes", "image"):

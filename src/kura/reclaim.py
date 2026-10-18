@@ -20,6 +20,7 @@ from kura.container_scripts.ai_toolkit_models import list_model_files
 from kura import doctor
 from kura.executors.common import CLEANUP_ELIGIBLE_STATES, run_finished, unresolved_create_intents
 from kura.fsio import atomic_write_json
+from kura.hf_cache import hub_usage
 from kura.images import PINNED_IMAGES, effective_image
 from kura.paths import AI_TOOLKIT_MODELS_PATH, LEGACY_AI_TOOLKIT_CACHE, local_hf_cache
 from kura.records import names_realization, record
@@ -260,7 +261,7 @@ def _model_references(run_dir: Path) -> tuple[set[str], set[str], bool]:
     return repos, files, legacy
 
 
-def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]], unreadable: list[str]) -> list[dict[str, Any]]:
+def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]], unreadable: list[str], notes: list[str]) -> list[dict[str, Any]]:
     repo_refs: dict[str, set[str]] = {}
     file_refs: dict[str, set[str]] = {}
     legacy_refs: set[str] = set()
@@ -277,16 +278,32 @@ def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]
         if legacy:
             legacy_refs.add(run_id)
     items = []
-    hub = hf_cache / "hub"
-    for repo_dir in sorted(hub.glob("*--*")) if hub.is_dir() else []:
-        kind, _, rest = repo_dir.name.partition("--")
-        if kind not in _HUB_PREFIXES or not repo_dir.is_dir():
-            continue
-        repo_id = _HUB_PREFIXES[kind] + rest.replace("--", "/")
-        refs = repo_refs.get(repo_id, set()) if kind == "models" else set()
-        link = {"link_to": str(repo_dir.resolve())} if repo_dir.is_symlink() else {}
-        items.append(_item("download", "hf-repository", repo_id, paths=[repo_dir], size=doctor._path_size_bytes(repo_dir), refs=refs,
-                           last_used=_last_used(refs, runs, repo_dir), runs=runs, **link))
+    usage = hub_usage(hf_cache)
+
+    def repo_id(name: str) -> str:
+        """The id a listed repository goes by; another `hub/` entry that shares a payload is named by its path."""
+        kind, _, rest = name.partition("--")
+        return _HUB_PREFIXES[kind] + rest.replace("--", "/") if kind in _HUB_PREFIXES else f"hub/{name}"
+
+    for name, repository in usage.repositories.items():
+        repo_dir = repository.path
+        kind = name.partition("--")[0]
+        refs = repo_refs.get(repo_id(name), set()) if kind == "models" else set()
+        extra: dict[str, Any] = {"link_to": str(repo_dir.resolve())} if repo_dir.is_symlink() else {}
+        shared_bytes, shared_with = usage.shared(name)
+        if shared_with:
+            # Payloads in huggingface_hub's shared store that other repositories link to too: freed only with them.
+            extra.update(shared_bytes=shared_bytes, shared_with=[repo_id(other) for other in shared_with])
+        items.append(_item("download", "hf-repository", repo_id(name), paths=[repo_dir], size=usage.own_bytes(name), refs=refs,
+                           last_used=_last_used(refs, runs, repo_dir), runs=runs, **extra))
+    if not usage.complete:
+        notes.append(f"part of the Hugging Face cache {hf_cache / 'hub'} cannot be read: a model's size may include files another "
+                     "model shares, and no shared file is deleted until it can be read")
+    if usage.unreferenced:
+        # Shared-store payloads no repository links to any more (a removal interrupted, or one huggingface_hub kept).
+        paths = sorted(usage.unreferenced)
+        items.append(_item("download", "hf-unreferenced-blobs", "hub/blobs", paths=paths, size=sum(usage.unreferenced.values()),
+                           last_used=max((stamp for path in paths if (stamp := _mtime(path))), default=None), runs=runs))
     models_root = hf_cache / AI_TOOLKIT_MODELS_DIR
     for entry in list_model_files(str(models_root)):
         name = f"{AI_TOOLKIT_MODELS_DIR}/{entry['path']}"
@@ -426,7 +443,7 @@ def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool 
     if not docker.get("daemon_reachable"):
         notes.append(f"Docker items are not listed: {docker.get('diagnosis') or 'the Docker daemon is not reachable'}")
         docker = None
-    items = _free_items(workspace, runs, docker) + _model_items(workspace, hf_cache, runs, unreadable)
+    items = _free_items(workspace, runs, docker) + _model_items(workspace, hf_cache, runs, unreadable, notes)
     if docker is not None:
         items += _image_items(config, runs, unreadable)
     if unreadable:
@@ -447,7 +464,7 @@ def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool 
     }
 
 
-MODEL_KINDS = ("hf-repository", "ai-toolkit-model-file", "legacy-ai-toolkit-models")
+MODEL_KINDS = ("hf-repository", "hf-unreferenced-blobs", "ai-toolkit-model-file", "legacy-ai-toolkit-models")
 
 
 def select_reclaim(
