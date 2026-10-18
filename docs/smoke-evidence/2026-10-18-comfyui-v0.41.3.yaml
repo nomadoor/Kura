@@ -84,7 +84,19 @@ local_probe:
     outcome: completed, 1 image collected
     prompt_executed_seconds: 33.7
     sampling_rate: 1.61 it/s after a 7 s first-step initialization
+runpod_render:
+  observed_at: '2026-10-19'
+  harness: kura render compile, launch --dry-run, launch --executor runpod (job runner), conformance workspace
+  run_id: 20261019-0201_comfyui-v0413-runpod_9e00
+  workflow: workflows/samples/anima/anima-base-v1.0_api.json, seed 1234, 1152x896, 30 steps
+  gpu: NVIDIA A40 (SECURE, $0.59/hr)
+  earlier_attempt: run 20261018-2217_comfyui-v0413-plan_93ee on 2026-10-18 failed before ComfyUI started, because the render SSH script did not set HF_HUB_CACHE for the model prepare step; the Pod was stopped about 3.5 minutes after it started. Fixed separately on main (the SSH session now exports kura_container_env); this render ran on that fix.
+  pod_created_to_render_start_seconds: about 210 (image pull, model download, ComfyUI start)
+  prompt_executed_seconds: 18.7
+  sampling_rate: 2.3 it/s after a 2 s first-step initialization
+  outcome: completed, 1 image collected (1.8 MB PNG)
+  pod: stopped by Kura after collection about 4 minutes after creation (pod_stopped_at recorded); kura doctor runpod lists no Pods
+  cost: about $0.04 GPU
 limits:
-  - One sample (Anima base) rendered, locally; the other shipped samples, an Anima LLLite render, and a Kura-trained LoRA render are not observed on the new image.
-  - No RunPod render on the new digest yet (pull time, host CUDA, compiler-on timing there are unobserved).
+  - One sample (Anima base) rendered, locally and on RunPod; the other shipped samples, an Anima LLLite render, and a Kura-trained LoRA render are not observed on the new image.
   - Pixel parity with the old image was not compared.
