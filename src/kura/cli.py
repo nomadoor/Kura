@@ -292,7 +292,6 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         }
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
-    atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
     print(f"edit runs/{run_id}/run.yaml, then `kura run compile {run_id}`", file=sys.stderr)
@@ -413,7 +412,6 @@ def _create_resume_derived_run(
         run_dir.mkdir(parents=True, exist_ok=False)
         _dump_yaml(run_dir / "run.yaml", derived)
         atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
-        atomic_write_text(run_dir / "plan.md", "# Training Resume plan\n\n")
         atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     except OSError:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -538,7 +536,6 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "intent": "", "inputs": {"train_run": None, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": endpoint}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
-    atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id); return 0
 

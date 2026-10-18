@@ -2482,6 +2482,7 @@ class ResumeRunTests(unittest.TestCase):
             run_id = stdout.getvalue().strip()
             derived = yaml.safe_load((root / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
             self.assertEqual(derived["parent_run"], "source")
+            self.assertEqual(sorted(path.name for path in (root / "runs" / run_id).iterdir()), ["notes.md", "run.yaml", "status.json"])
             self.assertEqual(derived["recipe"], yaml.safe_load((source / "run.yaml").read_text())["recipe"])
             self.assertEqual(derived["continuation"]["mode"], "resume")
             self.assertEqual(derived["continuation"]["additional_steps"], 1000)
