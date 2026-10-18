@@ -302,10 +302,14 @@ def _validation_command(*, models: list[dict[str, str]] | None = None, pattern: 
     return ["python", "-c", script_source("sd_scripts_validate.py"), json.dumps(spec, ensure_ascii=False)]
 
 
+# Where Anima LoRA trains, below the run; the wrapper converts each weight into outputs/.
+SD_SCRIPTS_NATIVE_OUTPUT = "cache/sd-scripts/native-output"
+
+
 def _anima_conversion_command(run_id: str, output_name: str, training_argv: list[str]) -> list[str]:
     run_root = f"/workspace/runs/{run_id}"
     spec = {
-        "native_dir": f"{run_root}/cache/sd-scripts/native-output",
+        "native_dir": f"{run_root}/{SD_SCRIPTS_NATIVE_OUTPUT}",
         "staging_dir": f"{run_root}/cache/sd-scripts/converted-output",
         "output_dir": f"{run_root}/outputs",
         "recovery_dir": f"{run_root}/recovery/sd-scripts/anima-native",
@@ -336,7 +340,7 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
         _safe_name(native["output_name"], field="output_name")
     output_name = _safe_name(run_output_name(run), field="output_name")
     final_output = f"/workspace/runs/{run['id']}/outputs"
-    train_output = f"/workspace/runs/{run['id']}/cache/sd-scripts/native-output" if architecture == "anima" and mode == "lora" else final_output
+    train_output = f"/workspace/runs/{run['id']}/{SD_SCRIPTS_NATIVE_OUTPUT}" if architecture == "anima" and mode == "lora" else final_output
     model_items = [{"role": role, "path": path} for role, path in sorted(paths.items())]
     native_training_argv = _base_training_args(run, native, paths, train_output, output_name)
     training_argv = ["accelerate", "launch", "--num_cpu_threads_per_process", "1"]

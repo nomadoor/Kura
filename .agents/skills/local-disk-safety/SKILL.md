@@ -76,7 +76,8 @@ reason by itself. `kura doctor disk` shows the same totals under
 
 The classes:
 
-- **free**: costs nothing. Finished runs' `cache/`, `tmp/`, and `.cache/`, a
+- **free**: costs nothing. Finished runs' `cache/`, `tmp/`, and `.cache/`
+  (never `cache/sd-scripts/native-output`, where Anima LoRA trains), a
   leftover dataset view of a run whose container Docker reported missing, the
   model links in `cache/models`, Docker build cache, the stopped containers
   of this workspace's finished runs, and Kura volumes. The model links are

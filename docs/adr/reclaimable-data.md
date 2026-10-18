@@ -36,7 +36,9 @@ fills, and this one decides how a user gets space back.
 **1. Every reclaimable item has one class, decided by what deleting it costs
 the user.** One owner decides the class.
 
-- **free**: costs nothing. A run's `cache/`, `tmp/`, and `.cache/`, leftover
+- **free**: costs nothing. A run's `cache/`, `tmp/`, and `.cache/` (less a
+  directory where a trainer writes weights before Kura publishes them, such
+  as Anima LoRA's `cache/sd-scripts/native-output`), leftover
   dataset views, Docker build cache, the stopped containers of this
   workspace's finished runs (a container whose labels name a run and a
   realization it recorded; never an unfinished run's or another

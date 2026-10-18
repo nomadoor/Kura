@@ -18,6 +18,7 @@ from typing import Any
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
 from kura.container_scripts.ai_toolkit_models import list_model_files
 from kura import doctor
+from kura.backends import BACKENDS
 from kura.executors.common import CLEANUP_ELIGIBLE_STATES, run_finished, unresolved_create_intents
 from kura.fsio import atomic_write_json
 from kura.hf_cache import hub_usage
@@ -193,12 +194,31 @@ def run_containers(run_dir: Path, containers: list[dict[str, Any]]) -> list[str]
     return found
 
 
+def _scratch_paths(run_dir: Path) -> list[Path]:
+    """A finished run's `cache/`, `tmp/`, and `.cache/`, less the directories where a trainer writes weights
+    before Kura publishes them (each adapter's `cache_outputs`): those, and the directories above them, stay."""
+    # Every adapter's directories, whichever backend the run used: the names are the trainers' own, so another
+    # backend's run never has them, and reading the run's backend would add a way to fail for nothing.
+    kept = {run_dir / relative for adapter in BACKENDS.values() for relative in adapter.cache_outputs
+            if (run_dir / relative).exists() or (run_dir / relative).is_symlink()}
+
+    def free(path: Path) -> list[Path]:
+        if path in kept:
+            return []
+        if any(path in keep.parents for keep in kept) and path.is_dir() and not path.is_symlink():
+            return [found for child in sorted(path.iterdir()) for found in free(child)]
+        return [path]
+
+    return [found for name in ("cache", "tmp", ".cache") if (run_dir / name).exists() or (run_dir / name).is_symlink()
+            for found in free(run_dir / name)]
+
+
 def _free_items(workspace: Path, runs: dict[str, dict[str, Any]], docker: dict[str, Any] | None) -> list[dict[str, Any]]:
     items = []
     for run_id, run in runs.items():
         run_dir = run["dir"]
         if run["done"]:
-            targets = [run_dir / name for name in ("cache", "tmp", ".cache") if (run_dir / name).exists()]
+            targets = _scratch_paths(run_dir)
             if targets:
                 items.append(_item("free", "run-scratch", run_id, paths=targets, size=_sizes(targets), refs={run_id},
                                    last_used=_last_used({run_id}, runs, run_dir), runs=runs))
