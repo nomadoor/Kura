@@ -1397,6 +1397,38 @@ class DoctorDockerTests(unittest.TestCase):
         self.assertEqual(summary["root_dir_not_measured"], "Docker Desktop keeps /var/lib/docker inside its own VM")
         self.assertFalse(any(command[:2] == ["docker", "info"] for command in asked))
 
+    def test_doctor_says_why_docker_usage_was_not_measured(self) -> None:
+        import kura.doctor as doctor
+
+        def fake_docker_run(command: list[str], *, capture: bool = False, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+            if command[:3] == ["docker", "system", "df"]:
+                return subprocess.CompletedProcess(command, 124, "", "`docker system df` did not answer within 30 seconds; the Docker daemon may be hung or still starting")
+            if command[:3] == ["docker", "image", "inspect"]:
+                return subprocess.CompletedProcess(command, 1, "", "No such image")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        patches = (patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None),
+                   patch("kura.doctor.docker_data_location", return_value=(Path("/var/lib/docker"), "")), patch("kura.doctor._docker_run", side_effect=fake_docker_run))
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            summary = doctor._docker_storage_summary()
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        cmd_doctor_docker(argparse.Namespace())
+                finally:
+                    os.chdir(previous)
+        docker = json.loads(stdout.getvalue())["docker_storage"]
+        for report in (summary, docker):
+            self.assertIn("`docker system df` exited with 124", report["usage_not_measured"])
+            self.assertIn("did not answer within 30 seconds", report["usage_not_measured"])
+        self.assertNotIn("usage", docker)
+
     def test_image_build_stops_on_the_retired_build_cache_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

@@ -55,6 +55,12 @@ def _docker_run(command: list[str], *, capture: bool = False, timeout: int = DOC
         )
 
 
+def _docker_failure(result: subprocess.CompletedProcess[str]) -> str:
+    """Why a doctor docker command gave no answer, in Docker's words (or the timeout's)."""
+    said = _redact_secret_text((result.stderr or result.stdout or "").strip())[-500:]
+    return f"`{' '.join(result.args[:3])}` exited with {result.returncode}" + (f": {said}" if said else "")
+
+
 def _docker_root_dir(report: dict[str, Any]) -> None:
     """Where the engine keeps its data, from the one place Kura asks (`docker_data_location`):
     `root_dir` when this host can measure it, else `root_dir_not_measured` with why."""
@@ -267,6 +273,8 @@ def _docker_storage_summary() -> dict[str, Any]:
                 if reclaimable_bytes is not None:
                     item["reclaimable_bytes"] = reclaimable_bytes
                 items.append(item)
+    else:
+        summary["usage_not_measured"] = _docker_failure(usage)
     summary["usage"] = items
     summary["kura_managed"] = _docker_managed_resources()
     return summary
@@ -470,6 +478,8 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             usage = _docker_run(["docker", "system", "df", "--format", "{{json .}}"], capture=True)
             if usage.returncode == 0:
                 docker_storage["usage"] = [json.loads(line) for line in usage.stdout.splitlines() if line.strip()]
+            else:
+                docker_storage["usage_not_measured"] = _docker_failure(usage)
             docker_storage["kura_managed"] = _docker_managed_resources()
             present = [name for name, image in images.items() if _docker_run(["docker", "image", "inspect", image], capture=True).returncode == 0]
             # A pinned image that is not here yet is pulled by the first run that needs it.
