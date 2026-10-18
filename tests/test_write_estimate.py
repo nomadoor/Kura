@@ -31,10 +31,12 @@ def _roomy(real_probe, free_bytes: int = 1024**5):
 
 class BoundTests(unittest.TestCase):
     def test_the_bound_holds_every_file_the_acceptance_runs_wrote(self) -> None:
-        # Measured over the 13 acceptance runs of 2026-10-17 (all rank 16, SDXL, Anima, Z-Image,
-        # FLUX.2 Klein 4B, MOSS-Image, Iris-3B on sd-scripts, Musubi Tuner, and AI-Toolkit):
-        # checkpoints 44-267 MiB, training-state folders 133-403 MiB.
-        for kind, rank, measured_mib in (("checkpoint", 16, 44), ("checkpoint", 16, 267), ("state", 16, 133), ("state", 16, 403)):
+        # Measured over the 13 acceptance runs of 2026-10-17 (SDXL, Anima, Z-Image, FLUX.2 Klein 4B,
+        # MOSS-Image, Iris-3B on sd-scripts, Musubi Tuner, and AI-Toolkit): checkpoints 44-163 MiB at
+        # rank 16 and 267 MiB at rank 32 (Z-Image on Musubi Tuner), at most 10.2 MiB per rank;
+        # training-state folders 133-403 MiB, held here to the smallest rank, 16.
+        for kind, rank, measured_mib in (("checkpoint", 16, 44), ("checkpoint", 16, 163), ("checkpoint", 32, 267),
+                                         ("state", 16, 133), ("state", 16, 403)):
             files = 1 if kind == "checkpoint" else plan.STATE_WEIGHT_FILES
             with self.subTest(kind=kind, measured_mib=measured_mib):
                 self.assertGreaterEqual(files * rank * plan.WEIGHTS_BYTES_PER_RANK, measured_mib * MIB)
@@ -94,8 +96,15 @@ class BoundTests(unittest.TestCase):
         run["backend"]["config"].pop("network_dim")
         counted = plan.own_write_bound(run, executor="docker")
         self.assertEqual((counted["rank"], counted["bytes"]), (None, 0))
-        self.assertIn("not bounded", plan.own_write_text(counted))
-        self.assertIn("network_dim", plan.own_write_text(counted))
+        local = plan.own_write_text(counted, executor="docker")
+        self.assertIn("not bounded", local)
+        self.assertIn("network_dim", local)
+        self.assertIn("disk watch", local)
+        # A Pod has no disk watch: the RunPod line says to leave room instead.
+        remote = plan.own_write_text(plan.own_write_bound(run, executor="runpod"), executor="runpod")
+        self.assertIn("not bounded", remote)
+        self.assertIn("leave room in runpod.container_disk_gb", remote)
+        self.assertNotIn("disk watch", remote)
 
 
 class OneOwnerTests(unittest.TestCase):

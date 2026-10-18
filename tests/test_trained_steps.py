@@ -364,7 +364,7 @@ class PeakCheckpointsTests(unittest.TestCase):
                 bound = plan.own_write_bound(run, executor="docker")
                 self.assertEqual(bound["checkpoints"], expected[name])
                 self.assertEqual(bool(bound.get("trainer_default_saves_not_counted")), name == "ai-toolkit")
-                text = plan.own_write_text(bound)
+                text = plan.own_write_text(bound, executor="docker")
                 if name == "ai-toolkit":
                     self.assertIn("trainer-default saves not counted", text)
                 else:

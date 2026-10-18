@@ -515,13 +515,15 @@ def _run_adapter(run: dict[str, Any]) -> Any:
 
 # The run's own writes are bounded, never sized by a declared estimate (docs/adr/local-disk-protection.md,
 # decision 3): every weights-sized file on disk at once is counted at `rank × 64 MiB`. A LoRA file grows
-# with its rank; the 13 acceptance runs (rank 16) wrote checkpoints of 44-267 MiB, under 17 MiB per rank
-# even in fp32 (sd-scripts and Musubi Tuner save fp32 when Kura passes no save precision).
+# with its rank; the 13 acceptance runs wrote checkpoints of 44-163 MiB at rank 16 and 267 MiB at rank 32,
+# at most 10.2 MiB per rank even in fp32 (sd-scripts and Musubi Tuner save fp32 when Kura passes no save
+# precision). The bound assumes linear LoRA modules; conv LoRA, LoKr, full-matrix training, and very large
+# models can exceed it, and the disk watch covers them.
 WEIGHTS_BYTES_PER_RANK = 64 * 1024**2
 # A training state holds the weights (fp32, 4 bytes per parameter) and the optimizer's moments: AdamW's
 # two fp32 moments add 8 bytes per parameter, 8-bit AdamW (the pinned AI-Toolkit baseline's default)
 # about 2. So a state is at most 3 weights-sized fp32 files with AdamW, 1.5 with 8-bit AdamW. One rule
-# for every optimizer: 3 files. The bound's headroom (64 MiB per rank against at most 17 measured)
+# for every optimizer: 3 files. The bound's headroom (64 MiB per rank against at most 10.2 measured)
 # also covers an optimizer that keeps more (Prodigy keeps four fp32 tensors: 5 files of real size).
 STATE_WEIGHT_FILES = 3
 
@@ -566,16 +568,19 @@ def own_write_bound(run: dict[str, Any], *, executor: str) -> dict[str, Any]:
     return bound
 
 
-def own_write_text(bound: dict[str, Any]) -> str:
-    """The own-writes part of a disk line: what was counted, and at what size."""
+def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
+    """The own-writes part of a disk line: what was counted, and at what size. Only a local run has the
+    disk watch, so an unbounded RunPod run is told to leave room in the container disk instead."""
     parts = f"{bound['checkpoints']} checkpoint(s)"
     states = bound["trainer_states"] + bound["kura_state_copies"]
     if states:
         parts += f" + {states} training state(s) × {STATE_WEIGHT_FILES}"
     uncounted = "; trainer-default saves not counted" if bound.get("trainer_default_saves_not_counted") else ""
     if not bound["rank"]:
+        cover = ("leave room in runpod.container_disk_gb" if executor == "runpod"
+                 else "the disk watch stops the run before a store falls below the reserve")
         return (f"own writes not bounded: {bound['weights_files']} weights-sized files ({parts}), but the run sets no rank "
-                f"(network_dim); the disk watch stops the run before a store falls below the reserve{uncounted}")
+                f"(network_dim); {cover}{uncounted}")
     return (f"own writes: {bound['weights_files']} weights-sized files ({parts}) at rank {bound['rank']} × 64 MiB = "
             f"{_preflight_bytes(bound['bytes'])}{uncounted}")
 
@@ -741,7 +746,7 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
             "info" if fits else "warning",
             f"container_disk_gb={payload['container_disk_gib']}; measured writes {_preflight_bytes(payload['measured_write_bytes'])} "
             f"(model downloads and input transfer); estimated remote writes {_preflight_bytes(payload['estimated_write_bytes'])}; "
-            f"{own_write_text(payload['estimates']['own_writes'])}{suffix}{verdict}",
+            f"{own_write_text(payload['estimates']['own_writes'], executor='runpod')}{suffix}{verdict}",
             "workspace.yaml",
         )
     ]
@@ -833,7 +838,7 @@ def _local_disk_preflight_report(
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
             f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['minimum_free']}); "
-            f"{own_write_text(payload['estimates']['own_writes'])}",
+            f"{own_write_text(payload['estimates']['own_writes'], executor='docker')}",
             "workspace.yaml",
         )
     ]
@@ -1003,7 +1008,7 @@ def _local_launch_disk_preflight(
         if problem:
             errors.append(problem)
     if errors:
-        raise ValueError("; ".join([*errors, own_write_text(estimate["own_writes"])]))
+        raise ValueError("; ".join([*errors, own_write_text(estimate["own_writes"], executor="docker")]))
     try:
         # Bounded and outside the workspace, as the daemon probe is: the plan reads this too.
         docker_system_df = subprocess.run(

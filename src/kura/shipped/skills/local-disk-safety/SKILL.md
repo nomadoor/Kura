@@ -147,9 +147,11 @@ or WSL/VHDX/Windows-side operations.
     `rank × 64 MiB` (the rank is `network_dim`): the most checkpoints at once,
     the training states the trainer keeps, and Kura's copies of them, a state
     counting as 3 such files (weights and the optimizer's moments). LoRA files
-    are far smaller than this bound (the measured runs wrote 44–267 MiB at rank
-    16), so it is a safe ceiling, not a prediction. A run with no rank is not
-    bounded, and the plan says so.
+    are far smaller than this bound (the measured runs wrote at most 163 MiB at
+    rank 16 and 267 MiB at rank 32), so it is a safe ceiling, not a prediction.
+    It assumes linear LoRA; conv LoRA, LoKr, full-matrix training, and very
+    large models can exceed it, and the disk watch covers them. A run with no
+    rank is not bounded, and the plan says so.
   Checkpoints are counted at the cadence the trainer is given, the final file
   included: retention that prunes during training (AI-Toolkit and sd-scripts
   `save_last_n_steps`) bounds them near the kept count, while Musubi Tuner's
