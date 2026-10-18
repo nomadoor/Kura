@@ -19,7 +19,6 @@ from pathlib import Path
 
 import platformdirs
 
-from kura.yamlio import YAMLError, load_yaml
 from kura.environment import USER_VARIABLES
 from kura.fsio import atomic_write_bytes, file_lock
 from kura.workspace import parse_env_file_line, workspace
@@ -99,13 +98,11 @@ MIN_SECRET_VALUE_LENGTH = 8
 
 
 def secret_values() -> list[str]:
-    """The values Kura holds as secrets, longest first: variables whose names hold a secret,
-    and the key names workspace.yaml chooses. Output hides them and `kura check secrets`
-    looks for them."""
-    configured = set(_configured_names())
+    """The values Kura holds as secrets, longest first: variables whose names hold a secret.
+    Output hides them and `kura check secrets` looks for them."""
     values = {
         value for name, value in os.environ.items()
-        if len(value) >= MIN_SECRET_VALUE_LENGTH and (is_secret_name(name) or name in configured)
+        if len(value) >= MIN_SECRET_VALUE_LENGTH and is_secret_name(name)
     }
     return sorted(values, key=len, reverse=True)
 
@@ -121,26 +118,8 @@ def declared_secret(name: str) -> str | None:
 
 
 def known_names() -> list[str]:
-    """Names `kura secrets set` accepts: declared variables and names workspace.yaml configures."""
-    names = [variable.name for variable in USER_VARIABLES]
-    for configured in _configured_names():
-        if configured not in names:
-            names.append(configured)
-    return names
-
-
-def _configured_names() -> list[str]:
-    """Secret names workspace.yaml chooses: the object-store keys."""
-    try:
-        config = load_yaml(workspace() / "workspace.yaml")
-    except (OSError, UnicodeDecodeError, YAMLError):
-        return []
-    runpod = config.get("runpod") if isinstance(config, dict) else None
-    if not isinstance(runpod, dict):
-        return []
-    store = runpod.get("object_store") if isinstance(runpod.get("object_store"), dict) else {}
-    candidates = (store.get("access_key_env"), store.get("secret_key_env"))
-    return [name for name in candidates if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)]
+    """Names `kura secrets set` accepts: the declared variables."""
+    return [variable.name for variable in USER_VARIABLES]
 
 
 def sources() -> dict[str, str]:

@@ -217,7 +217,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `runpod.storage_mode` | Remote staging mode | `upload` |
+| `runpod.storage_mode` | Remote staging mode. `upload` is the only mode: the Pod waits on SSH, Kura uploads the staged inputs, runs the trainer, and collects the outputs before the Pod stops. `container_disk` and `object_staging` were removed; `kura workspace migrate` drops them. | `upload` |
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |
 | `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |

@@ -427,7 +427,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             cases = {
                 "no stage": ({"storage_mode": "upload"}, None, "no staged bundle"),
                 "legacy stage": ({"storage_mode": "upload"}, {"storage_mode": "upload", "archive_name": "old.tar.gz"}, "selected-file stage"),
-                "container disk": ({"storage_mode": "container_disk"}, None, "storage_mode=upload"),
+                "container disk": ({"storage_mode": "container_disk"}, None, "storage_mode must be 'upload'"),
             }
             for name, (settings, stage, message) in cases.items():
                 with self.subTest(case=name):

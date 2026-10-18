@@ -25,12 +25,13 @@ from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, p
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
-from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX, models_root
+from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
 from kura.secrets import MissingSecret, declared_secret
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
+from kura.workspace import RUNPOD_STORAGE_MODES
 
 
 # Defines kura_pod_self_delete for every Pod-side guard (unattended wait and
@@ -92,8 +93,6 @@ def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, time
 # The container disk a Pod gets when `runpod.container_disk_gb` is unset; the plan's RunPod
 # disk preflight reads the same value.
 DEFAULT_CONTAINER_DISK_GB = 150
-# What a container-disk AI-Toolkit run records instead of its model-file listing.
-AI_TOOLKIT_MODELS_NOT_RECORDED = "not-recorded: runpod.storage_mode container_disk runs only the trainer, so no model-file listing is written"
 
 
 def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
@@ -432,10 +431,22 @@ def runpod_api_key(purpose: str) -> str:
     return api_key
 
 
+def _require_upload_storage(config: dict[str, Any]) -> None:
+    """Refuse to stage or create a Pod under a removed runpod.storage_mode.
+
+    workspace.yaml is checked when it loads; a runner launch request carries the settings
+    confirmed when it was written, which may predate the removal. Only staging and Pod
+    creation call this: stopping, reconciling, and settling a Pod never refuse on it.
+    """
+    if config.get("storage_mode", "upload") not in RUNPOD_STORAGE_MODES:
+        raise ValueError(
+            f"runpod.storage_mode must be 'upload', not {config.get('storage_mode')!r}: the other modes were removed, "
+            "because a Pod Kura cannot reach over SSH is never collected; run `kura workspace migrate`, "
+            "then start a new run with `kura run new --from <run-id>` if this was a runner launch request"
+        )
+
+
 def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
-    storage_mode = config.get("storage_mode", "upload")
-    if storage_mode not in ("upload", "container_disk", "object_staging"):
-        raise ValueError("runpod.storage_mode must be upload, container_disk, or object_staging")
     required = ("gpu_type_ids",)
     missing = [name for name in required if not config.get(name)]
     if missing:
@@ -482,7 +493,6 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(cloud_types, list) or not cloud_types or not all(value in ("SECURE", "COMMUNITY") for value in cloud_types) or len(set(cloud_types)) != len(cloud_types):
         raise ValueError("runpod.cloud_types must list SECURE and/or COMMUNITY, each once; omit it for both")
     return {
-        "storage_mode": storage_mode,
         "gpu_type_ids": gpu_types,
         "gpu_count": config.get("gpu_count", 1),
         "container_disk_gb": config.get("container_disk_gb", DEFAULT_CONTAINER_DISK_GB),
@@ -761,35 +771,6 @@ def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int 
     return {**kura_container_env(workspace_path=workspace_path, run_id=run_id), "KURA_MAX_LEASE_SEC": str(max_lease_sec)}
 
 
-def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
-    object_store = config.get("object_store")
-    if not isinstance(object_store, dict):
-        raise ValueError("runpod.object_store must be configured for object_staging")
-    required = ("endpoint_url", "bucket")
-    missing = [name for name in required if not object_store.get(name)]
-    if missing:
-        raise ValueError("runpod.object_store requires " + ", ".join(missing))
-    access_key_env = object_store.get("access_key_env", "R2_ACCESS_KEY_ID")
-    secret_key_env = object_store.get("secret_key_env", "R2_SECRET_ACCESS_KEY")
-    if not isinstance(access_key_env, str) or not isinstance(secret_key_env, str):
-        raise ValueError("runpod.object_store credential env names must be strings")
-    access_key = os.environ.get(access_key_env)
-    secret_key = os.environ.get(secret_key_env)
-    if not access_key or not secret_key:
-        raise ValueError(f"{access_key_env} and {secret_key_env} are needed for object staging; run `kura secrets set` for each in your own terminal")
-    prefix = str(object_store.get("prefix", "kura")).strip("/")
-    return {
-        "endpoint_url": str(object_store["endpoint_url"]),
-        "bucket": str(object_store["bucket"]),
-        "region": str(object_store.get("region", "auto")),
-        "prefix": prefix,
-        "access_key_env": access_key_env,
-        "secret_key_env": secret_key_env,
-        "access_key": access_key,
-        "secret_key": secret_key,
-    }
-
-
 def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     """Stage exactly the files a manifest-v2 run's frozen handoff selected."""
     inventory = build_transfer_inventory(workspace, run_dir, run)
@@ -834,9 +815,9 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     # same resolved workspace even when it is reached through a symlink.
     workspace = workspace.resolve()
     run_dir = run_dir.resolve()
-    settings = _runpod_settings(config.get("runpod") if isinstance(config.get("runpod"), dict) else {})
-    if settings["storage_mode"] == "object_staging":
-        raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
+    runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    _require_upload_storage(runpod_config)
+    _runpod_settings(runpod_config)
     try:
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
     except (OSError, YAMLError) as exc:
@@ -1146,10 +1127,12 @@ def launch_runpod(
     controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
     """Create a RunPod Pod using a pre-staged workspace."""
+    _require_upload_storage(config)
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
-    write_paths = validated_write_roots(spec, workspace_path=workspace_path)
+    # The job over SSH creates and checks these roots; a malformed declaration is refused here first, before any Pod exists.
+    validated_write_roots(spec, workspace_path=workspace_path)
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_training_env(
         spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
@@ -1158,49 +1141,44 @@ def launch_runpod(
     if secret_keys:
         raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))
     transfer_codes: dict[str, str] = {}
-    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file() and settings["storage_mode"] != "upload":
-        raise ValueError("manifest-v2 RunPod runs require runpod.storage_mode=upload for the verified selected-file transfer")
-    if settings["storage_mode"] == "object_staging":
-        raise ValueError("runpod.storage_mode=object_staging is disabled until object-store credentials can be injected without Pod environment variables")
-    elif settings["storage_mode"] == "upload":
-        status = _load_status(run_dir)
-        stage_ref = status.get("last_stage")
-        if not isinstance(stage_ref, str):
-            raise ValueError("runpod upload mode found no staged bundle; `kura run execute` stages one before it uploads")
-        stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
-        if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
-            raise ValueError("latest stage is not a runpod upload bundle")
-        if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
-            if stage.get("transfer") != "selected-files":
-                raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
-            run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-            pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
-            manifest_sha256 = pin_transfer_manifest(
-                run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
-            )
-        upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
-        download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
-        transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
-        if stage.get("transfer") == "selected-files":
-            # Verified above, before the Pod exists.
-            transfer_codes.update({
-                "stage": stage_ref,
-                "archive_sha256": stage["archive_sha256"],
-                "input_sha256": stage["input_sha256"],
-                # The Pod accepts only this manifest; upload re-proves the stage
-                # against it before sending anything.
-                "pinned_manifest": pinned_manifest,
-                "manifest_sha256": manifest_sha256,
-                "verification": "stage-matches-compile-before-pod-creation",
-            })
-        runtime_env.update({
-            "KURA_UPLOAD_CODE": upload_code,
-            "KURA_DOWNLOAD_CODE": download_code,
-            "KURA_UPLOAD_ARCHIVE_NAME": stage["archive_name"],
-            "KURA_WORKSPACE": workspace_path,
-            "KURA_RUN_ID": run_dir.name,
+    status = _load_status(run_dir)
+    stage_ref = status.get("last_stage")
+    if not isinstance(stage_ref, str):
+        raise ValueError("runpod upload mode found no staged bundle; `kura run execute` stages one before it uploads")
+    stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
+    if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
+        raise ValueError("latest stage is not a runpod upload bundle")
+    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        if stage.get("transfer") != "selected-files":
+            raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
+        run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
+        manifest_sha256 = pin_transfer_manifest(
+            run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
+        )
+    upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
+    download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
+    transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
+    if stage.get("transfer") == "selected-files":
+        # Verified above, before the Pod exists.
+        transfer_codes.update({
+            "stage": stage_ref,
+            "archive_sha256": stage["archive_sha256"],
+            "input_sha256": stage["input_sha256"],
+            # The Pod accepts only this manifest; upload re-proves the stage
+            # against it before sending anything.
+            "pinned_manifest": pinned_manifest,
+            "manifest_sha256": manifest_sha256,
+            "verification": "stage-matches-compile-before-pod-creation",
         })
-        upload_script = r'''
+    runtime_env.update({
+        "KURA_UPLOAD_CODE": upload_code,
+        "KURA_DOWNLOAD_CODE": download_code,
+        "KURA_UPLOAD_ARCHIVE_NAME": stage["archive_name"],
+        "KURA_WORKSPACE": workspace_path,
+        "KURA_RUN_ID": run_dir.name,
+    })
+    upload_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
@@ -1219,18 +1197,8 @@ fi
 echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"
 sleep infinity
 '''.strip()
-        start_command = ["sh", "-lc", _pod_start_script(upload_script, max_lease_sec=max_lease_sec, log_path=log_path)]
-        workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
-    else:
-        mkdir_targets = [
-            '"$(dirname "$KURA_LOG_PATH")"',
-            *(f'"$KURA_WORKSPACE/runs/$KURA_RUN_ID/{name}"' for name in ("outputs", "checkpoints", "samples", "metrics")),
-            *(shlex.quote(path) for path in write_paths),
-        ]
-        checks = [f"test -w {shlex.quote(path)}" for path in write_paths]
-        wrapper = " && ".join([f"mkdir -p {' '.join(mkdir_targets)}", *checks, 'exec "$@" >> "$KURA_LOG_PATH" 2>&1'])
-        start_command = ["sh", "-lc", _pod_start_script(wrapper, max_lease_sec=max_lease_sec, log_path=log_path), "kura-job", *spec["argv"]]
-        workspace_contract = "Container disk only; caller must ensure inputs exist in the container workspace"
+    start_command = ["sh", "-lc", _pod_start_script(upload_script, max_lease_sec=max_lease_sec, log_path=log_path)]
+    workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
     request_body = {
         "name": f"kura-{run_dir.name}-{realization_id}",
         "gpuCount": settings["gpu_count"],
@@ -1501,17 +1469,12 @@ sleep infinity
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
         "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"}, **kura_provenance(),
     }
-    if settings["storage_mode"] != "upload" and models_root(spec.get("write_roots")) is not None:
-        # The container-disk start runs only the trainer, so nothing lists the model files afterwards.
-        realization["ai_toolkit_models"] = AI_TOOLKIT_MODELS_NOT_RECORDED
     _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
-    if "ai_toolkit_models" in realization:
-        status["ai_toolkit_models"] = realization["ai_toolkit_models"]
-    else:
-        status.pop("ai_toolkit_models", None)
+    # Runs launched before container_disk was removed may still carry this field.
+    status.pop("ai_toolkit_models", None)
     status.pop("last_observation", None)
     status.pop("capacity_wait", None)
     # A new realization starts its own progress; an earlier one's step is not its.

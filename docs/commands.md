@@ -150,9 +150,8 @@ without dot-named entries) in `realizations/<id>.ai-toolkit-models.json`: the
 host lists it for a local Docker run, and the RunPod job lists it on the Pod and
 the record comes back with the download. The trainer does not say which local
 candidate it loaded; compare each mtime with the realization's `launched_at`. A
-`runpod.storage_mode: container_disk` run writes no listing, and its realization
-and status say
-`ai_toolkit_models: "not-recorded: runpod.storage_mode container_disk runs only the trainer, so no model-file listing is written"`. AI-Toolkit trains from `model.base`,
+run launched with the removed `runpod.storage_mode: container_disk` wrote no
+listing; its realization says `ai_toolkit_models` with a value starting `not-recorded:`. AI-Toolkit trains from `model.base`,
 so compile requires it there. The pinned trainer loads the repository's default
 branch and takes no revision, so a run has no `model.revision`: compile refuses
 it, because it would record a pin that never happened. sd-scripts and Musubi
