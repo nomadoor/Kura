@@ -326,8 +326,10 @@ def comfyui_endpoint(config: dict[str, Any]) -> str:
     return (value if isinstance(value, str) else "http://127.0.0.1:8188").strip().rstrip("/")
 
 
-def workspace_config() -> dict[str, Any]:
-    path = require_workspace() / "workspace.yaml"
+def workspace_config(root: Path | None = None) -> dict[str, Any]:
+    """workspace.yaml read and checked as every command reads it; the job runner passes the workspace
+    it serves (`root`), since it does not find one from the current directory."""
+    path = (require_workspace() if root is None else root) / "workspace.yaml"
     config = load_yaml_mapping(path)
     validate_workspace_config(config)
     return config

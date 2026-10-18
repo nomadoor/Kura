@@ -18,6 +18,7 @@ import yaml
 from kura import runner
 from kura.run_commands.plan import local_min_free_gib, local_reserve_problem
 from kura.storage import StorageStatus
+from kura.workspace import validate_workspace_config, workspace_config
 
 GIB = 1024**3
 
@@ -107,16 +108,30 @@ class DiskWatchTests(unittest.TestCase):
         stopped.assert_not_called()
         probe.assert_not_called()
 
-    def test_an_invalid_workspace_yaml_is_logged_and_never_stops_the_run(self) -> None:
+    def test_an_invalid_workspace_yaml_is_logged_once_and_never_stops_the_run(self) -> None:
         # The watch reads workspace.yaml as every command does: a file the loader refuses (here a
-        # misspelt reserve) is not read past, so the watch says it could not check and tries again.
+        # misspelt reserve) is not read past, so the watch says it could not check and tries again,
+        # saying so once rather than at every check.
         logged: list[str] = []
+        now = [0.0]
+        polls = [{"state": "running"}] * 3 + [{"state": "completed", "publication_state": "completed"}]
         with _launched_run(workspace_config={"docker": {"min_free_gbb": 30}}) as (root, _run_dir, request), \
-                patch.object(runner, "_log", side_effect=logged.append):
-            _, stopped, _, probe = self._work(root, request, 5, states=[{"state": "running"}, {"state": "completed", "publication_state": "completed"}])
+                patch.object(runner, "_log", side_effect=logged.append), \
+                patch("kura.workspace.validate_workspace_config", wraps=validate_workspace_config) as validated:
+            _, stopped, _, probe = self._work(root, request, 5, states=polls, clock=lambda: now[0],
+                                              sleep=lambda _: now.__setitem__(0, now[0] + 31))
         stopped.assert_not_called()
         probe.assert_not_called()
-        self.assertTrue(any("the disk watch could not check free space" in line and "min_free_gbb" in line for line in logged))
+        self.assertEqual(validated.call_count, 3)
+        self.assertEqual(sum("the disk watch could not check free space" in line and "min_free_gbb" in line for line in logged), 1)
+
+    def test_the_runner_reads_workspace_yaml_through_the_one_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\nrunner: {local_slots: 2}\n", encoding="utf-8")
+            with patch("kura.workspace.workspace_config", wraps=workspace_config) as owner:
+                self.assertIsNone(runner.local_slot_wait(root))
+            owner.assert_called_once_with(root)
 
     def test_the_run_reserve_raises_the_watch_reserve_as_it_does_the_launch(self) -> None:
         from kura.run_commands.plan import local_reserve_gib

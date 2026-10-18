@@ -201,14 +201,13 @@ def _model_artifact_filenames(requirements: list[dict[str, Any]]) -> list[dict[s
     return artifacts
 
 
-def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], download_estimate: dict[str, Any], *, adapter_display: dict[str, Any] | None = None) -> dict[str, Any]:
+def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], requirements: list[dict[str, Any]], *, adapter_display: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     display = adapter_display if isinstance(adapter_display, dict) else _adapter_display(run)
     executor = run_executor(run)
-    requirements = model_requirements(run, download_estimate)
     return {
         "hardware": {"local_gpu": _local_gpu_payload()},
         "executor": {
@@ -472,15 +471,15 @@ def _preflight_bytes(value: Any) -> str:
 
 
 def _model_download_preflight_report(
-    run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str, local_cache: Path,
+    run: dict[str, Any], download_estimate: dict[str, Any], requirements: list[dict[str, Any]], *, executor: str, local_cache: Path,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    trainer_downloads = _trainer_downloads(run, executor=executor, local_cache=local_cache)
+    trainer_downloads = _trainer_downloads(requirements, executor=executor, local_cache=local_cache)
     if trainer_downloads:
         # A warning, not a refusal: locally the disk watch covers it.
         records.append(_preflight_record("model-acquisition", "warning", trainer_downloads, "run.yaml"))
-        if not any(item.get("acquisition") == "kura" for item in model_requirements(run, download_estimate)):
+        if not any(item.get("acquisition") == "kura" for item in requirements):
             return records
     probe_failures = download_estimate.get("probe_failures")
     if isinstance(probe_failures, list) and probe_failures:
@@ -597,10 +596,14 @@ def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
             f"{_preflight_bytes(bound['bytes'])}{uncounted}")
 
 
-def _trainer_downloads(run: dict[str, Any], *, executor: str, local_cache: Path) -> str | None:
+def _plan_requirements(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+    """The run's model requirements, read once per plan or launch check and passed to every part that shows them."""
+    return model_requirements(run, download_estimate) if _run_adapter(run) is not None else []
+
+
+def _trainer_downloads(requirements: list[dict[str, Any]], *, executor: str, local_cache: Path) -> str | None:
     """What a trainer downloads itself (AI-Toolkit resolves `model.base` on its own), which Kura does not
     size and the estimate does not count; None when the trainer downloads nothing itself."""
-    requirements = model_requirements(run) if _run_adapter(run) is not None else []
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
     if not backend_managed:
         return None
@@ -807,6 +810,7 @@ def collect_run_preflight(
     config: dict[str, Any] | None = None,
     executor: str | None = None,
     download_estimate: dict[str, Any] | None = None,
+    requirements: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     workspace_config = config if isinstance(config, dict) else {}
     resolved_executor = executor or run_executor(run)
@@ -815,7 +819,8 @@ def collect_run_preflight(
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(
-        run, estimate, executor=str(resolved_executor), local_cache=local_hf_cache(workspace, workspace_config),
+        run, estimate, _plan_requirements(run, estimate) if requirements is None else requirements,
+        executor=str(resolved_executor), local_cache=local_hf_cache(workspace, workspace_config),
     ))
     records.extend(_disk_cache_preflight_report(run))
     important = (_adapter_display(run).get("checkpoint") or {})
@@ -1296,8 +1301,9 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace), config=workspace_config)
     display_path = run_dir / "resolved" / "backend-display.lock.json"
     frozen_display = _load_yaml(display_path) if display_path.is_file() else None
-    resources = _resources_payload(run, workspace_config, download_estimate, adapter_display=frozen_display)
-    preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate)
+    requirements = _plan_requirements(run, download_estimate)
+    resources = _resources_payload(run, workspace_config, requirements, adapter_display=frozen_display)
+    preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate, requirements=requirements)
     if run_executor(run) == "docker":
         # Shown, not enforced here: the launch runs the same check itself (and skips it for a dry run).
         preflight.extend(_local_disk_preflight_report(run, workspace, workspace_config, download_estimate))

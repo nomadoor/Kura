@@ -351,9 +351,9 @@ class AiToolkitEffectiveSettingsTests(unittest.TestCase):
         run = self._run({"model_arch": "moss_image:base", "native_config": {"train": {"cache_text_embeddings": True}}})
         display = display_ai_toolkit(run)
         payload = {"resources": {"training": {key: value for key, value in display.items() if key not in {"checkpoint", "memory"}}}}
-        from kura.run_commands.plan import _resources_payload  # noqa: PLC0415
+        from kura.run_commands.plan import _plan_requirements, _resources_payload  # noqa: PLC0415
 
-        resources = _resources_payload(run, {}, {}, adapter_display=display)
+        resources = _resources_payload(run, {}, _plan_requirements(run, {}), adapter_display=display)
         self.assertNotIn("effective_settings", resources["training"])
         payload = {"resources": resources}
         text = format_run_plan(payload)
@@ -449,7 +449,7 @@ class PlanTrainingRowsTests(unittest.TestCase):
     """`kura run plan` training rows: a value that does not apply is a placeholder or no row."""
 
     def _training(self, backend: str, config: dict[str, Any]) -> dict[str, Any]:
-        from kura.run_commands.plan import _resources_payload  # noqa: PLC0415
+        from kura.run_commands.plan import _plan_requirements, _resources_payload  # noqa: PLC0415
 
         run = {
             "id": "plan-rows", "type": "train", "model": {"base": "custom"},
@@ -457,7 +457,7 @@ class PlanTrainingRowsTests(unittest.TestCase):
             "backend": {"name": backend, "config": config},
         }
         with patch("kura.run_commands.plan._local_gpu_payload", return_value={"name": "unknown", "vram_total_mb": "unknown"}):
-            return _resources_payload(run, {}, {})["training"]
+            return _resources_payload(run, {}, _plan_requirements(run, {}))["training"]
 
     def test_empty_container_is_not_set(self) -> None:
         from kura.run_commands.plan import NOT_SET, _plan_value  # noqa: PLC0415
