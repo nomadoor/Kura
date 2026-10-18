@@ -26,8 +26,10 @@ a time. Record answers in dataset or run intent so they are not asked again.
 
 Before proposing parameters, inspect:
 
-1. `kura run capabilities <backend> --json` for the accepted authored
-   vocabulary and selector conditions;
+1. `kura run capabilities <backend> --arch <selector value> --json` for the
+   accepted authored vocabulary, the fields that apply to that architecture,
+   and its model facts (AI-Toolkit's baseline entry, the model roles
+   sd-scripts and Musubi read); without `--arch` it prints the whole surface;
 2. `kura dataset inspect <dataset>` and dataset validation for item
    count, resolutions, captions, roles, and pair integrity;
 3. `kura run plan <run-id>` for model artifacts, executor, detected or
@@ -83,7 +85,8 @@ shipped card; a user card in `knowledge/model-families/` may cover it. For a
 family without a card, read the pinned trainer's own source and docs for that
 architecture: `kura run capabilities <backend>` prints the pinned trainer image
 and the source it was built from (for AI-Toolkit, also the commit of the
-pinned upstream UI baseline and each `model_arch` value's baseline entry).
+pinned upstream UI baseline; `--arch <model_arch>` prints that value's
+baseline entry).
 Say which file you read; it is evidence about the trainer, not a recipe
 someone has verified.
 

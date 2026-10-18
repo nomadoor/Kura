@@ -1908,6 +1908,8 @@ def cmd_run_logs(args: argparse.Namespace) -> int:
 
     try:
         return show(path, follow=bool(args.follow))
+    except BrokenPipeError:
+        raise  # a closed reader is not a read failure; main() ends the command quietly
     except OSError as exc:
         print(f"cannot read run log: {_safe_error(exc)}", file=sys.stderr)
         return 1

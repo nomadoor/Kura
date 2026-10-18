@@ -1064,6 +1064,12 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
         )
 
 
+# The optimizers whose state an AI-Toolkit Resume restores with a verified update counter, and
+# what capabilities says about optimizer_type.
+AI_TOOLKIT_RESUME_OPTIMIZERS = ("adamw", "adamw8bit")
+AI_TOOLKIT_OPTIMIZER_DECIDED = "forwarded as the trainer spells it; a State Resume needs " + " or ".join(AI_TOOLKIT_RESUME_OPTIMIZERS)
+
+
 def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     native = backend_config(run, "ai-toolkit")
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
@@ -1071,7 +1077,7 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     # Every pinned baseline entry fills adamw8bit when optimizer_type is unset.
     optimizer = native.get("optimizer_type", "adamw8bit")
     limitations = []
-    if optimizer not in {"adamw", "adamw8bit"}:
+    if optimizer not in AI_TOOLKIT_RESUME_OPTIMIZERS:
         limitations.append("AI-Toolkit Resume initially requires AdamW or AdamW8bit optimizer state with a verified update counter")
     if limitations:
         return {
@@ -1668,7 +1674,8 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     return {"cwd": cwd, "argv": argv, "env": {**env, "MODELS_PATH": model_cache}, "write_roots": write_roots}
 
 
-def ai_toolkit_model_facts() -> dict[str, Any]:
-    """What `kura run capabilities ai-toolkit` shows about models: the pinned upstream UI baseline
-    of every model_arch value, and how native_config merges with it."""
-    return {"baseline": baseline_facts(AI_TOOLKIT_MODEL_ARCH_VALUES), "native_config": AI_TOOLKIT_NATIVE_CONFIG_MERGE}
+def ai_toolkit_model_facts(model_arch: str | None = None) -> dict[str, Any]:
+    """What `kura run capabilities ai-toolkit` shows about models: which pinned upstream UI baseline
+    compile fills from, the entry of one model_arch value when given, and how native_config merges
+    with it."""
+    return {"baseline": baseline_facts((model_arch,) if model_arch else ()), "native_config": AI_TOOLKIT_NATIVE_CONFIG_MERGE}

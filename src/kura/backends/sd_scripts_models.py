@@ -30,12 +30,14 @@ OPTIONAL_ROLES: dict[tuple[str, str], tuple[str, ...]] = {
 }
 
 
-def sd_scripts_model_facts() -> dict[str, Any]:
-    """The model roles each built-in entrypoint reads and the entry shapes that name them."""
+def sd_scripts_model_facts(architecture_filter: str | None = None) -> dict[str, Any]:
+    """The model roles each built-in entrypoint (or those of the architecture given) reads and the
+    entry shapes that name them."""
     return {
         "model_roles": {
             f"architecture={architecture}, mode={mode}": {"required": list(required), "optional": list(OPTIONAL_ROLES[(architecture, mode)])}
             for (architecture, mode), required in ROLE_CONTRACTS.items()
+            if architecture_filter in (None, architecture)
         },
         "model_sources": model_source_facts(),
     }

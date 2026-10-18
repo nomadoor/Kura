@@ -8,6 +8,59 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: musubi-tuner-capabilities-arch-2026-10-18
+    backend: musubi-tuner
+    reason: >-
+      kura run capabilities takes --arch: musubi_model_facts lists the model roles of one architecture when given one, and the lr_scheduler field Kura decides from carries the note its Resume owner shares. Compile output, generated argv, model handling, and recorded smoke behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-docker-2026-10-11
+    - musubi-tuner-release-conformance-docker-2026-10-17
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 82f2273cc0429fac9e465be1cb4bad9b7c906a0215a0ed52df42a7525ca16d46
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 91bc7dcb4dab7e7dcb74970be216cd7b44982dd6485582ce8b8a2aeed4d3af35
+  - id: sd-scripts-capabilities-arch-2026-10-18
+    backend: sd-scripts
+    reason: >-
+      kura run capabilities takes --arch: sd_scripts_model_facts lists the model roles of one architecture when given one, and the lr_scheduler field Kura decides from carries the note its Resume owner shares. Compile output, generated argv, model handling, and recorded smoke behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - sd-scripts-conformance-docker-2026-10-11
+    - sd-scripts-release-conformance-docker-2026-10-17
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: a82b9823a45a88a03e3ef8c2303785ec969a3096c35a8856ac14622d36253661
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: e935cab4c887e32900beb51bc0a96f19ab3df5e80ed3d03d973dcf3198e6940d
   - id: sd-scripts-final-state-same-save-2026-10-18
     backend: sd-scripts
     reason: "Kura no longer passes --save_state_on_train_end: at the pinned sd-scripts every trainer saves the end-of-training state when save_state or save_state_on_train_end is set, so with --save_state the trainer writes the same files as before. The trainer's end-of-training state (<name>-state) is no longer published as a second training-state artifact when a verified state of the run at its step is already published (the step state it repeats, with a different RNG file); its folder stays in outputs/. The trainer command's effect, training, weights, and every step state the recorded smokes published are unchanged, and a Resume from the last step still finds a verified state at that step; only the repeated copy is not added to the store, so the evidence below carries over."

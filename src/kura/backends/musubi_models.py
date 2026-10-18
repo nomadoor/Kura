@@ -387,12 +387,12 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     return {**expectations, **authored}
 
 
-def musubi_model_facts() -> dict[str, Any]:
-    """The model roles each architecture reads, with the format Kura checks, and the entry shapes
-    that name them. Which roles a run needs depends on its task and options; compile names any
-    missing one."""
+def musubi_model_facts(architecture_filter: str | None = None) -> dict[str, Any]:
+    """The model roles each architecture (or the one given) reads, with the format Kura checks, and
+    the entry shapes that name them. Which roles a run needs depends on its task and options;
+    compile names any missing one."""
     roles: dict[str, dict[str, Any]] = {}
-    for architecture in sorted(MUSUBI_ARCHITECTURES):
+    for architecture in (architecture_filter,) if architecture_filter else sorted(MUSUBI_ARCHITECTURES):
         for version in FLUX2_MODEL_VERSIONS if architecture == "flux2" else (None,):
             key = f"architecture={architecture}" + (f", model_version={version}" if version else "")
             roles[key] = {"formats": _musubi_role_formats(architecture, version)}

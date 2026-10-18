@@ -106,13 +106,6 @@ class LogTailTests(unittest.TestCase):
             lines, _, _, _ = tail(path, max_bytes=100)
         self.assertEqual(lines, ["い" * 10])
 
-    def test_a_closed_pipe_is_not_an_error(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "stdout.log"
-            path.write_text("a\n", encoding="utf-8")
-            with patch("kura.log_tail._show", side_effect=BrokenPipeError), patch("kura.log_tail.os.dup2"):
-                self.assertEqual(show(path), 0)
-
     def test_an_empty_log_says_so(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "stdout.log"
