@@ -31,11 +31,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 97e4157c3028d0df7415cc6ef4f16ebafb3351db09492be3654b940b0e51701e
+      value: efb794a55c1be0868afe31f8826106a88b0be7cd06b06207df43f8b70537e444
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: d01a16101cc2a6c70e3e29f66feceeda4d92aef07be8b1db7f0fcc38ea557bef
+      value: b4b620809be055c0daf5422fd7ca3b99965a66a1c1be71d837ec179f89ecdad5
   - id: sd-scripts-family-card-hint-2026-10-18
     backend: sd-scripts
     reason: >-
@@ -56,11 +56,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 5cda16e2e8116a9889b1fd603e479eaedf906860f1624ee43cc07b50b43b01ee
+      value: 8a1c51201f5c3e21b2d6726d5d48543e1ef397685f66143ee09b2c8fe056c171
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 6812ce64bfede07d5847bfdb30ed808db00a955ef0af94b5ce81c8dbeb54d26b
+      value: 6b1c111b34391e9313ad0c91d145458c95304e6ade0ad88910fb3e1df5e6ca05
   - id: musubi-tuner-capabilities-arch-2026-10-18
     backend: musubi-tuner
     reason: >-
