@@ -687,7 +687,8 @@ def _discover_after_unconfirmed_create(run_dir: Path, realization_id: str, api_k
 
 
 def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list[str]:
-    """Settle every create intent that has no realization, by discovery only.
+    """Settle every unresolved create intent: from its realization when the launch recorded one
+    (no secret, no lookup), otherwise by discovery only.
 
     Never creates or deletes a Pod. A Pod found is recorded as interrupted with
     its id, so `kura run stop` deletes it; finding none records the launch as
@@ -697,7 +698,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     if not intents:
         return []
     _runpod_settings(config)
-    api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
+    api_key: str | None = None  # only discovery needs it; settling from a realization reads no secret
     lines = []
     for intent_path in intents:
         intent = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -707,6 +708,8 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
             lines.append(f"the launch recorded {realization_id}.json but stopped before status followed it; status now does")
             continue
         pod_name = intent.get("pod_name") if isinstance(intent.get("pod_name"), str) else f"kura-{run_dir.name}-{realization_id}"
+        if api_key is None:
+            api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
         pods = _discover_pods(api_key, pod_name)
         at = _now()
         realization_path = run_dir / "realizations" / f"{realization_id}.json"
@@ -1416,7 +1419,9 @@ sleep infinity
         cancelled_at = _now()
         if capacity_wait_started_at is not None:
             close_capacity_wait("cancelled")
-        if controller_phase == "create" and intent_written:
+        # RunPod may have created the Pod, or did and its reply was in hand when the interrupt came.
+        create_uncertain = intent_written and (controller_phase == "create" or pod is not None)
+        if create_uncertain:
             write_create_unconfirmed(run_dir, realization_id, error="the launch was interrupted while RunPod was creating the Pod")
 
         def mutate_cancelled(latest: dict[str, Any]) -> None:
@@ -1425,12 +1430,12 @@ sleep infinity
 
         _mutate_run_status(run_dir, mutate_cancelled)
         append_run_event(run_dir, {"event": "runpod_capacity_wait_cancelled", "timestamp": cancelled_at, "executor": "runpod", "attempts": capacity_rounds, "phase": controller_phase})
-        if controller_phase == "create":
+        if create_uncertain:
             raise ValueError(
                 "RunPod capacity wait was interrupted during Pod creation; creation is unconfirmed. "
                 f"Run `kura run reconcile {run_dir.name}` before retrying: it looks for the Pod by name"
             ) from exc
-        if intent_written:
+        if intent_written and pod is None:
             # Every create so far was refused, so no Pod exists; settle the intent here.
             realization_path = run_dir / "realizations" / f"{realization_id}.json"
             _write_json(realization_path, as_record("realization", {
@@ -1774,17 +1779,18 @@ def reconcile_runpod(
 def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     _runpod_settings(config)
     status = _load_status(run_dir)
+    if unresolved_create_intents(run_dir):
+        raise ValueError(
+            f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
+            "first, which finds the Pod by name so this command can delete it"
+        )
+    # Only once the records agree that no launch left a Pod is a capacity wait's status believed.
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(
             "run is waiting for RunPod capacity and no Pod exists to stop; "
             "interrupt the active launch controller with Ctrl+C; if no controller remains, "
             f"run `kura doctor runpod`, then `kura run execute {run_dir.name}`, which follows the wait "
             "or starts it again"
-        )
-    if unresolved_create_intents(run_dir):
-        raise ValueError(
-            f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
-            "first, which finds the Pod by name so this command can delete it"
         )
     api_key = runpod_api_key("needed to stop a RunPod run")
     pod_id = status.get("pod_id")

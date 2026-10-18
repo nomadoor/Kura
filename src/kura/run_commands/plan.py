@@ -1937,6 +1937,10 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
     run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        if unresolved_create_intents(run_dir):
+            raise ValueError(
+                f"an earlier launch stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` first"
+            )
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")

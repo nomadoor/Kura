@@ -59,6 +59,13 @@ creates nothing, so only decisions 3 to 7 apply to it.
 - Nothing found means the effect never happened only when the listing covered
   every Pod of the account; a listing that fails or may be partial leaves the
   intent unresolved, and the user is told so.
+- Whether an intent is resolved is read from the records, never from the
+  state status shows (2026-10-18): it is unresolved while it has no
+  realization, or while it is the run's newest launch (by the start time its
+  records state, not its id, since a clock set back repeats ids) and status does not
+  name its realization (a launch that stopped between the two writes, whether
+  status was left `launching` or in a capacity wait's `queued`). That case is
+  settled from the realization, without discovery.
 - One match found by a live launch is adopted and the launch continues.
 - Recovery after a crash, and any case with more than one match, never adopts a
   Pod into a running job and never deletes one: it records the run as
