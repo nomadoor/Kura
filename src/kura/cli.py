@@ -66,7 +66,7 @@ from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
 from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, run_done, select_reclaim
-from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
+from kura.training_artifacts import ResumeSourceMismatch, compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.yamlio import load_run_yaml
@@ -554,14 +554,23 @@ def cmd_render_new(args: argparse.Namespace) -> int:
 
 
 def _compile_refusal(run: dict[str, Any], exc: BaseException) -> str:
-    """Why a training run does not compile; a Resume, which copies its source's settings, also says how to go on."""
+    """Why a training run does not compile; a Resume its source cannot continue also says how to go on."""
     message = _safe_error(exc)
-    if run.get("continuation") is not None and isinstance(exc, SettingsRefused) and "Fork from Weight" not in message:
-        message = message.rstrip(".") + (
-            ". A Resume continues its source with the source's settings, so a source compiled under "
-            "rules Kura no longer accepts cannot be resumed; create a Fork from Weight and fix the settings there"
-        )
-    return message
+    if run.get("continuation") is None or not isinstance(exc, (SettingsRefused, ResumeSourceMismatch)):
+        return message
+    source = run.get("parent_run") or "<source run>"
+    if isinstance(exc, SettingsRefused):
+        why = ("A Resume continues its source with the source's settings, so a source compiled under "
+               "rules this Kura no longer accepts cannot be resumed here")
+        fix = " and fix the settings there"
+    else:
+        why = "A Resume continues a saved state only with the trainer image and Kura adapter that saved it"
+        fix = ""
+    return message.rstrip(".") + (
+        f". {why}; continue it with the Kura that compiled the source (kura_version and kura_source in "
+        f"runs/{source}/resolved/env.lock), or create a new run with `kura run new --from {source}`{fix}, "
+        "which copies the settings and trains from the start"
+    )
 
 
 def cmd_run_compile(args: argparse.Namespace) -> int:

@@ -129,15 +129,19 @@ class ForwardedValueTests(unittest.TestCase):
         validate_backend_config({**lllite, "backend": {"name": "sd-scripts", "config": with_required("sd-scripts", lllite["backend"]["config"])}})
         self.assertNotIn("network_dim", with_required("sd-scripts", lllite["backend"]["config"]))
 
-    def test_a_resume_that_does_not_compile_is_sent_to_fork_from_weight(self) -> None:
+    def test_a_resume_that_does_not_compile_is_sent_to_a_new_run_from_its_source(self) -> None:
         from kura.cli import _compile_refusal
 
         run = ARGV_RUNS["musubi-tuner"]({"learning_rate": 1e-4, "network_dim": 4, "network_alpha": 4})
         with self.assertRaisesRegex(ValueError, "requires optimizer_type") as caught:
             validate_backend_config(run)
-        self.assertNotIn("Fork from Weight", _compile_refusal(run, caught.exception))
+        self.assertNotIn("kura run new --from", _compile_refusal(run, caught.exception))
         run["continuation"] = {"mode": "resume"}
-        self.assertIn("create a Fork from Weight and fix the settings there", _compile_refusal(run, caught.exception))
+        run["parent_run"] = "20261018-1200_source_abcd"
+        refusal = _compile_refusal(run, caught.exception)
+        self.assertIn("`kura run new --from 20261018-1200_source_abcd`", refusal)
+        self.assertIn("fix the settings there", refusal)
+        self.assertNotIn("Fork from Weight", refusal)
         # Planning the frozen manifest of such a run reads it as it is.
         validate_backend_config(run, frozen=True)
 
