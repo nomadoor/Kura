@@ -82,7 +82,7 @@ values each shipped card covers:
 | `krea2` | `krea2` | — | `krea2` |
 | `iris3b` | `iris3b` | — | — |
 | `moss_image` | `moss_image:base` | — | — |
-| `zimage` | — | — | `zimage` |
+| `zimage` | `zimage` | — | `zimage` |
 
 Every other selector value `kura run capabilities <backend>` lists has no
 shipped card; a user card in `knowledge/model-families/` may cover it. For a

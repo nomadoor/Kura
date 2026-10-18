@@ -3,13 +3,22 @@
 ## Training
 
 - Backend of the entries below: musubi-tuner v0.3.5, `architecture: zimage`.
-  They were not measured on AI-Toolkit's `zimage`.
+  AI-Toolkit's `zimage` has its own section below.
 - VRAM class: a LoRA at 768 px, rank 32 / alpha 16, learning rate 1e-4 with a
   cosine schedule, adamw8bit, `timestep_sampling: shift`,
   `discrete_flow_shift: 2.0`, `fp8_base` + `fp8_scaled` + `fp8_llm`, and
   gradient checkpointing completed 600 steps locally on an RTX 4070 Ti with
   12 GB VRAM and no block swap, at about 3.25 seconds per step.
   source: owner (2026-10-18)
+
+## Training on AI-Toolkit
+
+- AI-Toolkit `model_arch: zimage` (baseline: `Tongyi-MAI/Z-Image`, `qfloat8`,
+  `low_vram`) on an RTX 4070 Ti with 12 GB at 768 px: with the text encoder
+  resident (the baseline) 132 to 151 s per step at 11.9 to 12.3 GB; with
+  `native_config.train.cache_text_embeddings: true` about 2.6 to 3.1 s per
+  step at 9.6 GB, and 600 steps took 28 minutes.
+  source: acceptance run 2026-10-18 (local RTX 4070 Ti 12 GB)
 
 ## Model files
 
