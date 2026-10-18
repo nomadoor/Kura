@@ -1290,7 +1290,7 @@ class DoctorDockerTests(unittest.TestCase):
             # Not `kura run prune`: with --yes it also removes old runs.
             # The workspace AGENTS.md keeps state-changing Docker commands with the user.
             self.assertEqual(managed["remove_stopped"], "ask the user to run: docker container prune --filter label=io.kura.managed=true")
-            self.assertEqual(payload["docker_storage"]["root_dir"], "/var/lib/docker")
+            self.assertEqual(payload["docker_storage"]["root_dir"], str(Path("/var/lib/docker")))
             self.assertEqual(payload["huggingface_cache"]["path"], str(root.resolve() / "cache" / "huggingface"))
             self.assertNotIn("docker.mounts", payload["huggingface_cache"].get("note", ""))
             self.assertEqual(payload["local_images"], {name: "present" for name in PINNED_IMAGES})
