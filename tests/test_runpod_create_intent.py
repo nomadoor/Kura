@@ -123,6 +123,190 @@ class CreateIntentRecoveryTests(unittest.TestCase):
             self.assertEqual(_status(run_dir)["pod_id"], "pod-b")
 
 
+CAPACITY_REFUSED = "RunPod GraphQL failed: There are no longer any instances available with the requested specifications"
+AVAILABLE = {"status": "ok", "checked_at": "2026-10-04T10:10:10+09:00", "gpu_count": 1, "candidates": [
+    {"gpu_type_id": "NVIDIA A40", "display_name": "NVIDIA A40", "memory_gb": 48,
+     "clouds": [{"cloud_type": "COMMUNITY", "stock_status": "Low", "available": True, "price_per_hour": 0.4, "available_gpu_counts": [1]}]}]}
+
+
+@contextmanager
+def _crash_after_capacity_wait():
+    """A compiled run whose launch waited for capacity, created a Pod, recorded it, and died before status followed."""
+    import yaml
+
+    from kura.executors.runpod import RunPodAPIError, launch_runpod
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        run_dir = root / "runs" / "example"
+        (run_dir / "resolved").mkdir(parents=True)
+        (run_dir / "logs").mkdir()
+        (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({
+            "id": "example", "type": "train", "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
+            "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+        }), encoding="utf-8")
+        (root / "workspace.yaml").write_text(yaml.safe_dump({
+            "runpod": {"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]}, "docker": {}, "images": {"ai-toolkit": "local"},
+        }), encoding="utf-8")
+        replies = [RunPodAPIError(CAPACITY_REFUSED, status_code=400), {"id": "pod-1", "name": "created", "desiredStatus": "RUNNING"}]
+
+        def create(*_args, **_kwargs):
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        previous = Path.cwd()
+        os.chdir(root)
+        try:
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod.time.sleep"):
+                with patch("kura.executors.runpod.runpod_gpu_availability", return_value=AVAILABLE), \
+                        patch("kura.executors.runpod._runpod_request", side_effect=create), \
+                        patch("kura.executors.runpod._write_status", side_effect=KeyboardInterrupt):
+                    with unittest.TestCase().assertRaises(KeyboardInterrupt):
+                        launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                                      image="registry/image:tag", config={"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
+                                      wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
+                yield root, run_dir
+        finally:
+            os.chdir(previous)
+
+
+class CrashAfterCapacityWaitTests(unittest.TestCase):
+    """The records say a Pod exists while status still says the run waits for capacity."""
+
+    def test_the_pod_the_records_name_counts_as_unresolved_while_status_says_queued(self) -> None:
+        from kura.runner import pod_may_still_bill
+
+        with _crash_after_capacity_wait() as (_root, run_dir):
+            status = _status(run_dir)
+            self.assertEqual(status["state"], "queued")
+            self.assertNotIn("last_realization", status)
+            [intent] = unresolved_create_intents(run_dir)
+            realization = intent.with_name(intent.name.replace(".create-intent.json", ".json"))
+            self.assertEqual(json.loads(realization.read_text(encoding="utf-8"))["pod"]["id"], "pod-1")
+            self.assertIsNotNone(pod_may_still_bill(run_dir, status))
+            with patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.runpod._runpod_request") as request:
+                lines = resolve_runpod_create_intents(run_dir, CONFIG)
+                listed.assert_not_called()
+                self.assertIn("status now does", lines[0])
+                self.assertEqual(unresolved_create_intents(run_dir), [])
+                settled = _status(run_dir)
+                self.assertEqual((settled["pod_id"], settled["last_realization"]), ("pod-1", f"realizations/{realization.name}"))
+                self.assertNotIn("capacity_wait", settled)
+                stop_runpod(run_dir, CONFIG)
+            self.assertEqual([call.args[:2] for call in request.call_args_list], [("DELETE", "/pods/pod-1")])
+
+    def test_stop_and_launch_refuse_until_reconcile_instead_of_creating_a_second_pod(self) -> None:
+        from kura.run_commands.launch import launch_run
+        from kura.run_commands.plan import stage_run
+
+        with _crash_after_capacity_wait() as (_root, run_dir):
+            stderr = io.StringIO()
+            with patch("kura.executors.runpod._runpod_request") as request, patch("kura.run_commands.launch.launch_runpod") as launch, \
+                    patch("kura.run_commands.plan.stage_runpod") as stage, patch("sys.stderr", stderr), patch("sys.stdout", io.StringIO()):
+                self.assertEqual(stop_run("example"), 1)
+                # `kura run execute` outside the runner stages, then launches; neither goes ahead.
+                self.assertEqual(stage_run("example"), 1)
+                self.assertEqual(launch_run("example", executor="runpod", dry_run=False, image=None, yes=True), 1)
+                with self.assertRaisesRegex(ValueError, "kura run reconcile"):
+                    stop_runpod(run_dir, CONFIG)
+            request.assert_not_called()
+            stage.assert_not_called()
+            launch.assert_not_called()
+            self.assertEqual(stderr.getvalue().count("kura run reconcile"), 3)
+
+    def test_the_runner_settles_from_the_records_and_follows_the_pod_instead_of_creating_another(self) -> None:
+        from kura import runner
+
+        with _crash_after_capacity_wait() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="runpod", extra={
+                "options": {"max_lease": "3h"}, "runpod_config": {"gpu_type_ids": ["NVIDIA A40"]},
+                "billing_confirmed_at": "2026-10-04T00:00:00+00:00",
+            })
+            runner.claim_request(request, 1)
+            # The launch the request made is the one that crashed.
+            [realization] = [path for path in (run_dir / "realizations").glob("*.json") if "." not in path.stem]
+            record = json.loads(realization.read_text(encoding="utf-8"))
+            record["controlled_by"] = {"request": request.name, "epoch": 1}
+            realization.write_text(json.dumps(record), encoding="utf-8")
+            with patch("kura.executors.runpod._runpod_pods_named") as listed, \
+                    patch("kura.run_commands.launch._run_remote_locked") as remote, \
+                    patch("kura.runner._continue_runpod", return_value=0) as follow:
+                runner.work(root, "example", request.name)
+            listed.assert_not_called()
+            remote.assert_not_called()
+            follow.assert_called_once()
+            self.assertEqual(_status(run_dir)["pod_id"], "pod-1")
+
+
+def _intent(run_dir: Path, rid: str, executor: str, *, recorded: dict | None = None) -> Path:
+    """A create intent of `executor`, and its realization when `recorded` is given."""
+    directory = run_dir / "realizations"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{rid}.create-intent.json"
+    draft = {"id": rid, "executor": executor, "container": {"id": None, "name": f"kura-example-{rid}", "labels": {}}}
+    path.write_text(json.dumps({"realization_id": rid, "executor": executor, "pod_name": f"kura-example-{rid}", "realization": draft}), encoding="utf-8")
+    if recorded is not None:
+        (directory / f"{rid}.json").write_text(json.dumps({"id": rid, "executor": executor, **recorded}), encoding="utf-8")
+    return path
+
+
+class CreateIntentRuleTests(unittest.TestCase):
+    """`unresolved_create_intents` decides from the records, for every executor."""
+
+    def test_only_the_newest_launch_can_be_left_behind_by_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "example"
+            _intent(run_dir, "20261004-101010-000001", "runpod", recorded={"state": "interrupted", "pod": {"id": "pod-old"}})
+            _intent(run_dir, "20261004-111010-000001", "runpod", recorded={"state": "running", "pod": {"id": "pod-new"}})
+            for state in ("running", "queued", "launching"):
+                (run_dir / "status.json").write_text(json.dumps({"state": state, "last_realization": "realizations/20261004-111010-000001.json"}), encoding="utf-8")
+                self.assertEqual(unresolved_create_intents(run_dir), [], state)
+
+    def test_a_status_written_on_windows_names_its_realization_too(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "example"
+            _intent(run_dir, RID, "runpod", recorded={"state": "completed", "pod": {"id": "pod-1"}})
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_realization": f"realizations\\{RID}.json"}), encoding="utf-8")
+            self.assertEqual(unresolved_create_intents(run_dir), [])
+
+    def test_an_older_settled_launch_stays_settled_while_a_newer_one_is_unrecorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "example"
+            _intent(run_dir, "20261004-101010-000001", "runpod", recorded={"state": "launch_failed", "pod": None})
+            newer = _intent(run_dir, "20261004-111010-000001", "runpod")
+            (run_dir / "status.json").write_text(json.dumps({"state": "launching", "last_realization": "realizations/20261004-101010-000001.json"}), encoding="utf-8")
+            self.assertEqual(unresolved_create_intents(run_dir), [newer])
+
+    def test_both_executors_settle_a_record_status_did_not_follow_through_the_one_owner(self) -> None:
+        from kura.executors import common, docker, runpod
+        from kura.executors.docker import resolve_docker_create_intents
+
+        self.assertIs(docker.unresolved_create_intents, common.unresolved_create_intents)
+        self.assertIs(runpod.unresolved_create_intents, common.unresolved_create_intents)
+        outcomes = {}
+        for executor, resolve in (("docker", resolve_docker_create_intents), ("runpod", lambda run_dir: resolve_runpod_create_intents(run_dir, CONFIG))):
+            with tempfile.TemporaryDirectory() as directory:
+                run_dir = Path(directory) / "example"
+                _intent(run_dir, RID, executor, recorded={"state": "running", "launched_at": "2026-10-04T10:10:11+09:00"})
+                (run_dir / "status.json").write_text(json.dumps({"state": "queued", "capacity_wait": {"attempts": 1}}), encoding="utf-8")
+                calls = []
+                with patch.object(docker, "unresolved_create_intents", side_effect=lambda *a, **k: calls.append(a) or common.unresolved_create_intents(*a, **k)), \
+                        patch.object(runpod, "unresolved_create_intents", side_effect=lambda *a, **k: calls.append(a) or common.unresolved_create_intents(*a, **k)), \
+                        patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                        patch("kura.executors.runpod._runpod_pods_named") as listed, patch("kura.executors.docker.subprocess.run") as ps:
+                    resolve(run_dir)
+                listed.assert_not_called()
+                ps.assert_not_called()
+                self.assertEqual(calls, [(run_dir, executor)])
+                status = _status(run_dir)
+                outcomes[executor] = (status["state"], status["last_realization"], "capacity_wait" in status, unresolved_create_intents(run_dir))
+        self.assertEqual(outcomes["docker"], outcomes["runpod"])
+        self.assertEqual(outcomes["runpod"], ("running", f"realizations/{RID}.json", False, []))
+
+
 class UnconfirmedCreateTests(unittest.TestCase):
     def test_a_failed_lookup_still_hands_the_run_over(self) -> None:
         from kura.executors.runpod import RunPodAPIError, launch_runpod_session

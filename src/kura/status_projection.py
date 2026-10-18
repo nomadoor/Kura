@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from kura.executors.common import TERMINAL_STATES, host_time
+from kura.executors.common import TERMINAL_STATES, host_time, latest_launch_id
 
 COVERED_FIELDS = (
     "state", "started", "ended", "exit_code", "last_realization", "last_observation",
@@ -49,21 +49,10 @@ def _last_line(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _is_realization(path: Path) -> bool:
-    return path.suffix == ".json" and "." not in path.stem and not path.stem.startswith(("stage", "remote-exit-"))
-
-
-def _latest_launch_id(directory: Path) -> str | None:
-    ids = {path.stem for path in directory.glob("*.json") if _is_realization(path)}
-    ids |= {path.name[: -len(".create-intent.json")] for path in directory.glob("*.create-intent.json")}
-    ids |= {path.name[: -len(".capacity-wait.jsonl")] for path in directory.glob("*.capacity-wait.jsonl")}
-    return max(ids) if ids else None
-
-
 def project_status(run_dir: Path) -> dict[str, Any]:
     """The covered status fields as the run's records imply them."""
     directory = run_dir / "realizations"
-    rid = _latest_launch_id(directory) if directory.is_dir() else None
+    rid = latest_launch_id(directory) if directory.is_dir() else None
     manifest = run_dir / "resolved" / "manifest.lock.yaml"
     if rid is None:
         rendering, _ = _render_in_progress(run_dir)

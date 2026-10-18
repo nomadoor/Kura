@@ -198,6 +198,27 @@ class DockerCreateIntentTests(unittest.TestCase):
             self.assertEqual((_status(run_dir)["state"], _status(run_dir)["container_id"]), ("running", "container-9"))
             self.assertEqual(unresolved_create_intents(run_dir), [])
 
+    def test_a_recorded_container_counts_whatever_state_status_shows(self) -> None:
+        # Status is a projection: a launch that recorded its container and stopped before status
+        # followed is unsettled even when something else moved status off `launching`.
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _run(Path(directory))
+            rid = "20261004-101010-000001"
+            draft = {"id": rid, "executor": "docker", "container": {"id": None, "name": f"kura-example-{rid}", "labels": {}}}
+            (run_dir / "realizations").mkdir()
+            (run_dir / "realizations" / f"{rid}{CREATE_INTENT_SUFFIX}").write_text(json.dumps(
+                {"kind": "container_create_intent", "schema_version": 1, "realization_id": rid, "executor": "docker", "realization": draft}), encoding="utf-8")
+            (run_dir / "realizations" / f"{rid}.json").write_text(json.dumps(
+                {**draft, "state": "running", "launched_at": "2026-10-04T10:10:11+09:00", "container": {**draft["container"], "id": "container-9"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"run_id": "example", "state": "interrupted"}), encoding="utf-8")
+            self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
+            with _docker([]) as docker:
+                lines = resolve_docker_create_intents(run_dir)
+            self.assertEqual(docker, [])  # settled from the record, nothing looked up or started
+            self.assertIn("status now does", lines[0])
+            self.assertEqual((_status(run_dir)["state"], _status(run_dir)["container_id"]), ("running", "container-9"))
+            self.assertEqual(unresolved_create_intents(run_dir), [])
+
     def test_a_second_launch_that_passed_the_checks_does_not_start_another_container(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

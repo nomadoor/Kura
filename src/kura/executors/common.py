@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
 
 from kura.secrets import is_secret_name, secret_values
@@ -215,10 +215,13 @@ CREATE_INTENT_SUFFIX = ".create-intent.json"
 def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> list[Path]:
     """Create intents whose outcome is not settled: Pods or containers that may exist unrecorded.
 
-    An intent is settled once its realization exists and status follows it. A
-    launch that stopped between writing the realization and updating status
-    leaves the run `launching`; that intent still counts, and is settled from
-    the realization without looking for anything again.
+    Decided from the records, never from the state status shows. An intent is
+    unsettled while it has no realization, or while it is the newest launch
+    and status does not name its realization: a launch that stopped between
+    writing the realization and updating status (in whatever state status was
+    left, `launching` or a capacity wait's `queued`). That intent is settled
+    from the realization without looking for anything again. An older launch's
+    realization is settled for good; status moved on to a newer launch.
     """
     directory = run_dir / "realizations"
     if not directory.is_dir():
@@ -227,11 +230,15 @@ def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> lis
         status = _load_status(run_dir)
     except (OSError, json.JSONDecodeError):
         status = {}
+    newest = latest_launch_id(directory)
+    named = status.get("last_realization")
+    # Launches on Windows record the path with the host's separator.
+    named = PureWindowsPath(named).as_posix() if isinstance(named, str) else None
     intents = []
     for path in sorted(directory.glob(f"*{CREATE_INTENT_SUFFIX}")):
-        realization = directory / f"{path.name[: -len(CREATE_INTENT_SUFFIX)]}.json"
-        if not realization.exists() or (
-            status.get("state") == "launching" and status.get("last_realization") != f"realizations/{realization.name}"
+        realization_id = path.name[: -len(CREATE_INTENT_SUFFIX)]
+        if not (directory / f"{realization_id}.json").exists() or (
+            realization_id == newest and named != f"realizations/{realization_id}.json"
         ):
             intents.append(path)
     return intents if executor is None else [path for path in intents if create_intent_executor(path) == executor]
@@ -250,6 +257,8 @@ def settle_status_from_realization(run_dir: Path, realization_path: Path) -> dic
             latest.update({"container_id": container["id"], "container_name": container.get("name")})
         if pod.get("id"):
             latest["pod_id"] = pod["id"]
+        # The launch ended any capacity wait when it recorded the Pod.
+        latest.pop("capacity_wait", None)
 
     return _mutate_run_status(run_dir, mutate)
 
@@ -378,6 +387,15 @@ def is_realization_record(path: Path) -> bool:
     `remote-exit-<time>.json`; only `<id>.json` describes a launch.
     """
     return path.suffix == ".json" and "." not in path.stem and not path.stem.startswith(("stage", "remote-exit-"))
+
+
+def latest_launch_id(directory: Path) -> str | None:
+    """The newest launch in a run's `realizations/`: a realization, a create intent, or a capacity
+    wait, whichever has the latest id (ids are timestamps)."""
+    ids = {path.stem for path in directory.glob("*.json") if is_realization_record(path)}
+    ids |= {path.name[: -len(CREATE_INTENT_SUFFIX)] for path in directory.glob(f"*{CREATE_INTENT_SUFFIX}")}
+    ids |= {path.name[: -len(".capacity-wait.jsonl")] for path in directory.glob("*.capacity-wait.jsonl")}
+    return max(ids) if ids else None
 
 
 # Launch timing is diagnostic: each realization gets an append-only

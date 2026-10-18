@@ -1774,17 +1774,18 @@ def reconcile_runpod(
 def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     _runpod_settings(config)
     status = _load_status(run_dir)
+    if unresolved_create_intents(run_dir):
+        raise ValueError(
+            f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
+            "first, which finds the Pod by name so this command can delete it"
+        )
+    # Only once the records agree that no launch left a Pod is a capacity wait's status believed.
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(
             "run is waiting for RunPod capacity and no Pod exists to stop; "
             "interrupt the active launch controller with Ctrl+C; if no controller remains, "
             f"run `kura doctor runpod`, then `kura run execute {run_dir.name}`, which follows the wait "
             "or starts it again"
-        )
-    if unresolved_create_intents(run_dir):
-        raise ValueError(
-            f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
-            "first, which finds the Pod by name so this command can delete it"
         )
     api_key = runpod_api_key("needed to stop a RunPod run")
     pod_id = status.get("pod_id")
