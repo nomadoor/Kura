@@ -476,7 +476,10 @@ def _spawn_child(workspace: Path, run_id: str, request: Path) -> subprocess.Pope
     try:
         return subprocess.Popen(
             [sys.executable, "-m", "kura", "runner", "_work", run_id, request.name],
-            cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True,
+            cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+            # The runner loaded the secrets when it started; a follower reads them again, so a
+            # token set or rotated since then reaches the run it starts.
+            env=runner_environment(), close_fds=True,
         )
     finally:
         log.close()
