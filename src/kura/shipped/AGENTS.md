@@ -30,9 +30,15 @@ The rules below say why each step is there.
 - Work through the `kura` CLI and the files in this workspace.
 - Do not run state-changing Docker commands, invoke trainer/model-download
   libraries directly, or acquire models outside Kura. Read-only diagnosis such
-  as `docker ps`, `docker inspect`, and reading user-approved ComfyUI config is
-  allowed. Any exceptional external mutation requires separate, explicit user
-  approval naming that action.
+  as `docker ps` and reading user-approved ComfyUI config is allowed. Any
+  exceptional external mutation requires separate, explicit user approval
+  naming that action.
+- Never run `docker inspect`, `docker exec`, or any other command that prints
+  a Kura container's configuration or environment (reading a container
+  process's `/proc/<pid>/environ` included): Docker keeps the run's
+  secrets there, such as the Hugging Face token, and the output would land in
+  this conversation. `kura run status`, `kura run logs`, and `kura doctor` show
+  a run's state, its log, and the machine.
 - Skills may direct you to update knowledge files and run `notes.md`. Edit
   those, never the files Kura manages: this `AGENTS.md`, `.agents/skills/`,
   `.claude/skills/`, and `.kura/`.
