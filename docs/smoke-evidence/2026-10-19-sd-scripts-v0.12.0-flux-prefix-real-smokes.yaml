@@ -1,0 +1,54 @@
+schema_version: 1
+kind: real-smoke-campaign
+observed_at: '2026-10-19'
+executor: docker
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  One-step local Docker smokes of the real_smoke.py sd-scripts entries on the v0.12.0 image
+  rebuilt with patch 0003 (docker/sd-scripts/patches/0003-strip-the-flux-prefix-from-every-key.patch),
+  which strips the model.diffusion_model. prefix from every key in the FLUX.1 and Chroma
+  loaders. Each run copies the backend, model, dataset, recipe, and safety fields of the
+  2026-10-18 runs in 2026-10-18-sd-scripts-v0.12.0-real-smokes.yaml (the FLUX.1 run with
+  blocks_to_swap 16 to fit 12 GB) on the Docker executor. The FLUX.1 smoke that failed on the
+  image without 0003 (sha256:93a887f4...) passes here on the same all-in-one checkpoint; its
+  log reports `missing_keys=[]` where the failed run listed every DiT key as missing.
+runtime_image: nomadoor/kura-sd-scripts:v0.12.0-20261019
+runtime_image_digest: sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef
+adapter_source: f8e7a50cd6a250bca49514f79ce9aecac7d616349ed33dc65d83fd44ca19ea84
+runs:
+  sd-scripts-flux1-2026-10-19-0211:
+    run_id: 20261019-0211_sd-scripts-flux1_3319
+    smoke: sd-scripts-flux1
+    model: Comfy-Org/flux1-dev (flux1-dev-fp8.safetensors, the DiT under model.diffusion_model. after text_encoders.* and vae.* in the file's header)
+    entrypoint: flux_train_network.py
+    outcome: passed
+    losses: [0.0642]
+    output: outputs/20261019-0211_sd-scripts-flux1_3319.safetensors (76691904 bytes, 912 tensors)
+    input_postflight: matched
+    publication: completed
+  sd-scripts-sdxl-2026-10-19-0211:
+    run_id: 20261019-0211_sd-scripts-sdxl_8267
+    smoke: sd-scripts-sdxl
+    model: stabilityai/stable-diffusion-xl-base-1.0 (sd_xl_base_1.0.safetensors)
+    entrypoint: sdxl_train_network.py
+    outcome: passed
+    losses: [0.00705]
+    output: outputs/20261019-0211_sd-scripts-sdxl_8267.safetensors (42865960 bytes)
+    input_postflight: matched
+    publication: completed
+  sd-scripts-anima-lora-2026-10-19-0211:
+    run_id: 20261019-0211_sd-scripts-anima-lora_f820
+    smoke: sd-scripts-anima-lora
+    model: circlestone-labs/Anima (DiT, Qwen3 0.6B, Qwen-Image VAE)
+    entrypoint: anima_train_network.py
+    outcome: passed
+    losses: [0.00551]
+    output: outputs/20261019-0211_sd-scripts-anima-lora_f820.safetensors (45982552 bytes; converted by convert_anima_lora_to_comfy.py)
+    input_postflight: matched
+    publication: completed
+not_run:
+  sd-scripts-anima-lllite: not re-run on the new image
+  chroma: Kura has no Chroma selector; 0003's Chroma hunk is not exercised by a run
+  runpod: no RunPod run on the new image

@@ -14,7 +14,7 @@ from typing import Any
 PINNED_IMAGES: dict[str, str] = {
     "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f",
     "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173",
-    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8",
+    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef",
     "comfyui": "nomadoor/kura-comfyui@sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9",
 }
 
@@ -46,7 +46,7 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472": "13.0",
     "sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9": "13.0",
     "sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173": "13.0",
-    "sha256:93a887f476a048ba2c5d5b6d29435e2526b152de0698397aad52c7018fca1ff8": "12.8",
+    "sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef": "12.8",
 }
 
 # The newest CUDA version seen on RunPod hosts (2026-10-07). A newer driver

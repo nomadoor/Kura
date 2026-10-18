@@ -26,17 +26,24 @@ COPY docker/sd-scripts/patches/0001-preserve-safetensors-symlink-name.patch /tmp
 # within the epoch after a Resume skips whole epochs; 0002 keeps it at the logical step,
 # which Kura's sd-scripts training-state contract reads. See the patch header.
 COPY docker/sd-scripts/patches/0002-resume-continues-the-logical-step.patch /tmp/kura-sd-scripts-patches/0002-resume-continues-the-logical-step.patch
+# Upstream library/flux_utils.py (v0.12.0, lines 136-141 and 161-166) stops stripping the
+# model.diffusion_model. prefix at the first key without it; with safetensors 0.8 key order an
+# all-in-one FLUX.1 file then leaves the DiT on the meta device. 0003 strips it from every key.
+COPY docker/sd-scripts/patches/0003-strip-the-flux-prefix-from-every-key.patch /tmp/kura-sd-scripts-patches/0003-strip-the-flux-prefix-from-every-key.patch
 
 RUN cd "$SD_SCRIPTS_ROOT" \
     && git apply --check /tmp/kura-sd-scripts-patches/0001-preserve-safetensors-symlink-name.patch \
     && git apply /tmp/kura-sd-scripts-patches/0001-preserve-safetensors-symlink-name.patch \
     && git apply --check /tmp/kura-sd-scripts-patches/0002-resume-continues-the-logical-step.patch \
-    && git apply /tmp/kura-sd-scripts-patches/0002-resume-continues-the-logical-step.patch
+    && git apply /tmp/kura-sd-scripts-patches/0002-resume-continues-the-logical-step.patch \
+    && git apply --check /tmp/kura-sd-scripts-patches/0003-strip-the-flux-prefix-from-every-key.patch \
+    && git apply /tmp/kura-sd-scripts-patches/0003-strip-the-flux-prefix-from-every-key.patch
 
 LABEL org.opencontainers.image.source="https://github.com/kohya-ss/sd-scripts" \
       org.opencontainers.image.revision="${SD_SCRIPTS_REF}" \
       io.kura.patch.symlink-safetensors="preserve-input-filename-v2" \
       io.kura.patch.resume-step="logical-global-step-v1" \
+      io.kura.patch.flux-prefix="every-key-v1" \
       io.kura.backend="sd-scripts"
 
 # Installing the trainer must not replace the base image's torch build.

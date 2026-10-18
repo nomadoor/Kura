@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import textwrap
 import threading
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -57,6 +58,30 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn(f"git apply --check /tmp/kura-sd-scripts-patches/{name}", dockerfile)
         self.assertIn(f"git apply /tmp/kura-sd-scripts-patches/{name}", dockerfile)
         self.assertIn('io.kura.patch.resume-step="logical-global-step-v1"', dockerfile)
+
+    def test_sd_scripts_image_loads_a_flux_dit_whose_file_lists_other_components_first(self) -> None:
+        # The FLUX.1 LoRA path loads an all-in-one checkpoint whose DiT keys carry the
+        # model.diffusion_model. prefix after text_encoders.* keys; the image build applies the
+        # patch that strips the prefix from every key, in the FLUX.1 and Chroma loaders.
+        root = Path(__file__).resolve().parents[1]
+        name = "0003-strip-the-flux-prefix-from-every-key.patch"
+        patch_text = (root / "docker/sd-scripts/patches" / name).read_text(encoding="utf-8")
+        self.assertEqual(patch_text.count("-                break  # the model doesn't have annoying prefix\n"), 2)
+        hunks = patch_text.split("\n@@ ")[1:]
+        self.assertEqual(len(hunks), 2)
+        for hunk in hunks:
+            # Run the patched loop on a state dict in an all-in-one file's own key order.
+            lines = [line[1:] for line in hunk.splitlines()[1:] if line[:1] in (" ", "+")]
+            start = next(i for i, line in enumerate(lines) if line.strip().startswith("for key in list(sd.keys())"))
+            end = next(i for i in range(start + 1, len(lines)) if not lines[i].strip())
+            loop = textwrap.dedent("\n".join(lines[start:end]))
+            sd = {"text_encoders.clip_l.logit_scale": 1, "vae.decoder.conv_in.bias": 2, "model.diffusion_model.img_in.weight": 3}
+            exec(loop, {}, {"sd": sd})
+            self.assertEqual(sd, {"text_encoders.clip_l.logit_scale": 1, "vae.decoder.conv_in.bias": 2, "img_in.weight": 3})
+        dockerfile = (root / "docker/sd-scripts/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"git apply --check /tmp/kura-sd-scripts-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-sd-scripts-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.flux-prefix="every-key-v1"', dockerfile)
 
     def test_musubi_image_continues_the_logical_step_on_resume(self) -> None:
         # The training-state contract says Musubi Tuner counts logical steps on Resume; the

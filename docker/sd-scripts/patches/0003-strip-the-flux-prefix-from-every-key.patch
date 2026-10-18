@@ -1,0 +1,46 @@
+Kura: strip the model.diffusion_model. prefix from every key when loading a FLUX.1 or Chroma model.
+
+Upstream library/flux_utils.py (v0.12.0, commit 690ea7f96c23182352ec63def76d431c6120bd2f,
+lines 136-141 and 161-166) strips the prefix in a loop over the state dict that stops at the
+first key without it. safetensors 0.8.0, which v0.12.0 installs through transformers 5.17.0,
+returns load_file's keys in the file's own order; 0.4.5 returned them sorted. A checkpoint
+that holds the DiT under model.diffusion_model. next to other components listed first (the
+Comfy-Org/flux1-dev flux1-dev-fp8.safetensors file starts with text_encoders.*) then gets no
+key renamed, load_state_dict(strict=False, assign=True) leaves every DiT parameter on the
+meta device, and training fails with "Cannot copy out of meta tensor". This renames every key
+that has the prefix and leaves the others as they are; a file without the prefix loads as
+before. Remove this patch when upstream strips the prefix from every key.
+
+diff --git a/library/flux_utils.py b/library/flux_utils.py
+--- a/library/flux_utils.py
++++ b/library/flux_utils.py
+@@ -134,11 +134,10 @@ def load_flow_model(
+             logger.info("Converted Diffusers to BFL")
+ 
+         # if the key has annoying prefix, remove it
++        # Kura: strip it from every key; the keys come in file order, other components may come first.
+         for key in list(sd.keys()):
+-            new_key = key.replace("model.diffusion_model.", "")
+-            if new_key == key:
+-                break  # the model doesn't have annoying prefix
+-            sd[new_key] = sd.pop(key)
++            if key.startswith("model.diffusion_model."):
++                sd[key[len("model.diffusion_model.") :]] = sd.pop(key)
+ 
+         info = model.load_state_dict(sd, strict=False, assign=True)
+         logger.info(f"Loaded Flux: {info}")
+@@ -159,11 +158,10 @@ def load_flow_model(
+         sd = load_safetensors(ckpt_path, device=str(device), disable_mmap=disable_mmap, dtype=dtype)
+ 
+         # if the key has annoying prefix, remove it
++        # Kura: strip it from every key; the keys come in file order, other components may come first.
+         for key in list(sd.keys()):
+-            new_key = key.replace("model.diffusion_model.", "")
+-            if new_key == key:
+-                break  # the model doesn't have annoying prefix
+-            sd[new_key] = sd.pop(key)
++            if key.startswith("model.diffusion_model."):
++                sd[key[len("model.diffusion_model.") :]] = sd.pop(key)
+ 
+         info = model.load_state_dict(sd, strict=False, assign=True)
+         logger.info(f"Loaded Chroma: {info}")
