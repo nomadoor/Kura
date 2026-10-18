@@ -27,7 +27,7 @@ from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_daemon_problem
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
-from kura.storage import probe_storage, probe_storages, storage_floor_problem
+from kura.storage import RECLAIM_POINTER, probe_storage, probe_storages, storage_floor_problem
 from kura.run_commands.plan import local_min_free_gib
 from kura.workspace import comfyui_endpoint, validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
@@ -46,9 +46,12 @@ DOCKER_PROBE_TIMEOUT_SEC = 300
 
 def _docker_run(command: list[str], *, capture: bool = False, timeout: int = DOCKER_INFO_TIMEOUT_SEC) -> subprocess.CompletedProcess[str]:
     """A docker command for a doctor report; one that does not answer within `timeout` returns
-    exit code 124 with the reason as its stderr, so a hung daemon is reported, never waited on."""
+    exit code 124 with the reason as its stderr, so a hung daemon is reported, never waited on, and
+    a host without the docker command returns 127."""
     try:
         return subprocess.run(command, text=True, capture_output=capture, check=False, timeout=timeout)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(command, 127, "", "the docker command was not found on PATH")
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             command, 124, "", f"`{' '.join(command[:3])}` did not answer within {timeout} seconds; the Docker daemon may be hung or still starting",
@@ -72,7 +75,7 @@ def _docker_root_dir(report: dict[str, Any]) -> None:
 
 
 # A doctor report's conclusion leads, so a reader that stops early has read the answer.
-CONCLUSION_KEYS = ("diagnosis", "checks", "configuration_error", "warnings", "advisories", "issues")
+CONCLUSION_KEYS = ("diagnosis", "checks", "configuration_error", "warnings", "reclaimable", "issues")
 
 
 def conclusion_first(payload: dict[str, Any]) -> dict[str, Any]:
@@ -110,7 +113,7 @@ def kura_docker_containers() -> list[dict[str, Any]]:
 
 
 def stopped_kura_containers(containers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """Kura's containers that are no longer running: what `kura run prune --docker-containers` removes."""
+    """Kura's containers that are no longer running: part of the free class `kura cleanup --yes` removes."""
     return [
         item
         for item in (kura_docker_containers() if containers is None else containers)
@@ -129,9 +132,9 @@ def _docker_managed_resources() -> dict[str, Any]:
     # Counts only: a workspace that has run for a while has hundreds of these.
     summary: dict[str, Any] = {"containers": len(containers), "stopped_containers": len(stopped), "volumes": len(volumes)}
     if stopped:
-        # Docker's own prune touches only stopped containers with Kura's label, never run files.
-        # It changes Docker state, so it is the user's to run, not an agent's.
-        summary["remove_stopped"] = "ask the user to run: docker container prune --filter label=io.kura.managed=true"
+        # Stopped Kura containers are in the free class (docs/adr/reclaimable-data.md): Kura removes them
+        # after the user's yes, so no agent runs a state-changing Docker command itself.
+        summary["remove_stopped"] = "`kura cleanup plan` lists them as free; `kura cleanup --yes` removes them after the user's yes"
     return summary
 
 
@@ -329,6 +332,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         minimum="docker.min_free_gb", risk_accepted=True,
     )
     if low:
+        low = f"{low}. {RECLAIM_POINTER}"
         issues.append(_disk_issue(
             code="workspace_effective_free_low",
             severity="warning",
@@ -338,34 +342,6 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             effective_free_bytes=workspace_storage.effective_free_bytes,
             threshold_bytes=min_free_gib * gib,
         ))
-    cache_runs = (sizes["cache"].get("size_bytes") or 0) + (sizes["runs"].get("size_bytes") or 0)
-    if cache_runs > 30 * gib:
-        issues.append(_disk_issue(
-            code="workspace_cache_runs_large",
-            severity="advisory",
-            message="workspace cache+runs exceed 30GiB",
-            size_bytes=cache_runs,
-            threshold_bytes=30 * gib,
-        ))
-    for item in docker_storage.get("usage", []):
-        # Build cache that images still use cannot be freed, so only what cleanup can free is reported.
-        if str(item.get("Type", "")).lower() == "build cache" and (item.get("reclaimable_bytes") or 0) > 10 * gib:
-            issues.append(_disk_issue(
-                code="docker_build_cache_reclaimable",
-                severity="advisory",
-                message=f"Docker reports {(item.get('reclaimable_bytes') or 0) // gib}GiB of build cache that no image uses; `kura cleanup docker-cache` shows what it frees",
-                size_bytes=item.get("size_bytes"),
-                reclaimable_bytes=item.get("reclaimable_bytes"),
-                threshold_bytes=10 * gib,
-            ))
-        if str(item.get("Type", "")).lower() == "images" and (item.get("size_bytes") or 0) > 50 * gib:
-            issues.append(_disk_issue(
-                code="docker_images_large",
-                severity="advisory",
-                message="Docker images exceed 50GiB",
-                size_bytes=item.get("size_bytes"),
-                threshold_bytes=50 * gib,
-            ))
     if root_owned.get("count"):
         issues.append(_disk_issue(
             code="root_owned_cache_runs",
@@ -399,7 +375,10 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         ))
 
     warnings = [issue["message"] for issue in issues if issue.get("severity") == "warning"]
-    advisories = [issue["message"] for issue in issues if issue.get("severity") == "advisory"]
+    # What can be freed, by class, from the owner `kura cleanup plan` lists (docs/adr/reclaimable-data.md).
+    from kura.reclaim import reclaim_inventory
+
+    reclaimable = {**reclaim_inventory(workspace_root, config, docker=docker_storage)["totals"], "list": "kura cleanup plan"}
 
     # Kept short: the paths that share a backing store are listed once with its free space,
     # Docker usage is one size per type, and long lists keep their count and a few samples.
@@ -436,7 +415,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "cache_environment": env,
         "issues": issues,
         "warnings": warnings,
-        "advisories": advisories,
+        "reclaimable": reclaimable,
         "diagnosis": "Disk diagnostics completed. This command is read-only.",
     }
     _print_report(_redact_secrets(payload))

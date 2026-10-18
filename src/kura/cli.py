@@ -31,7 +31,7 @@ from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolv
 from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
-from kura.doctor import _docker_storage_summary, kura_docker_volumes, stopped_kura_containers, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
+from kura.doctor import _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
@@ -43,7 +43,7 @@ from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
-from kura.paths import LEGACY_AI_TOOLKIT_CACHE, inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
+from kura.paths import inspect_workspace_symlinks, local_docker_mounts, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_step_request, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys, SettingsRefused, gpu_choice_problem
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
@@ -57,7 +57,7 @@ from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
 from kura.run_commands.plan import local_min_free_gib
-from kura.storage import probe_storage, storage_floor_problem
+from kura.storage import RECLAIM_POINTER, probe_storage, storage_floor_problem
 from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_render_launch
 from kura.run_commands import cmd_run_logs
@@ -65,7 +65,8 @@ from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
-from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
+from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, run_done, select_reclaim
+from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.yamlio import load_run_yaml
@@ -901,12 +902,17 @@ def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None
         raise PermissionError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker cleanup failed"))
 
 
-def _remove_tree(workspace: Path, target: Path) -> None:
-    _workspace_relative_target(workspace, target)
+def _remove_tree(root: Path, target: Path) -> None:
+    """Delete a directory or file below `root` (the workspace, or a Hugging Face cache outside it),
+    falling back to a container for files a container left owned by root."""
+    _workspace_relative_target(root, target)
     try:
-        shutil.rmtree(target)
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
     except PermissionError:
-        _docker_remove_workspace_paths(workspace, [target])
+        _docker_remove_workspace_paths(root, [target])
 
 
 def _docker_chown_workspace_paths(workspace: Path, targets: list[Path], *, uid: int, gid: int) -> None:
@@ -951,194 +957,214 @@ def _chown_workspace_paths(workspace: Path, targets: list[Path], *, uid: int, gi
         _docker_chown_workspace_paths(workspace, targets, uid=uid, gid=gid)
 
 
-def _cleanup_path_item(workspace: Path, path: Path, *, classification: str) -> dict[str, Any]:
-    try:
-        target = path.relative_to(workspace).as_posix()
-    except ValueError:
-        target = str(path)
-    return {
-        "target": target,
-        "path": str(path),
-        "exists": path.exists(),
-        "size_bytes": _path_size_bytes(path),
-        "classification": classification,
-    }
+_GIB = 1024**3
+
+# Cleanup targets and options earlier Kura versions accepted, with what replaces them (docs/adr/reclaimable-data.md).
+_LIST_AND_FREE = "`kura cleanup plan` lists what can be freed by class; `kura cleanup --yes` frees the free class"
+RETIRED_CLEANUP_TARGETS = {
+    "cache": f"{_LIST_AND_FREE}, and `--models <id>...` removes the models you pick",
+    "runs": f"{_LIST_AND_FREE}, including finished runs' scratch data",
+    "docker-cache": f"{_LIST_AND_FREE}, including Docker build cache",
+    "all": _LIST_AND_FREE,
+}
 
 
-def _last_observation_container_missing(run_dir: Path, status: dict[str, Any]) -> bool:
-    """True only when the latest realization's own observation records a missing container."""
-    reference = status.get("last_observation")
-    realization = status.get("last_realization")
-    if not isinstance(reference, str) or not isinstance(realization, str):
-        return False
-    try:
-        observation = json.loads((run_dir / reference).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return (
-        isinstance(observation, dict)
-        and observation.get("container_missing") is True
-        and f"realizations/{observation.get('realization_id')}.json" == realization
-    )
+def _retired_option(message: str) -> type[argparse.Action]:
+    """An option an earlier Kura accepted: refused with what replaces it, never silently ignored."""
+
+    class Retired(argparse.Action):
+        def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace, values: Any, option_string: str | None = None) -> None:
+            parser.error(f"{option_string} was retired: {message}")
+
+    return Retired
 
 
-def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_artifacts: bool) -> list[dict[str, Any]]:
-    states = CLEANUP_ELIGIBLE_STATES
-    runs: list[dict[str, Any]] = []
-    for run_dir in sorted((workspace / "runs").glob("*")):
-        if not run_dir.is_dir():
+def _display_size(size: int | None) -> str:
+    if size is None:
+        return "size unknown"
+    return f"{size / _GIB:.1f} GiB" if size >= _GIB / 10 else f"{size / 1024**2:.0f} MiB"
+
+
+_CLASS_HEADINGS = {
+    "free": "free (costs nothing to recover)",
+    "download": "download (downloaded again when a run needs it)",
+    "resume": "resume data (deleting it means that run cannot be resumed; every LoRA stays)",
+    "outputs": "outputs (cannot be recreated; Kura never removes these on its own)",
+}
+_APPLY_HINTS = {
+    "free": "kura cleanup --yes (with no other option)",
+    "download": "kura cleanup --models <id>... | --models unreferenced | --images old --yes",
+    "resume": "kura cleanup --resume-data <run>... | --resume-data finished --yes",
+    "outputs": "kura cleanup --archive-outputs <run> --to <dir> --yes, kura cleanup --checkpoints <run> --keep <file>... --yes, or kura run prune <run>... --yes",
+}
+
+
+_SHARED_CACHE_NOTE = (
+    "the Hugging Face cache {} is outside this workspace and may be shared with other workspaces; "
+    "its models are listed and removed one by one, only when named"
+)
+
+
+def format_reclaim_plan(inventory: dict[str, Any]) -> str:
+    """`kura cleanup plan` for a person: each class with its total, items oldest first."""
+    lines = []
+    for cls in CLASSES:
+        items = [item for item in inventory["items"] if item["class"] == cls]
+        if cls == "outputs" and not items:
             continue
+        total = sum(item["size_bytes"] or 0 for item in items)
+        lines.append(f"{_CLASS_HEADINGS[cls]}: {_display_size(total)} in {len(items)} item(s)")
+        for item in items:
+            detail = [item["kind"]]
+            if item["referenced_by"]:
+                detail.append("used by " + ", ".join(item["referenced_by"]))
+            if item.get("in_use_by"):
+                detail.append("IN USE by " + ", ".join(item["in_use_by"]) + ", kept")
+            if item["last_used"]:
+                detail.append(f"last used {item['last_used']}")
+            if item.get("checkpoints"):
+                detail.append("checkpoints: " + ", ".join(entry["path"] for entry in item["checkpoints"]))
+            lines.append(f"  {_display_size(item['size_bytes']):>10}  {item['id']}  ({'; '.join(detail)})")
+        if items:
+            lines.append(f"  apply: {_APPLY_HINTS[cls]}")
+    lines.extend(f"note: {note}" for note in inventory["notes"])
+    if not inventory["hf_cache_inside_workspace"]:
+        lines.append("note: " + _SHARED_CACHE_NOTE.format(inventory["hf_cache"]))
+    lines.append("Without --yes, `kura cleanup` only shows what it would do.")
+    return "\n".join(lines)
+
+
+def _apply_reclaim(workspace: Path, inventory: dict[str, Any], action: dict[str, Any]) -> dict[str, Any]:
+    """Carry out one selected action; returns what it did."""
+    item = action["item"]
+    kind = item["kind"]
+    done: dict[str, Any] = {"action": action["action"], "id": item["id"], "kind": kind}
+    if kind in ("run-scratch", "dataset-view", "model-links", "hf-repository", "ai-toolkit-model-file", "legacy-ai-toolkit-models"):
+        hf_cache = Path(inventory["hf_cache"])
+        for raw in item["paths"]:
+            path = Path(raw)
+            root = workspace if path.resolve().is_relative_to(workspace.resolve()) else hf_cache
+            if path.exists() or path.is_symlink():
+                _remove_tree(root, path)
+        if kind == "model-links":
+            (workspace / "cache" / "models").mkdir(parents=True, exist_ok=True)
+    elif kind in ("docker-build-cache", "docker-containers", "docker-volumes", "image"):
+        command = {
+            "docker-build-cache": ["docker", "builder", "prune", "--force"],
+            "docker-containers": ["docker", "rm", *item.get("docker_ids", [])],
+            "docker-volumes": ["docker", "volume", "rm", *item.get("docker_ids", [])],
+            "image": ["docker", "image", "rm", *item.get("docker_ids", [])],
+        }[kind]
+        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        if result.returncode:
+            raise OSError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or f"{' '.join(command[:3])} failed"))
+    elif action["action"] == "resume-data":
+        run_dir = workspace / "runs" / item["id"]
+        native = [Path(raw) for raw in item["paths"] if Path(raw).is_relative_to(run_dir)]
+        for path in native:
+            if path.exists():
+                _remove_tree(workspace, path)
+        removed = remove_training_states(workspace, item["id"])
+        done.update({"removed_paths": [str(path.relative_to(workspace)) for path in native], "removed_artifact_ids": removed})
+        if item.get("run_present"):
+            done["record"] = record_reclaim(run_dir, "remove-resume-data", {
+                "removed_paths": [path.relative_to(run_dir).as_posix() for path in native], "removed_artifact_ids": removed,
+            })
+    elif action["action"] == "remove-checkpoints":
+        run_dir = workspace / "runs" / item["id"]
+        removed = []
+        for name in action["remove"]:
+            path = run_dir / "outputs" / name
+            if path.exists():
+                _remove_tree(workspace, path)
+                removed.append(f"outputs/{name}")
+        done.update({"removed": removed, "kept": [f"outputs/{name}" for name in action["keep"]]})
+        done["record"] = record_reclaim(run_dir, "remove-checkpoints", {"removed": removed, "kept": done["kept"]})
+    elif action["action"] == "archive-outputs":
+        run_dir = workspace / "runs" / item["id"]
+        destination = Path(action["destination"])
+        destination.mkdir(parents=True)
+        moved = []
         try:
-            run = _load_run_mapping(run_dir / "run.yaml") if (run_dir / "run.yaml").exists() else {}
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8")) if (run_dir / "status.json").exists() else {}
-        except (OSError, ValueError, YAMLError, json.JSONDecodeError):
-            run = {}
-            status = {}
-        state = str(status.get("state") or "unknown")
-        recency = status.get("ended") or status.get("started") or run.get("created") or run_dir.name
-        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir, "status": status})
-    runs.sort(key=lambda item: str(item["recency"]), reverse=True)
-    keep_ids = {item["id"] for item in runs[: max(keep_last, 0)]}
-    actions: list[dict[str, Any]] = []
-    for item in runs:
-        run_dir = item["path"]
-        view = run_dir / "cache" / "dataset-view"
-        covered_by_transients = item["id"] not in keep_ids and item["state"] in states
-        if view.is_dir() and not covered_by_transients:
-            postflight = item["status"].get("dataset_input_postflight")
-            view_cleanup = postflight.get("view_cleanup") if isinstance(postflight, dict) else None
-            if item["state"] in states and view_cleanup == "failed":
-                note = "Removes only a disposable dataset view left by failed automatic cleanup."
-            elif _last_observation_container_missing(run_dir, item["status"]):
-                note = (
-                    "Removes only a disposable dataset view kept for recovery after Docker "
-                    "reported the container missing; launch rebuilds it from the frozen lock."
-                )
-            else:
-                note = None
-            if note is not None:
-                actions.append({
-                    "id": item["id"],
-                    "state": item["state"],
-                    "classification": "safe-run-dataset-view-remnant",
-                    "note": note,
-                    "targets": [{
-                        "target": str(view.relative_to(workspace)),
-                        "path": str(view),
-                        "exists": True,
-                        "size_bytes": _path_size_bytes(view),
-                    }],
-                })
-        if item["id"] in keep_ids or item["state"] not in states:
-            continue
-        if delete_final_artifacts:
-            targets = [run_dir]
-            note = "Deletes the whole run, including outputs/downloads."
-            classification = "dangerous-run-delete"
-        else:
-            targets = [run_dir / name for name in ("cache", "tmp", ".cache") if (run_dir / name).exists()]
-            note = "Keeps outputs/downloads/final artifacts; removes only run-local transient cache/tmp directories."
-            classification = "safe-run-transients"
-        actions.append({
-            "id": item["id"],
-            "state": item["state"],
-            "classification": classification,
-            "note": note,
-            "targets": [
-                {
-                    "target": str(path.relative_to(workspace)),
-                    "path": str(path),
-                    "exists": path.exists(),
-                    "size_bytes": _path_size_bytes(path),
-                }
-                for path in targets
-            ],
-        })
-    return actions
+            for raw in item["paths"]:
+                source = Path(raw)
+                shutil.move(str(source), str(destination / source.name))
+                moved.append(source.name)
+        finally:
+            if moved:
+                # Written for what moved, even when a later move failed, so the record states only what happened.
+                done["record"] = record_reclaim(run_dir, "archive-outputs", {"destination": str(destination), "moved": moved})
+        done.update({"destination": str(destination), "moved": moved})
+    return done
 
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
-    target = args.target
-    actions: list[dict[str, Any]] = []
-    hf_cache = local_hf_cache(workspace, _workspace_config())
-    # A cache outside the workspace may be shared with other workspaces: report it, never delete it.
-    hf_cache_inside = workspace in hf_cache.parents
-    if target in ("cache", "all"):
-        hf_item = _cleanup_path_item(workspace, hf_cache, classification="safe-cache" if hf_cache_inside else "outside-workspace")
-        if not hf_cache_inside:
-            hf_item["note"] = "docker.hf_cache is outside the workspace; Kura leaves it to you."
-        legacy_item = _cleanup_path_item(workspace, workspace / LEGACY_AI_TOOLKIT_CACHE, classification="legacy-ai-toolkit-models")
-        legacy_item["note"] = (
-            "Legacy: AI-Toolkit model files from runs compiled before they moved to the Hugging Face cache; "
-            "runs compiled since then do not read them."
-        )
-        actions.extend([
-            hf_item,
-            _cleanup_path_item(workspace, workspace / "cache" / "models", classification="safe-cache-index-or-symlink-tree"),
-            legacy_item,
-        ])
-    if target in ("runs", "all"):
-        actions.append(_cleanup_path_item(workspace, workspace / "runs", classification="maybe-run-artifacts"))
-        run_actions = _run_cleanup_candidates(workspace, keep_last=args.keep_last, delete_final_artifacts=args.delete_final_artifacts)
-        run_dirs = sorted(path for path in (workspace / "runs").glob("*") if path.is_dir())
-        actions.append({
-            "target": "runs/*",
-            "path": str(workspace / "runs"),
-            "count": len(run_dirs),
-            "classification": "maybe-run-artifacts",
-            "keep_last": args.keep_last,
-            "delete_final_artifacts": args.delete_final_artifacts,
-            "run_actions": run_actions,
-            "note": "By default this keeps outputs/downloads/final artifacts. Whole-run deletion requires --delete-final-artifacts.",
-        })
-    docker_storage: dict[str, Any] | None = None
-    if target in ("docker-cache", "all"):
-        docker_storage = _docker_storage_summary()
-        actions.append({
-            "target": "docker system",
-            "classification": "maybe-shared-docker-storage",
-            "note": "With --yes, Kura prunes Docker build cache only. Images are not removed.",
-            "storage": docker_storage,
-        })
-    root_owned = _root_owned_files([workspace / "cache", workspace / "runs"])
-    if args.yes:
-        try:
-            if target in ("cache", "all"):
-                for path in ([hf_cache] if hf_cache_inside else []) + [workspace / "cache" / "models"]:
-                    if path.exists():
-                        _remove_tree(workspace, path)
-                    path.mkdir(parents=True, exist_ok=True)
-                legacy = workspace / LEGACY_AI_TOOLKIT_CACHE
-                if legacy.exists():
-                    _remove_tree(workspace, legacy)
-            if target in ("runs", "all"):
-                for item in _run_cleanup_candidates(workspace, keep_last=args.keep_last, delete_final_artifacts=args.delete_final_artifacts):
-                    for target_item in item["targets"]:
-                        path = Path(target_item["path"])
-                        if path.exists():
-                            _remove_tree(workspace, path)
-            if target in ("docker-cache", "all"):
-                result = subprocess.run(["docker", "builder", "prune", "--force"], text=True, capture_output=True, check=False)
-                if result.returncode:
-                    message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker builder prune failed")
-                    print(f"cannot cleanup Docker build cache: {message}", file=sys.stderr)
-                    return 1
-        except (OSError, ValueError, PermissionError) as exc:
-            print(f"cannot cleanup {target}: {_safe_error(exc)}", file=sys.stderr)
-            return 1
-    print(json.dumps({
+    target = getattr(args, "target", None)
+    if target in RETIRED_CLEANUP_TARGETS:
+        print(f"cannot cleanup: `kura cleanup {target}` was retired: {RETIRED_CLEANUP_TARGETS[target]}", file=sys.stderr)
+        return 2
+    if target not in (None, "plan"):
+        print(f"cannot cleanup: unknown target {target!r}; use `kura cleanup plan`, or `kura cleanup` with apply options", file=sys.stderr)
+        return 2
+    config = _workspace_config()
+    selection = {
+        "models": args.models or [], "images": args.images, "resume_data": args.resume_data or [],
+        "archive": args.archive_outputs, "archive_to": args.to, "checkpoints": args.checkpoints, "keep": args.keep or [],
+    }
+    if target == "plan":
+        if any(value for value in selection.values()) or args.yes:
+            print("cannot cleanup: `kura cleanup plan` only lists; run `kura cleanup` with the options to apply", file=sys.stderr)
+            return 2
+        inventory = reclaim_inventory(workspace, config, outputs=args.outputs)
+        print(json.dumps(inventory, ensure_ascii=False, indent=2) if args.json else format_reclaim_plan(inventory))
+        return 0
+    if args.outputs or args.json:
+        print("cannot cleanup: --outputs and --json belong to `kura cleanup plan`", file=sys.stderr)
+        return 2
+    inventory = reclaim_inventory(workspace, config, outputs=bool(args.archive_outputs or args.checkpoints))
+    try:
+        actions = select_reclaim(inventory, **selection)
+    except ValueError as exc:
+        print(f"cannot cleanup: {exc}", file=sys.stderr)
+        return 1
+    planned = [
+        {"action": action["action"], "class": action["item"]["class"], "id": action["item"]["id"], "kind": action["item"]["kind"],
+         "size_bytes": action["item"]["size_bytes"], "recovery": action["item"]["recovery"], "paths": action["item"]["paths"],
+         **{key: action[key] for key in ("remove", "keep", "remove_bytes", "destination") if key in action}}
+        for action in actions
+    ]
+    payload: dict[str, Any] = {
         "dry_run": not args.yes,
         "workspace_root": str(workspace),
-        "target": target,
-        "actions": actions,
-        "root_owned": root_owned,
-        "next_steps": [
-            "Review this output before deleting anything.",
-            "Use kura run prune for old run artifacts.",
-            "Use kura fix-permissions if root-owned cache/run files block cleanup.",
-        ],
-    }, ensure_ascii=False, indent=2))
+        "actions": planned,
+        # Bytes freed: an archive moves its bytes elsewhere, and a checkpoint removal frees only the files it removes.
+        "total_bytes": sum(item["remove_bytes"] if "remove_bytes" in item else 0 if item["action"] == "archive-outputs" else item["size_bytes"] or 0 for item in planned),
+        "kept_in_use": [item["id"] for item in inventory["items"] if item["class"] == "free" and "in_use_by" in item],
+        "hf_cache": inventory["hf_cache"],
+        "hf_cache_inside_workspace": inventory["hf_cache_inside_workspace"],
+        "notes": inventory["notes"] + ([] if inventory["hf_cache_inside_workspace"] else [_SHARED_CACHE_NOTE.format(inventory["hf_cache"])]),
+    }
+    if args.yes:
+        applied: list[dict[str, Any]] = []
+        for action in actions:
+            users = became_in_use(workspace, action["item"])
+            if users:
+                # A run was launched (or its status became unreadable) since the inventory: leave the item.
+                applied.append({"action": action["action"], "id": action["item"]["id"], "skipped": f"now in use by {', '.join(users)}"})
+                continue
+            try:
+                applied.append(_apply_reclaim(workspace, inventory, action))
+            except (OSError, ValueError) as exc:
+                payload["applied"] = applied
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                print(f"cannot cleanup {action['item']['id']}: {_safe_error(exc)}; "
+                      "`kura fix-permissions` repairs root-owned files in the workspace", file=sys.stderr)
+                return 1
+        payload["applied"] = applied
+    else:
+        payload["next_step"] = "Review this, then run the same command with --yes to apply it."
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1267,7 +1293,7 @@ def cmd_run_discard(args: argparse.Namespace) -> int:
     if state not in {"draft", "compiled"} or realizations or outputs:
         print(
             f"run has execution history (state={state}, {realizations} realizations, {outputs} output entries); "
-            "use kura run prune for old runs",
+            f"`kura run prune {args.run_id}` deletes a finished run with its outputs",
             file=sys.stderr,
         )
         return 1
@@ -1294,69 +1320,61 @@ def cmd_run_discard(args: argparse.Namespace) -> int:
 
 
 def cmd_run_prune(args: argparse.Namespace) -> int:
+    """Delete whole finished runs the user names: Kura's one whole-run delete (docs/adr/reclaimable-data.md)."""
+    if not args.run_ids:
+        print("cannot prune runs: name the runs to delete, `kura run prune <run-id>...`; "
+              "`kura cleanup plan --outputs` lists finished runs and their outputs", file=sys.stderr)
+        return 2
+    from kura.runner import pod_may_still_bill
+
     workspace = _require_workspace()
-    states = {state.strip() for state in args.states.split(",") if state.strip()}
-    runs: list[dict[str, Any]] = []
-    for run_file in sorted((workspace / "runs").glob("*/run.yaml")):
-        run_dir = run_file.parent
-        try:
-            run = _load_run_mapping(run_file)
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError, YAMLError, json.JSONDecodeError) as exc:
-            print(f"warning: skipped {run_dir.name}: {_safe_error(exc)}", file=sys.stderr)
-            continue
-        state = str(status.get("state") or "unknown")
-        recency = status.get("ended") or status.get("started") or run.get("created") or ""
-        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir})
-
-    runs.sort(key=lambda item: str(item["recency"]), reverse=True)
-    keep_ids = {item["id"] for item in runs[: max(args.keep, 0)]}
-    candidates = [item for item in runs if item["id"] not in keep_ids and item["state"] in states]
+    runs_root = (workspace / "runs").resolve()
     actions: list[dict[str, Any]] = []
-    for item in candidates:
-        run_dir = item["path"]
-        if args.outputs_only:
-            targets = [path for path in (run_dir / "outputs", run_dir / "downloads") if path.exists()]
-        else:
-            targets = [run_dir]
-        actions.append({"id": item["id"], "state": item["state"], "targets": [str(path.relative_to(workspace)) for path in targets]})
-        if args.yes:
-            for target in targets:
-                if target.exists():
-                    try:
-                        _remove_tree(workspace, target)
-                    except (OSError, ValueError) as exc:
-                        print(f"cannot prune run artifacts: {_safe_error(exc)}", file=sys.stderr)
-                        return 1
-
-    docker_actions: dict[str, Any] = {"containers": [], "volumes": []}
-    if getattr(args, "docker_containers", False):
-        containers = stopped_kura_containers()
-        docker_actions["containers"] = [
-            {"id": item.get("ID"), "name": item.get("Names"), "state": item.get("State"), "status": item.get("Status")}
-            for item in containers
-        ]
-        if args.yes and containers:
-            ids = [str(item.get("ID")) for item in containers if item.get("ID")]
-            if ids:
-                result = subprocess.run(["docker", "rm", *ids], text=True, capture_output=True, check=False)
-                if result.returncode:
-                    message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker rm failed")
-                    print(f"cannot prune Docker containers: {message}", file=sys.stderr)
-                    return 1
-    if getattr(args, "docker_volumes", False):
-        volumes = kura_docker_volumes()
-        docker_actions["volumes"] = [{"name": item.get("Name"), "driver": item.get("Driver")} for item in volumes]
-        if args.yes and volumes:
-            names = [str(item.get("Name")) for item in volumes if item.get("Name")]
-            if names:
-                result = subprocess.run(["docker", "volume", "rm", *names], text=True, capture_output=True, check=False)
-                if result.returncode:
-                    message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker volume rm failed")
-                    print(f"cannot prune Docker volumes: {message}", file=sys.stderr)
-                    return 1
-
-    print(json.dumps({"dry_run": not args.yes, "outputs_only": args.outputs_only, "keep": args.keep, "states": sorted(states), "actions": actions, "docker_actions": docker_actions}, ensure_ascii=False, indent=2))
+    problems: list[str] = []
+    for run_id in args.run_ids:
+        run_dir = (runs_root / run_id).resolve()
+        if Path(run_id).name != run_id or run_id in {"", ".", ".."} or run_dir.parent != runs_root:
+            problems.append(f"{run_id!r} is not a run directory name")
+            continue
+        if not run_dir.is_dir():
+            problems.append(f"there is no run {run_id!r}; `kura cleanup plan --outputs` lists finished runs")
+            continue
+        status = read_run_status(run_dir)
+        if not run_done(run_dir, status):
+            billing = pod_may_still_bill(run_dir, status) if status is not None else None
+            if billing is not None:
+                problems.append(f"run {run_id!r} is kept: {billing}")
+            elif status is not None and unresolved_create_intents(run_dir):
+                problems.append(f"run {run_id!r} is kept: a launch stopped before recording whether it created its container; "
+                                f"run `kura run reconcile {run_id}` first")
+            else:
+                state = "unreadable" if status is None else f"{status.get('state') or 'unknown'}" + (
+                    f" with publication {status['publication_state']}" if status.get("publication_state") == "pending" else "")
+                problems.append(
+                    f"run {run_id!r} is {state}; only a finished run ({', '.join(sorted(CLEANUP_ELIGIBLE_STATES))}, publication "
+                    "not pending) is deleted here, and `kura run discard` removes a draft or unlaunched compiled run"
+                )
+            continue
+        actions.append({"id": run_id, "state": status["state"], "target": str(run_dir.relative_to(workspace.resolve())), "size_bytes": _path_size_bytes(run_dir)})
+    if problems:
+        print("cannot prune runs: " + "; ".join(problems), file=sys.stderr)
+        return 1
+    if args.yes:
+        for action in actions:
+            try:
+                _remove_tree(workspace, workspace / action["target"])
+            except (OSError, ValueError) as exc:
+                print(f"cannot prune run {action['id']}: {_safe_error(exc)}", file=sys.stderr)
+                return 1
+    print(json.dumps({
+        "dry_run": not args.yes,
+        "actions": actions,
+        "note": (
+            "Deletes each whole run: every checkpoint and LoRA, samples, downloads, and its records. Training states "
+            "a continuation references stay in artifacts/training-state; the run's other stored states are then listed "
+            "as resume data by `kura cleanup plan`."
+        ),
+    }, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1527,7 +1545,7 @@ def cmd_image_build(args: argparse.Namespace) -> int:
             action="an image build", minimum="the docker.min_free_gb reserve, where Docker keeps its data",
         )
         if problem:
-            print(f"cannot build image: {problem}; `kura doctor disk` lists what can be freed", file=sys.stderr)
+            print(f"cannot build image: {problem}. {RECLAIM_POINTER}", file=sys.stderr)
             return 1
     ref_arg, default_ref = BUILD_SOURCES[args.name]
     dockerfile = checkout / "docker" / args.name / "Dockerfile"
@@ -1624,7 +1642,7 @@ def cmd_run_watch(args: argparse.Namespace) -> int:
         return 1
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kura",
         description="Agent-first, file-first workspace for reproducible training and render runs.",
@@ -1637,11 +1655,29 @@ def main() -> None:
     init.add_argument("--yes", action="store_true", help="Restore without asking")
     init.set_defaults(func=cmd_init)
 
-    cleanup = sub.add_parser("cleanup", help="Preview local cache, run, and Docker cleanup targets")
-    cleanup.add_argument("target", choices=("cache", "runs", "docker-cache", "all"))
-    cleanup.add_argument("--keep-last", type=int, default=30, help="Keep this many most-recent runs when considering run cleanup")
-    cleanup.add_argument("--delete-final-artifacts", action="store_true", help="Allow whole-run deletion including outputs/downloads")
-    cleanup.add_argument("--yes", action="store_true", help="Apply the cleanup plan; default is dry-run")
+    cleanup = sub.add_parser(
+        "cleanup",
+        help="List what can be freed (`kura cleanup plan`) or free it; without --yes it only shows what it would do",
+        description=(
+            "`kura cleanup plan` lists reclaimable data in classes by what deleting costs: free (nothing), download "
+            "(downloaded again when needed), and resume (that run can no longer be resumed; LoRAs stay). "
+            "`kura cleanup` with no option frees the free class; with options it does only what they name. Outputs "
+            "(checkpoints, LoRAs, samples, downloads, records) are never removed unless an option names the run."
+        ),
+    )
+    cleanup.add_argument("target", nargs="?", help="plan: list what can be freed; omit to apply")
+    cleanup.add_argument("--json", action="store_true", help="plan: print the inventory as JSON")
+    cleanup.add_argument("--outputs", action="store_true", help="plan: also list each finished run's outputs and checkpoints")
+    cleanup.add_argument("--models", nargs="+", metavar="ID", help="Remove these models (ids from `kura cleanup plan`), or every unreferenced one with `unreferenced`")
+    cleanup.add_argument("--images", choices=("old",), help="Remove Kura images that are not the current pin, an override, or frozen in an unfinished run")
+    cleanup.add_argument("--resume-data", nargs="+", metavar="RUN", help="Remove these finished runs' resume data, or every finished run's with `finished`; LoRAs stay")
+    cleanup.add_argument("--archive-outputs", metavar="RUN", help="Move a finished run's outputs and downloads to --to <dir>/<run>; its records stay")
+    cleanup.add_argument("--to", metavar="DIR", help="Where --archive-outputs moves the run's outputs")
+    cleanup.add_argument("--checkpoints", metavar="RUN", help="Remove a finished run's checkpoints except those named by --keep")
+    cleanup.add_argument("--keep", nargs="+", metavar="FILE", help="The checkpoints --checkpoints keeps (path under outputs/ or file name)")
+    cleanup.add_argument("--yes", action="store_true", help="Apply; without it the command only shows what it would do")
+    cleanup.add_argument("--keep-last", action=_retired_option("every finished run is listed by `kura cleanup plan`; recency only sorts it"), nargs="?", help=argparse.SUPPRESS)
+    cleanup.add_argument("--delete-final-artifacts", action=_retired_option("`kura run prune <run-id>...` deletes whole runs"), nargs=0, help=argparse.SUPPRESS)
     cleanup.set_defaults(func=cmd_cleanup)
 
     fix_permissions = sub.add_parser("fix-permissions", help="Repair root-owned Kura cache/run files")
@@ -1764,13 +1800,21 @@ def main() -> None:
     reconcile = run_sub.add_parser("reconcile", help="Refresh observed external state")
     reconcile.add_argument("run_id")
     reconcile.set_defaults(func=cmd_run_reconcile)
-    prune = run_sub.add_parser("prune", help="Preview or delete old run artifacts")
-    prune.add_argument("--keep", type=int, default=30)
-    prune.add_argument("--states", default="completed,failed,interrupted,launch_failed")
-    prune.add_argument("--outputs-only", action="store_true")
-    prune.add_argument("--docker-containers", action="store_true", help="Also prune stopped Docker containers labeled io.kura.managed=true")
-    prune.add_argument("--docker-volumes", action="store_true", help="Also prune Docker volumes labeled io.kura.managed=true")
+    prune = run_sub.add_parser(
+        "prune", help="Preview or delete whole finished runs you name, outputs included (add --yes to delete)",
+        description="Delete whole finished runs, outputs and records included. `kura cleanup plan --outputs` lists finished runs.",
+    )
+    prune.add_argument("run_ids", nargs="*", metavar="RUN_ID", help="the runs to delete; `kura cleanup plan --outputs` lists finished runs")
     prune.add_argument("--yes", action="store_true")
+    _name_runs = "name the runs to delete: `kura run prune <run-id>...`; `kura cleanup plan --outputs` lists finished runs"
+    prune.add_argument("--keep", action=_retired_option(_name_runs), nargs="?", help=argparse.SUPPRESS)
+    prune.add_argument("--states", action=_retired_option(_name_runs), nargs="?", help=argparse.SUPPRESS)
+    prune.add_argument("--outputs-only", action=_retired_option(
+        "`kura cleanup --archive-outputs <run> --to <dir>` moves a run's outputs; "
+        "`kura cleanup --checkpoints <run> --keep <file>...` removes the checkpoints you did not keep"), nargs=0, help=argparse.SUPPRESS)
+    _docker_free = "stopped Kura containers and volumes are in the free class of `kura cleanup plan`; `kura cleanup --yes` removes them"
+    prune.add_argument("--docker-containers", action=_retired_option(_docker_free), nargs=0, help=argparse.SUPPRESS)
+    prune.add_argument("--docker-volumes", action=_retired_option(_docker_free), nargs=0, help=argparse.SUPPRESS)
     prune.set_defaults(func=cmd_run_prune)
     lease = run_sub.add_parser("lease", help="Set how long a running RunPod Pod may live from now; shows the change and asks first")
     lease.add_argument("run_id")
@@ -1889,7 +1933,11 @@ def main() -> None:
     index_sub = index.add_subparsers(dest="index_command", required=True)
     rebuild = index_sub.add_parser("rebuild", help="Rebuild index.jsonl from run directories")
     rebuild.set_defaults(func=cmd_index_rebuild)
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     # Every command but these loads the secrets into the environment. File checks other than
     # `kura check secrets` (which looks for those values) need none, and `kura secrets set`
     # must see only the real environment. No check ever scans a secrets file itself.

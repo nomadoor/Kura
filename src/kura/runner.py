@@ -425,6 +425,20 @@ def run_unfinished(run_dir: Path) -> bool:
     return not run_finished(status) or _pod_left_running(status)
 
 
+def pod_may_still_bill(run_dir: Path, status: dict[str, Any]) -> str | None:
+    """Why a run may still have a RunPod Pod that bills, or None: its recorded Pod was never stopped
+    (`_pod_left_running`), or a launch stopped before recording whether it created one (an unresolved
+    create intent is then the only record of the Pod's name). Cleanup asks here before it offers or
+    deletes a run's data (docs/adr/reclaimable-data.md)."""
+    from kura.executors.common import unresolved_create_intents
+
+    if unresolved_create_intents(run_dir, "runpod"):
+        return f"a launch stopped before recording whether it created a Pod; run `kura run reconcile {run_dir.name}` first, which finds it by name"
+    if _pod_left_running(status):
+        return f"its Pod {status['pod_id']} may still exist and bill; run `kura run stop {run_dir.name}` first"
+    return None
+
+
 def _pod_left_running(status: dict[str, Any]) -> bool:
     """A finished run whose Pod still bills.
 
@@ -746,6 +760,7 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
     the watch tries again at its next check. `said` keeps a store whose backing could not be
     measured from being logged at every check."""
     from kura.run_commands.plan import local_reserve_problem
+    from kura.storage import RECLAIM_POINTER
     from kura.yamlio import YAMLError, load_yaml
 
     if _sibling(request, ".stop.json").exists():
@@ -764,9 +779,9 @@ def _disk_watch(workspace: Path, run_dir: Path, request: Path, said: set[str]) -
                  "the disk watch judges that store by Linux free space (set storage.host_drive in workspace.yaml)")
     if problem is None:
         return False
-    reason = (f"stopped by the disk watch: {problem}. Saves and training states written so far are kept; free space "
-              f"(`kura doctor disk` lists what can be freed), then, if the run kept training state, continue it with "
-              f"`kura run resume {run_dir.name} --additional-steps <steps>` (or `--to-step <step>`)")
+    reason = (f"stopped by the disk watch: {problem}. Saves and training states written so far are kept; free space, "
+              f"then, if the run kept training state, continue it with "
+              f"`kura run resume {run_dir.name} --additional-steps <steps>` (or `--to-step <step>`). {RECLAIM_POINTER}")
     write_stop_request(run_dir, reason=reason)
     _log(f"{run_dir.name}: {reason}")
     return True

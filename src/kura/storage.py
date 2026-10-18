@@ -308,6 +308,11 @@ def probe_storages(paths: dict[str, Path], config: dict[str, Any] | None = None)
     return {name: probe_storage(path, config, role=name) for name, path in paths.items()}
 
 
+# The sentence every low-space message ends with: `kura doctor disk`, the launch's disk refusal, the disk
+# watch's stop reason, and `kura image build` (docs/adr/reclaimable-data.md, decision 4).
+RECLAIM_POINTER = "`kura cleanup plan` lists what can be freed and what each item costs to recover"
+
+
 def storage_floor_problem(
     status: StorageStatus, path: Path | str, required_bytes: int, *, action: str, minimum: str | None = None,
     risk_setting: str | None = None, risk_accepted: bool = False,

@@ -61,7 +61,7 @@ digest moves only after compatibility checks.
 | --- | --- | --- |
 | `docker.hf_cache` | Host directory for the Hugging Face cache of local Docker runs; a relative path is relative to the workspace | `./cache/huggingface` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs, each with a `source`, a `target`, and an optional `mode` (`ro` or `rw`); a mount over the Hugging Face cache is refused (use `docker.hf_cache`) | none |
-| `docker.min_free_gb` | The reserve, in GiB, Kura keeps free on every store a local Docker run writes to (the workspace, the Hugging Face cache, writable mounts): the launch keeps it after estimated writes, the job runner stops a running local run whose store falls below it (checked about every 30 seconds; the stop and its reason are recorded first), and `kura image build` keeps it where Docker keeps its data (when this host can measure it); `kura doctor disk` warns below it. A run may raise its own reserve with `safety.max_run_disk_gb` in run.yaml; the launch and the watch keep the larger of the two | `20` |
+| `docker.min_free_gb` | The reserve, in GiB, Kura keeps free on every store a local Docker run writes to (the workspace, the Hugging Face cache, writable mounts): the launch keeps it after estimated writes, the job runner stops a running local run whose store falls below it (checked about every 30 seconds; the stop and its reason are recorded first), and `kura image build` keeps it where Docker keeps its data (when this host can measure it); `kura doctor disk` warns below it. A run may raise its own reserve with `safety.max_run_disk_gb` in run.yaml; the launch and the watch keep the larger of the two. RunPod downloads and pulls keep the same reserve on the local disk, plus what they write (`runpod.download_min_free_gb` is retired and refused) | `20` |
 
 ## Agents
 
@@ -86,8 +86,9 @@ docker:
 
 Kura mounts that directory at `/workspace/cache/huggingface` in every local
 container, measures free space on its drive before launch, and counts the models
-already in it. `kura cleanup cache` reports a cache outside the workspace but
-never deletes it, since other workspaces may share it. AI-Toolkit's own model
+already in it. `kura cleanup plan` lists the models in a cache outside the workspace
+too, and `kura cleanup --models <id>... --yes` removes only the ones named,
+since other workspaces may share it. AI-Toolkit's own model
 downloads go into this cache too: diffusers repositories in `hub/`, single files
 in `ai-toolkit-models/`. Two local runs that
 fetch the same AI-Toolkit model at the same time can collide in the trainer's
@@ -220,7 +221,6 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |
 | `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |
-| `runpod.download_min_free_gb` | Minimum local free space required before RunPod download | `50` |
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_types` | RunPod clouds to try, a list of `COMMUNITY` and `SECURE` in order; omit it for both | `[COMMUNITY, SECURE]` |

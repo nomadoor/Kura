@@ -214,6 +214,26 @@ class StatePublicationParityTests(unittest.TestCase):
             self.assertEqual([entry["observed_step"] for entry in items], [1200])
             owner.assert_called()
 
+    def test_runpod_training_state_pull_keeps_the_local_reserve(self) -> None:
+        import kura.run_commands.runpod_ssh as runpod_ssh
+
+        class Gate(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            item = {
+                "path": "/workspace/runs/derived/outputs/derived-step0200-state", "name": "derived-step0200-state",
+                "marked_step": 200, "files": [{"path": "model.safetensors", "size": 5, "mtime_ns": 1}],
+            }
+            with patch.object(runpod_ssh, "_workspace_config", return_value={"docker": {"min_free_gb": 3}}), \
+                    patch.object(runpod_ssh, "ensure_free_bytes", side_effect=Gate) as ensure_free, self.assertRaises(Gate):
+                _pull_remote_training_state_items(run_dir, {"ip": "example", "port": 22, "key": root / "key"}, workspace="/workspace", items=[item])
+        # The pulled copy and the store's copy are on disk at once.
+        self.assertEqual(ensure_free.call_args.args[1], 3 * 1024**3 + 2 * 5)
+        self.assertEqual(ensure_free.call_args.kwargs["context"], "RunPod training-state pull")
+
     @unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("python"), "a Pod runs this under Linux bash and python")
     def test_the_pod_listing_reports_the_step_the_contracts_marker_records(self) -> None:
         import kura.run_commands.runpod_ssh as runpod_ssh

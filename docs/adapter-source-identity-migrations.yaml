@@ -8,6 +8,54 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-pulls-keep-local-reserve-2026-10-18
+    executor: runpod
+    reason: "The executor identity changes because run_commands/runpod_ssh.py retires runpod.download_min_free_gb (docs/adr/reclaimable-data.md): the local free-space gates of a RunPod download and of the training-state and output pulls now require the local reserve (local_reserve_gib: docker.min_free_gb, raised by the run's safety.max_run_disk_gb) plus what they write (twice the size for a training-state pull, whose pulled copy stays on disk while the store copies it), instead of the retired 50 GiB setting and fixed 1, 5, and 10 GiB margins. Only the host's refusal threshold before a transfer changes; the Pod, the input transfer, Pod-side verification, the trainer command, the bytes collected, the stop, and every record are unchanged, so each recorded smoke would run exactly as it did."
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-conformance-runpod-2026-10-11
+    - musubi-tuner-conformance-runpod-2026-10-11
+    - ai-toolkit-conformance-runpod-2026-10-17
+    - ai-toolkit-conformance-runpod-2026-10-11
+    - ai-toolkit-0.13.30-conformance-runpod-2026-10-17
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: dbe8529c4faf148779237825a041a2ab08f3d598c9dcaf7d48e8bb8efeb493b2
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 58e2a35d353c9a7e90fb52a2a6c8fcb054a9e05ee1a85747d81e7ceb39964fe3
   - id: sd-scripts-backlog-batch-2026-10-18
     backend: sd-scripts
     reason: >-

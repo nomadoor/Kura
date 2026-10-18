@@ -308,6 +308,38 @@ def _apply_retention(workspace: Path, source_run: str, keep_generations: int) ->
             shutil.rmtree(target)
 
 
+def reclaimable_training_states(workspace: Path) -> dict[str, list[dict[str, Any]]]:
+    """The stored training states a user may free, by source run: every one no continuation references
+    (docs/adr/reclaimable-data.md, the resume class). Raises when a reference cannot be read, so
+    nothing is offered that a continuation might need."""
+
+    protected = _protected_artifact_ids(workspace)
+    by_run: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted(_artifact_root(workspace).glob("*/manifest.json")):
+        try:
+            manifest = _load_manifest_path(path)
+        except ValueError:
+            continue
+        artifact_id, source_run = manifest.get("id"), manifest.get("source_run")
+        if isinstance(artifact_id, str) and isinstance(source_run, str) and artifact_id not in protected:
+            by_run.setdefault(source_run, []).append(manifest)
+    return by_run
+
+
+@_locked_artifact_store
+def remove_training_states(workspace: Path, source_run: str) -> list[str]:
+    """Delete the source run's stored training states that no continuation references, under the store
+    lock that publication and Resume selection take; returns the removed artifact IDs."""
+
+    removed = []
+    for manifest in reclaimable_training_states(workspace).get(source_run, []):
+        target = _artifact_dir(workspace, manifest["id"])
+        if target.is_dir():
+            shutil.rmtree(target)
+            removed.append(manifest["id"])
+    return removed
+
+
 @_locked_artifact_store
 def publish_training_state(
     workspace: Path,
