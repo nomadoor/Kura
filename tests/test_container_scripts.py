@@ -1378,6 +1378,17 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertEqual(namespace["metadata_failure_kind"](auth), "authentication")
         self.assertEqual(namespace["metadata_failure_kind"](missing), "missing-artifact")
 
+    def test_hf_download_preflight_classifies_connection_errors_by_class_name(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        # huggingface_hub 0.x raises requests' ConnectionError; 1.x lets httpx's
+        # ConnectError and ConnectTimeout through.
+        for class_name in ("ConnectionError", "ConnectError", "ConnectTimeout", "ReadTimeout"):
+            exc = type(class_name, (Exception,), {})("unreachable")
+            self.assertEqual(namespace["metadata_failure_kind"](exc), "connectivity", class_name)
+        self.assertEqual(namespace["metadata_failure_kind"](ValueError("bad metadata")), "metadata")
+
     def test_loader_rejects_unknown_script(self) -> None:
         with self.assertRaises(FileNotFoundError):
             script_source("missing.py")

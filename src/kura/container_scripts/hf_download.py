@@ -166,8 +166,10 @@ def metadata_failure_kind(exc):
         return "authentication"
     if status_code == 404:
         return "missing-artifact"
+    # By class name, since the client library differs by hub version: requests'
+    # ConnectionError, or httpx's ConnectError and ConnectTimeout.
     name = type(exc).__name__.lower()
-    if "timeout" in name or "connection" in name:
+    if "timeout" in name or "connect" in name:
         return "connectivity"
     return "metadata"
 
