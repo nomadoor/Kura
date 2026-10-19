@@ -10,6 +10,7 @@ from kura.executors.common import _redact_secret_text
 from kura.backends import get_backend
 from kura.training_artifacts import training_state_managed
 from kura.workspace import require_workspace as _require_workspace
+from kura.run_envelope import legacy_gpu_name
 from kura.run_envelope import run_datasets as _run_datasets
 
 
@@ -27,9 +28,8 @@ def requested_gpu_types(compute: Any) -> list[str] | None:
     gpu = compute.get("gpu") if isinstance(compute, dict) else None
     if isinstance(gpu, list) and gpu and all(isinstance(item, str) and item for item in gpu):
         return list(gpu)
-    if isinstance(gpu, str) and gpu not in {"", "true", "false", "gpu", "cpu"}:
-        return [gpu]
-    return None
+    legacy = legacy_gpu_name(gpu)
+    return [legacy] if legacy is not None else None
 
 
 # The ports a ComfyUI render Pod opens when the workspace names none: SSH, which Kura reaches it through.

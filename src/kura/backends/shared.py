@@ -150,12 +150,14 @@ def model_downloads(
     label: str,
     explicit: dict[str, str],
     cache_path: Callable[[str, str, str], str],
+    bundle: bool = False,
 ) -> list[dict[str, Any]]:
     """Read model_downloads once: per role, what to fetch, where the trainer finds it, and what to record.
 
     `filename` names the role's file, or a list of files whose first is the one the trainer is
-    pointed at (a sharded model and its index). Roles the user names in model_paths are checked
-    but not fetched.
+    pointed at (a sharded model and its index). A role the user also names in model_paths is
+    refused, except in a Musubi bundle (`bundle`), which names every role: there the user's own
+    file replaces the bundle's.
     """
     if downloads is None:
         return []
@@ -192,7 +194,12 @@ def model_downloads(
             )
         filenames = [_safe_hf_filename(item, label=label) for item in filenames]
         if role in explicit:
-            continue  # checked like any other declaration, but the user's own file wins
+            if not bundle:
+                raise ValueError(
+                    f"{label} model_downloads.{role} and model_paths.{role} both name the {role} file; "
+                    f"keep model_paths.{role} to use your own file, or model_downloads.{role} to download it"
+                )
+            continue  # a bundle names every role; the user's own file replaces the bundle's
         repo_id = value["repo"]
         entry: dict[str, Any] = {
             "role": role, "repo_id": repo_id, "filename": filenames[0], "filenames": filenames,

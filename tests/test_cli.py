@@ -7804,7 +7804,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
             run_dir.mkdir(parents=True)
-            with self.assertRaisesRegex(ValueError, "gpu_type_priority=availability.*multiple GPU"):
+            with self.assertRaisesRegex(ValueError, "runpod.gpu_type_priority: availability works with one GPU type only"):
                 launch_runpod_session(
                     run_dir=run_dir,
                     image="registry/image:tag",
@@ -7815,7 +7815,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     },
                     dry_run=True,
                 )
-            with self.assertRaisesRegex(ValueError, "data_center_priority=availability.*multiple data centers"):
+            with self.assertRaisesRegex(ValueError, "runpod.data_center_priority: availability works with one data center only"):
                 launch_runpod_session(
                     run_dir=run_dir,
                     image="registry/image:tag",

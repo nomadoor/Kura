@@ -225,13 +225,13 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_types` | RunPod clouds to try, a list of `COMMUNITY` and `SECURE` in order; omit it for both | `[COMMUNITY, SECURE]` |
-| `runpod.gpu_type_priority` | GPU candidate ordering: `custom` uses the listed order; `availability` is accepted only for one GPU because the GraphQL control plane cannot preserve availability ordering across fallback attempts | `custom` |
+| `runpod.gpu_type_priority` | GPU candidate ordering: `custom` uses the listed order; `availability` is accepted only with one GPU in the list (refused when workspace.yaml loads), because Kura tries each candidate in turn and cannot keep RunPod's availability order | `custom` |
 | `runpod.data_center_ids` | Ordered RunPod data-center candidates; Kura tries each configured data center in order | unset |
-| `runpod.data_center_priority` | Data-center ordering: `custom` uses the listed order; `availability` is accepted only for one data center because the GraphQL control plane cannot preserve availability ordering across fallback attempts | unset |
+| `runpod.data_center_priority` | Data-center ordering: `custom` uses the listed order; `availability` is accepted only with one data center in the list (refused when workspace.yaml loads), because Kura tries each candidate in turn and cannot keep RunPod's availability order | unset |
 | `runpod.country_codes` | Ordered RunPod country candidates; Kura tries each configured country within each data-center attempt | unset |
 | `runpod.ports` | Ports the Pod opens, each `<port>/http` or `<port>/tcp`. Kura reaches every Pod over SSH, so keep `22/tcp` | the image's own: `8675/http` and `22/tcp` for AI-Toolkit, `22/tcp` for the other trainers and ComfyUI |
 | `runpod.backend_ports` | Ports for one image, by image name (`ai-toolkit`, `musubi-tuner`, `sd-scripts`, `comfyui`); they replace `runpod.ports` for that image | unset |
-| `runpod.interruptible` | Whether to allow interruptible Pods | `false` |
+| `runpod.interruptible` | Only `false` is accepted: Kura creates on-demand Pods, since an interrupted Pod would end a run before its outputs are collected; `true` is refused when workspace.yaml loads | `false` |
 
 `--max-lease` and `--unattended-wait` are not `workspace.yaml` keys. They are
 `kura run execute` flags; see [commands.md](commands.md).

@@ -31,7 +31,7 @@ from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import realization_reference, record as as_record
-from kura.workspace import RUNPOD_STORAGE_MODES
+from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
 
 
 # Defines kura_pod_self_delete for every Pod-side guard (unattended wait and
@@ -96,8 +96,6 @@ DEFAULT_CONTAINER_DISK_GB = 150
 
 
 def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("interruptible"):
-        raise ValueError("RunPod interruptible Pod creation is not supported by Kura's GraphQL control plane")
     gpu_type_ids = payload.get("gpuTypeIds")
     if not isinstance(gpu_type_ids, list) or len(gpu_type_ids) != 1 or not isinstance(gpu_type_ids[0], str):
         raise ValueError("RunPod GraphQL Pod creation requires exactly one gpuTypeIds entry")
@@ -477,18 +475,9 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     gpu_type_priority = config.get("gpu_type_priority")
     if gpu_type_priority is not None and gpu_type_priority not in ("availability", "custom"):
         raise ValueError("runpod.gpu_type_priority must be availability or custom")
-    if gpu_type_priority == "availability" and len(gpu_types) > 1:
-        raise ValueError(
-            "runpod.gpu_type_priority=availability cannot preserve availability ordering "
-            "across multiple GPU candidates through the GraphQL control plane; "
-            "use custom ordering or configure one GPU type"
-        )
-    if data_center_priority == "availability" and data_center_ids is not None and len(data_center_ids) > 1:
-        raise ValueError(
-            "runpod.data_center_priority=availability cannot preserve availability ordering "
-            "across multiple data centers through the GraphQL control plane; "
-            "use custom ordering or configure one data center"
-        )
+    problem = runpod_settings_problem(config)
+    if problem:
+        raise ValueError(problem)
     cloud_types = config.get("cloud_types", ["COMMUNITY", "SECURE"])
     if not isinstance(cloud_types, list) or not cloud_types or not all(value in ("SECURE", "COMMUNITY") for value in cloud_types) or len(set(cloud_types)) != len(cloud_types):
         raise ValueError("runpod.cloud_types must list SECURE and/or COMMUNITY, each once; omit it for both")
@@ -501,7 +490,7 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
         "ports": ports,
         "cloud_types": cloud_types,
         "support_public_ip": config.get("support_public_ip"),
-        "interruptible": bool(config.get("interruptible", False)),
+        "interruptible": False,
         "data_center_ids": data_center_ids,
         "data_center_priority": data_center_priority,
         "gpu_type_priority": gpu_type_priority,
