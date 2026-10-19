@@ -1528,6 +1528,33 @@ class TuiPathDisplayTests(unittest.TestCase):
             activity = _read_activity_from_stdout(log, download_keys=["dit", "vae", "text_encoder"])
         self.assertEqual(activity, "downloading text_encoder qwen.safetensors · 2/3 · 67% · 2.0KB")
 
+    def test_a_file_the_preflight_found_cached_is_verified_not_downloaded(self) -> None:
+        # The fetch says what it does, and the monitor reads it.
+        namespace: dict[str, Any] = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+        start_line, finish_line = namespace["start_line"], namespace["finish_line"]
+        with tempfile.TemporaryDirectory() as directory:
+            cached = Path(directory) / "qwen.safetensors"
+            cached.write_bytes(b"x")
+            other = Path(directory) / "new.safetensors"
+            other.write_bytes(b"y")
+            item = {"key": "text_encoder", "_cached_path": str(cached)}
+            self.assertEqual(start_line(item, "text_encoder:qwen.safetensors", 1), "[kura] hf verify cached text_encoder:qwen.safetensors attempt 1/4")
+            self.assertEqual(finish_line(item, str(cached)), f"[kura] verified cached text_encoder -> {cached}")
+            # A newer revision written in its place was downloaded.
+            self.assertEqual(finish_line(item, str(other)), f"[kura] downloaded text_encoder -> {other}")
+            self.assertEqual(start_line({"key": "dit"}, "dit:a.safetensors", 2), "[kura] hf download start dit:a.safetensors attempt 2/4")
+            log = Path(directory) / "stdout.log"
+            log.write_text(
+                "[kura] hf verify cached dit:a.safetensors attempt 1/4\n"
+                "[kura] hf verify cached vae:b.safetensors attempt 1/4\n"
+                "[kura] verified cached vae -> /cache/b\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_read_activity_from_stdout(log, download_keys=["dit", "vae"]), "verified cached vae · 2/2 · 100%")
+            log.write_text("[kura] hf verify cached dit:a.safetensors attempt 1/4\n", encoding="utf-8")
+            self.assertEqual(_read_activity_from_stdout(log, download_keys=["dit", "vae"]), "verifying cached dit a.safetensors · attempt 1/4 · 0/2 · 0%")
+
     def test_monitor_summary_extracts_download_keys_from_command_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

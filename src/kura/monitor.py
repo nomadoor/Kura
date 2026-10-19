@@ -25,10 +25,10 @@ DRAFT_STATE = "draft"
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
 TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
-HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle|shared activity|shared idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
+HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf (?:download (?P<kind>start|progress|idle|shared activity|shared idle)|(?P<verify>verify cached))\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
 HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
 KURA_STEP_RE = re.compile(r"\[kura\]\s+(?:ai-toolkit|musubi|sd-scripts) step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
-KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+downloaded\s+(?P<key>\S+)\s+->", re.IGNORECASE)
+KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+(?P<verb>downloaded|verified cached)\s+(?P<key>\S+)\s+->", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -491,9 +491,10 @@ def _read_activity_from_stdout_candidates(paths: Iterable[Path], *, run_dir: Pat
 def _hf_download_base_and_bytes(kind: str, raw_label: str, rest: str) -> tuple[str, int | None]:
     label = _download_label(raw_label)
     bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
-    if kind == "start":
+    if kind in {"start", "verify"}:
         attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
-        return f"downloading {label}" + (f" · attempt {attempt}" if attempt else ""), bytes_value
+        # A file the preflight found in the cache is verified, not downloaded.
+        return ("verifying cached " if kind == "verify" else "downloading ") + label + (f" · attempt {attempt}" if attempt else ""), bytes_value
     if kind in {"progress", "shared activity"}:
         return f"downloading {label}", bytes_value
     idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
@@ -516,12 +517,12 @@ def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = 
         if downloaded:
             key = downloaded.group("key")
             completed_downloads.add(key)
-            latest_download_activity = _download_activity(f"downloaded {key}", key, completed_downloads, download_keys, complete=True)
+            latest_download_activity = _download_activity(f"{downloaded.group('verb').lower()} {key}", key, completed_downloads, download_keys, complete=True)
             continue
         download = HF_DOWNLOAD_RE.search(line)
         if download:
             key = _download_key(download.group("label"))
-            kind = download.group("kind").lower()
+            kind = (download.group("kind") or "verify").lower()
             rest = download.group("rest")
             base, bytes_value = _hf_download_base_and_bytes(kind, download.group("label"), rest)
             latest_download_activity = _download_activity(base, key, completed_downloads, download_keys, bytes_value=bytes_value)
@@ -556,14 +557,14 @@ def _activity_from_stdout_line(line: str) -> str | None:
         return f"download stalled · {_download_label(stalled.group('label'))}"
     match = HF_DOWNLOAD_RE.search(line)
     if match:
-        kind = match.group("kind").lower()
+        kind = (match.group("kind") or "verify").lower()
         rest = match.group("rest")
         base, bytes_value = _hf_download_base_and_bytes(kind, match.group("label"), rest)
-        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None and kind != "start" else ""
+        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None and kind not in {"start", "verify"} else ""
         return f"{base}{suffix}"
     downloaded = KURA_DOWNLOADED_RE.search(line)
     if downloaded:
-        return f"downloaded {downloaded.group('key')}"
+        return f"{downloaded.group('verb').lower()} {downloaded.group('key')}"
     step = KURA_STEP_RE.search(line)
     if step:
         name = step.group("name").strip()

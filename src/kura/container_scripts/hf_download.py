@@ -202,6 +202,7 @@ def preflight_downloads(items):
         if isinstance(cached, str) and os.path.isfile(cached):
             size = os.path.getsize(cached)
             item["_size_bytes"] = size
+            item["_cached_path"] = cached
             print(f"[kura] hf preflight item {label} status=cached size_bytes={size}", flush=True)
             continue
         url = hf_hub_url(
@@ -256,6 +257,22 @@ def wait_for_exit(process, seconds):
     return True
 
 
+def start_line(item, label, attempt):
+    """What a fetch says as it starts: a file the preflight found in the cache is only verified."""
+    if item.get("_cached_path"):
+        return f"[kura] hf verify cached {label} attempt {attempt}/{ATTEMPTS}"
+    return f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}"
+
+
+def finish_line(item, path):
+    """What a fetch says when it ends: `verified cached` when it returned the file the preflight
+    found, `downloaded` when it wrote one (a new revision of a cached file included)."""
+    cached = item.get("_cached_path")
+    if cached and os.path.realpath(cached) == os.path.realpath(path):
+        return f"[kura] verified cached {item['key']} -> {path}"
+    return f"[kura] downloaded {item['key']} -> {path}"
+
+
 def run_one(item):
     link_path = item["link_path"]
     cache_dir = os.environ.get("HF_HUB_CACHE")
@@ -275,7 +292,7 @@ def run_one(item):
     last_activity_mtime = max((snapshot[1] for snapshot in activity_snapshots), default=0.0)
     expected_size = item.get("_size_bytes")
     for attempt in range(1, ATTEMPTS + 1):
-        print(f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}", flush=True)
+        print(start_line(item, label, attempt), flush=True)
         process = subprocess.Popen([sys.executable, "-c", CHILD, json.dumps(item, ensure_ascii=False)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         last_progress = time.monotonic()
         while not wait_for_exit(process, POLL_SEC):
@@ -314,7 +331,7 @@ def run_one(item):
             if not path:
                 raise SystemExit(f"[kura] hf download did not return a cache path: {label}")
             publish_download(path, link_path, item)
-            print(f"[kura] downloaded {item['key']} -> {path}", flush=True)
+            print(finish_line(item, path), flush=True)
             print(f"[kura] linked {item['key']} -> {link_path}", flush=True)
             return
         if output.strip():
