@@ -17,7 +17,7 @@ from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.runpod import pod_gpu_cost
-from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
+from kura.executors.common import QUIET_RUN_NOTICE_SEC, latest_launch_id, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
 
@@ -342,14 +342,11 @@ def _latest_realization(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]
         data = _read_mapping(run_dir / ref)
         if data:
             return data
-    # Only `<id>.json` is a realization; observations, publications, stages,
-    # and remote-exit records share the directory and sort after it.
-    realizations = sorted(path for path in (run_dir / "realizations").glob("*.json") if is_realization_record(path))
-    for path in reversed(realizations):
-        data = _read_mapping(path)
-        if data:
-            return data
-    return {}
+    # The launch its records say came last, as status projection reads it; ids alone repeat or
+    # run backwards when the clock is set back.
+    directory = run_dir / "realizations"
+    rid = latest_launch_id(directory) if directory.is_dir() else None
+    return _read_mapping(directory / f"{rid}.json") if rid is not None else {}
 
 
 def _latest_observation(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]:

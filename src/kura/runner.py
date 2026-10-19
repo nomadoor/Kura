@@ -19,7 +19,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -277,8 +277,21 @@ def pending_requests(run_dir: Path) -> list[Path]:
 
 
 def latest_request(run_dir: Path) -> Path | None:
+    """The request written last, by the time it records (`written_at`). Ids are local clock
+    times, which repeat or run backwards when the clock is set back, so an id decides only
+    between equal times, and for a request with no readable time."""
+    def written_at(request: Path) -> datetime:
+        try:
+            moment = datetime.fromisoformat(str(_read_json(request).get("written_at")))
+        except ValueError:
+            return _NO_TIME
+        return moment if moment.tzinfo else moment.astimezone()
+
     requests = launch_requests(run_dir)
-    return requests[-1] if requests else None
+    return max(requests, key=lambda request: (written_at(request), request.name)) if requests else None
+
+
+_NO_TIME = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def write_launch_request(run_dir: Path, *, executor: str, image: str | None = None, notify: Any = None, out: Any = None,
