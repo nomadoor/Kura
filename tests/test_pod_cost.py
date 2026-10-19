@@ -78,13 +78,20 @@ class PodCostTests(unittest.TestCase):
             ({"pod_stopped_at": None}, " so far; the Pod may still bill, "),
             ({"pod_stopped_at": None, "state": "recovery_required"}, " so far; the Pod may still bill, "),
             ({"pod_stopped_at": None, "pod_missing_at": "2026-10-19T20:07:54+09:00"},
-             "about $3.26 for at most 12h 05m, until the Pod was found gone; its stop was not recorded, "),
+             "at most $3.26 for at most 12h 05m, until the Pod was found gone; its stop was not recorded, "),
         )
         for changes, expected in cases:
             with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
                 _runpod_run(root, **changes)
                 self.assertIn(expected, self._status_summary(root)["pod_gpu_cost"])
+
+    def test_a_relaunch_waiting_for_its_pod_does_not_bill_the_deleted_one(self) -> None:
+        # The second launch's create intent cleared pod_id; status still names the first realization.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _runpod_run(root, state="launching", pod_id=None, pod_stopped_at=None, ended=None)
+            self.assertNotIn("pod_gpu_cost", self._status_summary(root))
 
     def test_a_missing_fact_is_named_and_a_run_without_a_pod_says_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

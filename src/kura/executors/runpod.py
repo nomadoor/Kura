@@ -342,10 +342,12 @@ def pod_gpu_cost(realization: dict[str, Any], status: dict[str, Any], *, now: da
     launch (`launched_at`, the earliest record of the Pod) to its recorded stop (`pod_stopped_at`). With
     no stop recorded it counts up to when the Pod was found gone (`pod_missing_at`, an upper bound:
     the Pod stopped at some point before), else up to now (`so far`: it may still bill). `kura run
-    status`, the execute completion lines, and the monitor read it. Only the run's latest launch is
-    counted. Empty for a run with no Pod; `unknown` names a fact that was not recorded."""
+    status`, the execute completion lines, and the monitor read it. Only the Pod status names (the run's
+    latest launch) is counted. Empty when status names no Pod or another one; `unknown` names a fact that was not recorded."""
     pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
-    if not status.get("pod_id") and not pod.get("id"):
+    # Only the Pod status names: while a relaunch waits, status still points at the previous launch's
+    # realization, whose Pod was deleted.
+    if not status.get("pod_id") or status.get("pod_id") != pod.get("id"):
         return {}
     price = pod.get("cost_per_h")
     if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
@@ -373,7 +375,7 @@ def format_pod_gpu_cost(cost: dict[str, Any]) -> str:
     """A Pod's GPU cost as the status and completion lines say it: approximate, GPU only, this launch."""
     if "unknown" in cost:
         return f"unknown: {cost['unknown']}"
-    amount = "under $0.01" if cost["cost_usd"] < 0.005 else f"about ${cost['cost_usd']:.2f}"
+    amount = "under $0.01" if cost["cost_usd"] < 0.005 else f"{'at most' if cost['until'] == 'found gone' else 'about'} ${cost['cost_usd']:.2f}"
     span = format_seconds(cost["seconds"])
     span = {"stopped": span, "found gone": f"at most {span}, until the Pod was found gone; its stop was not recorded",
             "so far": f"{span} so far; the Pod may still bill"}[cost["until"]]
