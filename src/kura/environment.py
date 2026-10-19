@@ -29,7 +29,7 @@ USER_VARIABLES: tuple[UserVariable, ...] = (
 # Read by Kura but never set by a user: values Kura passes to its own remote
 # jobs, and facts of the host system.
 INTERNAL_VARIABLES = frozenset({
-    "KURA_EXIT_CODE", "KURA_REMOTE_NOTIFY_NTFY", "KURA_RUNPOD_UPLOAD_CODE", "KURA_RUN_ID", "KURA_WORKSPACE",
+    "KURA_EXIT_CODE", "KURA_REMOTE_NOTIFY_NTFY", "KURA_RUN_ID", "KURA_WORKSPACE",
     "TMPDIR", "WSL_DISTRO_NAME",
     # Set by the job runner for its followers, so their status writes carry its epoch.
     "KURA_RUNNER_EPOCH",

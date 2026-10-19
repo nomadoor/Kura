@@ -24,7 +24,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.images import image_cuda_version, launch_image, runpod_min_cuda_version
 from kura.run_commands.common import _safe_error, runpod_launch_settings
 from kura.run_commands.runpod_ssh import record_pod_lease_deadline
-from kura.run_commands.runpod_ssh import _free_local_port, _runpod_secret_env_payload, _runpod_ssh_details, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
+from kura.run_commands.runpod_ssh import _free_local_port, _runpod_ssh_details, install_pod_secrets, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
 
 
 def _format_duration(seconds: int) -> str:
@@ -155,23 +155,7 @@ def _render_runpod_images(run_dir: Path, frozen: dict[str, Any]) -> list[dict[st
 
 def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, models_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, lora_remote_files: list[dict[str, str]] | None = None) -> None:
     """Install the secrets, prepare the models, and start ComfyUI; the Pod's own lease guard bounds it."""
-    secret_payload = _runpod_secret_env_payload(remote_notify=False)
-    remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
-    if secret_payload is not None:
-        install_secret_script = f"""
-set -euo pipefail
-umask 077
-mkdir -p /tmp/kura-secrets
-cat > {shlex.quote(remote_secret_path)}
-chmod 600 {shlex.quote(remote_secret_path)}
-""".strip()
-        try:
-            installed = subprocess.run([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, capture_output=True, check=False, timeout=600)
-        except subprocess.TimeoutExpired as exc:
-            raise ValueError(f"ssh secret preparation timed out after {exc.timeout} seconds") from exc
-        if installed.returncode:
-            detail = _safe_error(installed.stderr.strip() or installed.stdout.strip() or "ssh secret preparation failed")
-            raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}: {detail}")
+    remote_secret_path = install_pod_secrets(details, run_id)
     staged_loras = lora_remote_files or (
         [{"name": lora_remote_name, "path": lora_remote_path}]
         if lora_remote_name and lora_remote_path else []

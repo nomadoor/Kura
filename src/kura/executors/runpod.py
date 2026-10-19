@@ -5,7 +5,6 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import secrets
 import shlex
 import sys
 import tarfile
@@ -1160,7 +1159,6 @@ def launch_runpod(
     secret_keys = [key for key in runtime_env if _is_secret(key)]
     if secret_keys:
         raise ValueError(undeclared_secret_refusal("RunPod pod env", secret_keys))
-    transfer_codes: dict[str, str] = {}
     status = _load_status(run_dir)
     stage_ref = status.get("last_stage")
     if not isinstance(stage_ref, str):
@@ -1176,12 +1174,10 @@ def launch_runpod(
         manifest_sha256 = pin_transfer_manifest(
             run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
         )
-    upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
-    download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
-    transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
+    transfer = {"archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
     if stage.get("transfer") == "selected-files":
         # Verified above, before the Pod exists.
-        transfer_codes.update({
+        transfer.update({
             "stage": stage_ref,
             "archive_sha256": stage["archive_sha256"],
             "input_sha256": stage["input_sha256"],
@@ -1191,11 +1187,6 @@ def launch_runpod(
             "manifest_sha256": manifest_sha256,
             "verification": "stage-matches-compile-before-pod-creation",
         })
-    runtime_env.update({
-        "KURA_UPLOAD_CODE": upload_code,
-        "KURA_DOWNLOAD_CODE": download_code,
-        "KURA_UPLOAD_ARCHIVE_NAME": stage["archive_name"],
-    })
     upload_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
@@ -1479,7 +1470,7 @@ sleep infinity
         "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": state, "launched_at": _now(),
         "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": _runpod_pod_snapshot(pod),
         "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
-        "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer_codes,
+        "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer,
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
         "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"}, **kura_provenance(),
     }

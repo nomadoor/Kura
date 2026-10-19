@@ -1723,6 +1723,31 @@ def _try_observe_runpod_remote_exit(run_dir: Path, *, ssh_timeout_sec: int = 10)
         return False
 
 
+def install_pod_secrets(details: dict[str, Any], run_id: str, *, remote_notify: bool = False) -> str:
+    """Write the run's secrets to a file only root can read on the Pod, and return its path.
+
+    The values travel on SSH's stdin, never in an argument or the Pod's env. With no secret set,
+    nothing is written and the job's `source` of the path finds no file.
+    """
+    remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
+    secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
+    if secret_payload is None:
+        return remote_secret_path
+    install_secret_script = f"""
+set -euo pipefail
+umask 077
+mkdir -p /tmp/kura-secrets
+cat > {shlex.quote(remote_secret_path)}
+chmod 600 {shlex.quote(remote_secret_path)}
+""".strip()
+    installed = _run_bounded([*_ssh_base(details), install_secret_script], input=secret_payload, text=True,
+                             capture_output=True, context="ssh secret preparation")
+    if installed.returncode:
+        detail = _redact_secret_text(installed.stderr.strip() or installed.stdout.strip() or "ssh secret preparation failed")
+        raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}: {detail}")
+    return remote_secret_path
+
+
 def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     lines: list[str] = []
     lines.extend(f"export {name}={shlex.quote(value)}" for name, value in sorted(container_secret_env().items()))
@@ -2189,19 +2214,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
             raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
     record_launch_phase(run_dir, realization_id, "upload_finished")
     command = " ".join(shlex.quote(arg) for arg in argv)
-    remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
-    secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
-    if secret_payload is not None:
-        install_secret_script = f"""
-set -euo pipefail
-umask 077
-mkdir -p /tmp/kura-secrets
-cat > {shlex.quote(remote_secret_path)}
-chmod 600 {shlex.quote(remote_secret_path)}
-""".strip()
-        installed = _run_bounded([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, context="ssh secret preparation")
-        if installed.returncode:
-            raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
+    remote_secret_path = install_pod_secrets(details, run_id, remote_notify=remote_notify)
     remote_job_script = _runpod_remote_job_script(
         workspace=workspace,
         run_id=run_id,
