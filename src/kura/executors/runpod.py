@@ -721,7 +721,6 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
         if not pods:
             realization = {**base, "state": "launch_failed", "attempted_at": intent.get("requested_at"), "pod": None,
                            "error": f"RunPod has no Pod named {pod_name}: it was never created, or it was already deleted"}
-            pod_id = None
             lines.append(f"no Pod named {pod_name} exists, so nothing is billing; the launch is recorded as failed (a render run needs compiling again before its next launch)")
         else:
             pods = sorted(pods, key=lambda pod: -((pod.get("runtime") or {}).get("uptimeInSeconds") or 0))
@@ -729,7 +728,6 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
                            "error": "the launch stopped before Kura recorded this Pod; its job was not started by Kura"}
             if len(pods) > 1:
                 realization["duplicate_pod_ids"] = [pod["id"] for pod in pods[1:]]
-            pod_id = pods[0]["id"]
             ids = ", ".join(pod["id"] for pod in pods)
             lines.append(f"found Pod {ids} named {pod_name}; it is recorded as interrupted and still billing: run `kura run stop {run_dir.name}` to delete it")
         _write_json(realization_path, as_record("realization", realization))

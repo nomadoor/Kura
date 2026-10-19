@@ -18,7 +18,9 @@ from tests.test_runpod_create_intent import CONFIG, CAPACITY_REFUSED, _crashed_l
 SRC = Path(__file__).resolve().parents[1] / "src" / "kura" / "executors"
 # Facts an earlier realization left in status; none of them is the new launch's.
 STALE = {"capacity_wait": {"started_at": "2026-10-01T00:00:00+09:00"}, "last_observation": "realizations/old.observed-1.json",
-         "last_step": 40, "total_steps": 100, "ai_toolkit_models": [], "container_id": "c-old", "container_name": "old", "pod_id": "pod-old"}
+         "last_step": 40, "total_steps": 100, "ai_toolkit_models": [], "container_id": "c-old", "container_name": "old", "pod_id": "pod-old",
+         # How the earlier launch's Pod stopped; kept, it would make the new Pod look stopped to billing checks.
+         "pod_stopped_at": "2026-10-01T01:00:00+09:00", "pod_missing_at": "2026-10-01T01:00:00+09:00", "stop_reason": "user"}
 
 
 def _session_run(root: Path) -> Path:
@@ -45,8 +47,12 @@ class OneLaunchWriterTests(unittest.TestCase):
                 launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", yes=True, max_lease_sec=3600)
             status = _status(run_dir)
             self.assertEqual(status["pod_id"], "pod-9")
-            for key in ("capacity_wait", "last_observation", "last_step", "total_steps", "ai_toolkit_models", "container_id", "container_name"):
+            for key in ("capacity_wait", "last_observation", "last_step", "total_steps", "ai_toolkit_models", "container_id", "container_name",
+                        "pod_stopped_at", "pod_missing_at", "stop_reason"):
                 self.assertNotIn(key, status)
+            from kura import runner
+
+            self.assertTrue(runner._pod_left_running(status))
             self.assertEqual(shadow_differences(run_dir, status), {})
 
     def test_a_failed_session_launch_says_what_its_realization_says(self) -> None:
@@ -62,7 +68,7 @@ class OneLaunchWriterTests(unittest.TestCase):
             status = _status(run_dir)
             realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual((status["state"], status["ended"]), ("launch_failed", realization["attempted_at"]))
-            for key in ("capacity_wait", "pod_id", "container_id", "last_step"):
+            for key in ("capacity_wait", "pod_id", "container_id", "last_step", "pod_stopped_at", "stop_reason"):
                 self.assertNotIn(key, status)
             self.assertEqual(shadow_differences(run_dir, status), {})
 
