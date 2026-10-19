@@ -29,6 +29,7 @@ from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT
 from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
+from kura.executors.common import host_time
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -416,7 +417,8 @@ def _confirm_runpod_launch(
     measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
     if confirmed_at:
         # The command that wrote the launch request showed this and took the confirmation.
-        print(f"Creating the RunPod Pod confirmed at {confirmed_at}", file=sys.stderr)
+        # A confirmation an older Kura recorded in UTC is shown in local time, as Kura writes its own.
+        print(f"Creating the RunPod Pod confirmed at {host_time(confirmed_at) or confirmed_at}", file=sys.stderr)
         return measurement
     candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
     measured_by_id = {
