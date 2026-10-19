@@ -17,7 +17,7 @@ from typing import Any
 
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, can_start, start_refusal
 from kura.yamlio import YAMLError
-from kura.secrets import declared_secret
+from kura.secrets import bearer_request, declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
     inspect_dataset_sources,
@@ -287,11 +287,7 @@ def _hf_file_size_probe(item: dict[str, str], *, timeout_sec: int = 20) -> dict[
     quoted_revision = urllib.parse.quote(revision, safe="")
     quoted_filename = "/".join(urllib.parse.quote(part, safe="") for part in filename.split("/"))
     url = f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
-    headers = {}
-    token = declared_secret("HF_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, method="HEAD", headers=headers)
+    request = bearer_request(url, declared_secret("HF_TOKEN"), method="HEAD")
     try:
         with urllib.request.urlopen(request, timeout=timeout_sec) as response:
             length = response.headers.get("Content-Length")

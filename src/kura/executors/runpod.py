@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from kura import __version__
 from kura.yamlio import YAMLError, load_yaml
@@ -26,7 +26,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
-from kura.secrets import MissingSecret, declared_secret
+from kura.secrets import MissingSecret, bearer_request, declared_secret
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
@@ -49,16 +49,10 @@ class RunPodAPIError(ValueError):
 
 def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, timeout: float = 30.0) -> dict[str, Any]:
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
-    request = Request(
-        "https://api.runpod.io/graphql",
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": f"Kura/{__version__}",
-        },
+    request = bearer_request(
+        "https://api.runpod.io/graphql", api_key, data=body, method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": f"Kura/{__version__}"},
     )
-    request.add_unredirected_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
@@ -213,16 +207,10 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, 
         )
     query = "query KuraGpuAvailability { " + " ".join(aliases) + " }"
     body = json.dumps({"query": query}).encode("utf-8")
-    request = Request(
-        "https://api.runpod.io/graphql",
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": f"Kura/{__version__}",
-        },
+    request = bearer_request(
+        "https://api.runpod.io/graphql", api_key, data=body, method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": f"Kura/{__version__}"},
     )
-    request.add_unredirected_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))

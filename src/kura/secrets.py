@@ -14,6 +14,7 @@ import getpass
 import os
 import re
 import sys
+import urllib.request
 from functools import lru_cache
 from pathlib import Path
 
@@ -129,6 +130,19 @@ def container_secret_env() -> dict[str, str]:
     locally and on RunPod.
     """
     return {name: value for name in CONTAINER_SECRETS if (value := declared_secret(name))}
+
+
+def bearer_request(url: str, token: str | None, *, method: str, data: bytes | None = None,
+                   headers: dict[str, str] | None = None) -> urllib.request.Request:
+    """A request that sends `token` with the first request only, never on a redirect.
+
+    urllib copies a request's ordinary headers onto a redirect, to whatever host it names;
+    an unredirected header stays with the first request (a same-host redirect drops it too).
+    """
+    request = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    if token:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    return request
 
 
 def known_names() -> list[str]:

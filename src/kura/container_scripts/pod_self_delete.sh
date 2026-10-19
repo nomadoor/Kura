@@ -69,6 +69,7 @@ for name, query in mutations:
         # RunPod's edge rejects Python's default User-Agent before checking the key.
         headers={"Content-Type": "application/json", "User-Agent": "Kura-pod-guard"},
     )
+    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).
     request.add_unredirected_header("Authorization", "Bearer " + os.environ["RUNPOD_API_KEY"])
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
