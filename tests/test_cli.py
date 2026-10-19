@@ -49,7 +49,7 @@ from kura.images import NEWEST_KNOWN_CUDA, PINNED_IMAGES
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _plan_requirements, _runpod_capacity_payload, _image_preflight_report
+from kura.run_commands.plan import _checkpoint_preflight_report, _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _plan_requirements, _runpod_capacity_payload, _image_preflight_report, format_run_plan
 from kura.training_artifacts import trained_steps
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.doctor import readiness_gaps
@@ -1861,8 +1861,31 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("RunPod capacity", output)
             self.assertIn("RTX A5000 · 24 GB", output)
             self.assertIn("COMMUNITY: None · unavailable", output)
+            # Both GPUs are in compute.gpu, so the A40 is a GPU the launch can land on.
             self.assertIn("launch now: NVIDIA A40 / COMMUNITY", output)
             self.assertIn("set compute.capacity.mode=wait before compile", output)
+
+    def test_runpod_launch_now_lists_only_gpus_the_launch_requests(self) -> None:
+        # compute.gpu asks for the A5000; the workspace also lists an A40, which the plan measures as an
+        # alternative. A launch never lands on the A40, so it is not a launch-now choice.
+        run = {"backend": {"name": "musubi-tuner"}, "compute": {"executor": "runpod", "gpu": ["NVIDIA RTX A5000"]}}
+        measurement = {
+            "status": "ok",
+            "candidates": [
+                {"gpu_type_id": "NVIDIA RTX A5000", "clouds": [{"cloud_type": "COMMUNITY", "available": True, "price_per_hour": 0.27},
+                                                              {"cloud_type": "SECURE", "available": False, "price_per_hour": None}]},
+                {"gpu_type_id": "NVIDIA A40", "clouds": [{"cloud_type": "SECURE", "available": True, "price_per_hour": 0.44}]},
+            ],
+        }
+        with patch("kura.run_commands.plan.runpod_gpu_availability", return_value=measurement):
+            payload = _runpod_capacity_payload(run, {"runpod": {"gpu_type_ids": ["NVIDIA A40"]}})
+        assert payload is not None
+        self.assertEqual(payload["immediate_candidates"], [{"gpu_type_id": "NVIDIA RTX A5000", "cloud_type": "COMMUNITY", "price_per_hour": 0.27}])
+        self.assertEqual(payload["available_alternatives"], [{"gpu_type_id": "NVIDIA A40", "cloud_type": "SECURE", "price_per_hour": 0.44}])
+        lines = "\n".join(format_run_plan({"id": "x", "type": "train", "runpod_capacity": payload}).splitlines())
+        self.assertIn("launch now: NVIDIA RTX A5000 / COMMUNITY", lines)
+        self.assertNotIn("launch now: NVIDIA A40", lines)
+        self.assertIn("choose another GPU: NVIDIA A40 / SECURE is available now; add it to compute.gpu and recompile", lines)
 
     def test_runpod_capacity_plan_survives_invalid_runpod_settings(self) -> None:
         run = {
