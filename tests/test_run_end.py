@@ -56,10 +56,10 @@ class SnapshotAcceptedTests(unittest.TestCase):
             _download(Path(directory))
             accepted = run_dir / "realizations" / "launch.snapshot-accepted.json"
             first = accepted.read_bytes()
-            os.utime(accepted, ns=(1, 1))
+            os.utime(accepted, ns=(10**9, 10**9))  # whole seconds, which every file system keeps
             _download(Path(directory))
             self.assertEqual(accepted.read_bytes(), first)
-            self.assertEqual(accepted.stat().st_mtime_ns, 1)
+            self.assertEqual(accepted.stat().st_mtime_ns, 10**9)
 
 
 class NeedsAPersonTests(unittest.TestCase):
