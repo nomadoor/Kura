@@ -179,7 +179,7 @@ stop Pod
 The job runner launches, follows, collects, and deletes the Pod; `kura run
 execute` only confirms billing and follows. When the command ended, run
 `kura run execute <run-id>` again to follow; it never launches a second Pod.
-The runner deletes a Pod whose job never started (nothing can be collected
+The controller (at once) or the runner deletes a Pod whose job never started (nothing can be collected
 there); when RunPod refuses that delete, it notifies once and keeps retrying
 until the Pod is gone. After three failed collections it marks the run
 `recovery_required` and notifies; then collect and stop by hand with the

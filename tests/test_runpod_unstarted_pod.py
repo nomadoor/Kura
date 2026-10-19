@@ -59,8 +59,10 @@ class UnstartedPodTests(unittest.TestCase):
     def test_a_pod_whose_job_was_never_asked_to_start_is_deleted_at_once(self) -> None:
         with _launched_run() as run_dir:
             code, stopped, said = _controller(run_dir, intent=False)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
         self.assertTrue(stopped, said)
+        self.assertEqual(status["state"], "interrupted")
 
     def test_a_pod_whose_job_may_have_started_is_kept_for_the_follower(self) -> None:
         # The start was asked for and its answer is unknown: only the Pod can say, so the runner asks it later.
