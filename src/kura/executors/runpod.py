@@ -10,6 +10,7 @@ import shlex
 import sys
 import tarfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -28,7 +29,7 @@ from kura.runtime_io import validated_write_roots
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
 from kura.secrets import MissingSecret, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -333,6 +334,61 @@ def pod_cost_ceiling(cost_per_h: Any, *, lease_sec: int) -> dict[str, Any]:
     priced = isinstance(cost_per_h, (int, float)) and not isinstance(cost_per_h, bool) and cost_per_h >= 0
     return _cost_ceiling(float(cost_per_h) if priced else None, lease_sec, basis="the Pod's price", unpriced=[],
                          reason=None if priced else "the Pod's hourly price was not recorded")
+
+
+def pod_gpu_cost(realization: dict[str, Any], status: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """What the run's current Pod cost in GPU time, from recorded facts only: the hourly price RunPod
+    gave when it created the Pod (the launch realization's `pod.cost_per_h`) times its time from that
+    launch (`launched_at`, the earliest record of the Pod) to its recorded stop (`pod_stopped_at`). With
+    no stop recorded it counts up to when the Pod was found gone (`pod_missing_at`, an upper bound:
+    the Pod stopped at some point before), else up to now (`so far`: it may still bill). `kura run
+    status`, the execute completion lines, and the monitor read it. Only the run's latest launch is
+    counted. Empty for a run with no Pod; `unknown` names a fact that was not recorded."""
+    pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
+    if not status.get("pod_id") and not pod.get("id"):
+        return {}
+    price = pod.get("cost_per_h")
+    if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
+        return {"unknown": "the Pod's hourly price was not recorded"}
+    started = _parse_time(realization.get("launched_at"))
+    if started is None:
+        return {"cost_per_h": float(price), "unknown": "the Pod's launch time was not recorded"}
+    stopped, missing = _parse_time(status.get("pod_stopped_at")), _parse_time(status.get("pod_missing_at"))
+    end, until = (stopped, "stopped") if stopped else (missing, "found gone") if missing else (now or datetime.now().astimezone(), "so far")
+    seconds = max((end - started).total_seconds(), 0.0)
+    return {"cost_per_h": float(price), "seconds": seconds, "cost_usd": seconds / 3600.0 * float(price), "until": until}
+
+
+def run_pod_gpu_cost(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]:
+    """`pod_gpu_cost` for a run, reading the launch realization its status names."""
+    ref = status.get("last_realization")
+    try:
+        loaded = json.loads((run_dir / ref).read_text(encoding="utf-8")) if isinstance(ref, str) and ref else {}
+    except (OSError, json.JSONDecodeError):
+        loaded = {}
+    return pod_gpu_cost(loaded if isinstance(loaded, dict) else {}, status)
+
+
+def format_pod_gpu_cost(cost: dict[str, Any]) -> str:
+    """A Pod's GPU cost as the status and completion lines say it: approximate, GPU only, this launch."""
+    if "unknown" in cost:
+        return f"unknown: {cost['unknown']}"
+    amount = "under $0.01" if cost["cost_usd"] < 0.005 else f"about ${cost['cost_usd']:.2f}"
+    span = format_seconds(cost["seconds"])
+    span = {"stopped": span, "found gone": f"at most {span}, until the Pod was found gone; its stop was not recorded",
+            "so far": f"{span} so far; the Pod may still bill"}[cost["until"]]
+    return (f"{amount} for {span}, at ${cost['cost_per_h']:.2f}/h (approximate: the GPU's hourly price times the time "
+            "from the Pod's launch; storage and network are not included; earlier launches of this run are not counted)")
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.astimezone()
 
 
 def format_cost_ceiling(ceiling: dict[str, Any]) -> str:

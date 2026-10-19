@@ -561,6 +561,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "state": "interrupted",
                         "started": "2026-06-22T10:00:00+00:00",
                         "ended": "2026-06-22T10:30:00+00:00",
+                        "pod_stopped_at": "2026-06-22T10:30:00+00:00",
                         "pod_id": "pod1",
                         "mirrored_outputs": [
                             {"name": "model-step00000250.safetensors", "step": 250},
@@ -579,7 +580,8 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id": "launch",
                         "executor": "runpod",
                         "launched_at": "2026-06-22T10:00:00+00:00",
-                        "pod": {"id": "pod1", "desired_status": "RUNNING"},
+                        # The price RunPod gave when it created the Pod; the cost is computed from it.
+                        "pod": {"id": "pod1", "desired_status": "RUNNING", "cost_per_h": 0.44},
                         "request": {"gpuTypeIds": ["NVIDIA A40"]},
                     }
                 ),
@@ -749,7 +751,8 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertIsNotNone(summary.executor_info.pod)
             assert summary.executor_info.pod is not None
             self.assertEqual(summary.executor_info.pod.cost_per_h, 0.60)
-            self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.03)
+            # From the launch (10:12 UTC), not the later container start, to the recorded stop.
+            self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.05)
 
     def test_collect_run_summaries_reads_batch_and_accumulation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

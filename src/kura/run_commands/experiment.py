@@ -296,9 +296,9 @@ def format_run_completion(workspace: Path, run_dir: Path, status: dict[str, Any]
         timing = format_launch_phases(launch_phases(run_dir, Path(realization).stem))
         if timing:
             lines.append(f"time       {timing}")
-    from kura.monitor import format_pod_gpu_cost, pod_gpu_cost
+    from kura.executors.runpod import format_pod_gpu_cost, run_pod_gpu_cost
 
-    if (cost := pod_gpu_cost(run_dir, status)) is not None:
+    if cost := run_pod_gpu_cost(run_dir, status):
         lines.append(f"pod cost   {format_pod_gpu_cost(cost)}")
     if status.get("execution_state") == "completed" and state != "completed":
         lines.append("trainer completed; required artifact publication is not complete")

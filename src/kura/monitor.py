@@ -16,7 +16,8 @@ from kura.training_artifacts import checkpoint_files, displayed_final_step, expe
 from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
-from kura.executors.common import QUIET_RUN_NOTICE_SEC, format_seconds, is_realization_record, run_finished, run_quiet_since
+from kura.executors.runpod import pod_gpu_cost
+from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
 
@@ -697,10 +698,9 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
             gpu = "gpu" if configured_gpu else "cpu"
     pod_id = _string(status.get("pod_id") or pod_raw.get("id"))
     pod_state = _string(observation.get("desired_status") or observation.get("state") or pod_raw.get("desired_status") or pod_raw.get("state") or request.get("desiredStatus"))
-    started = _pod_started(realization, observation)
-    cost = _pod_gpu_cost(realization, observation, status)
-    cost_per_h = cost["cost_per_h"] if cost else _pod_cost_per_h(realization, observation)
-    pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost["cost_usd"] if cost else None) if pod_id or pod_state else None
+    started = _parse_datetime(_first_present(observation.get("last_started_at"), pod_raw.get("last_started_at"), realization.get("launched_at")))
+    cost = pod_gpu_cost(realization, status)
+    pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost.get("cost_per_h"), cost_used=cost.get("cost_usd")) if pod_id or pod_state else None
     pulled = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
     mirrored_steps = [_int_or_none(item.get("step")) for item in pulled if isinstance(item, dict)]
     mirrored_step = max((step for step in mirrored_steps if step is not None), default=None)
@@ -943,49 +943,6 @@ def _float_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
-
-
-def _pod_started(realization: dict[str, Any], observation: dict[str, Any]) -> datetime | None:
-    pod_raw = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
-    return _parse_datetime(_first_present(observation.get("last_started_at"), pod_raw.get("last_started_at"), realization.get("launched_at")))
-
-
-def _pod_cost_per_h(realization: dict[str, Any], observation: dict[str, Any]) -> float | None:
-    pod_raw = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
-    return _float_or_none(_first_present(observation.get("cost_per_h"), pod_raw.get("cost_per_h"), observation.get("costPerHr"), pod_raw.get("costPerHr")))
-
-
-def _pod_gpu_cost(realization: dict[str, Any], observation: dict[str, Any], status: dict[str, Any]) -> dict[str, Any] | None:
-    """What a run's Pod cost in GPU time, computed from recorded facts: the hourly price RunPod gave
-    for it, times its time from its start (the observed container start, else the launch) to its
-    recorded stop (else the run's end), or to now while the run is unfinished. None when the price
-    or the start was not recorded."""
-    cost_per_h = _pod_cost_per_h(realization, observation)
-    started = _pod_started(realization, observation)
-    if cost_per_h is None or started is None:
-        return None
-    stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
-    settled = run_finished(status) and stop is not None
-    end = stop if settled else datetime.now().astimezone()
-    seconds = max((end - started).total_seconds(), 0.0)
-    return {"cost_per_h": cost_per_h, "seconds": seconds, "cost_usd": seconds / 3600.0 * cost_per_h, "settled": settled}
-
-
-def pod_gpu_cost(run_dir: Path, status: dict[str, Any]) -> dict[str, Any] | None:
-    """The one rule for a RunPod run's GPU cost (`_pod_gpu_cost`), read from the run's records, for
-    `kura run status`, the execute completion lines, and the monitor; None for a run with no Pod."""
-    if not status.get("pod_id"):
-        return None
-    ref = status.get("last_realization")
-    realization = _read_mapping(run_dir / ref) if isinstance(ref, str) else {}
-    return _pod_gpu_cost(realization, _latest_observation(run_dir, status), status)
-
-
-def format_pod_gpu_cost(cost: dict[str, Any]) -> str:
-    """A Pod's GPU cost as the status and completion lines say it: approximate, and GPU only."""
-    span = format_seconds(cost["seconds"]) + ("" if cost["settled"] else " so far")
-    return (f"about ${cost['cost_usd']:.2f} for {span} at ${cost['cost_per_h']:.2f}/h "
-            "(approximate: the GPU's hourly price times the Pod's recorded time; storage and network are not included)")
 
 
 def _string(value: Any) -> str | None:
