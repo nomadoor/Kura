@@ -138,7 +138,7 @@ class LaunchDiskPreflightTests(unittest.TestCase):
                     patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as local_owner:
                 local = plan._local_launch_disk_preflight(
                     Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
-                    enforce_model_download_safety=False, download_estimate={"bytes": 0},
+                    download_estimate={"bytes": 0},
                 )
         runpod_owner.assert_called()
         local_owner.assert_called()
@@ -487,7 +487,7 @@ class PeakCheckpointsTests(unittest.TestCase):
                 with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                     local = plan._local_launch_disk_preflight(
                         Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
-                        enforce_model_download_safety=False, download_estimate={"bytes": 0},
+                        download_estimate={"bytes": 0},
                     )
                 self.assertEqual(runpod["estimates"]["own_writes"]["checkpoints"], peak)
                 self.assertEqual(local["estimates"]["own_writes"]["checkpoints"], peak)

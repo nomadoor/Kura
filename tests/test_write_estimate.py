@@ -146,7 +146,7 @@ class OneOwnerTests(unittest.TestCase):
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
                 patch.object(plan, "probe_storages", side_effect=_roomy(plan.probe_storages)):
             workspace = Path(directory).resolve()
-            local = plan._local_launch_disk_preflight(workspace, run, {}, enforce_model_download_safety=False, download_estimate={"bytes": 5 * GIB})
+            local = plan._local_launch_disk_preflight(workspace, run, {}, download_estimate={"bytes": 5 * GIB})
             remote = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 500}, {"bytes": 5 * GIB})
         self.assertEqual(seen, ["docker", "runpod"])
         own = plan.own_write_bound(run, executor="docker")["bytes"]
@@ -166,9 +166,9 @@ class LaunchCheckTests(unittest.TestCase):
             workspace = Path(directory).resolve()
             with patch.object(plan, "probe_storages", side_effect=_roomy(plan.probe_storages, 20 * GIB + own - 1)):
                 with self.assertRaisesRegex(ValueError, "requires at least"):
-                    plan._local_launch_disk_preflight(workspace, run, {}, enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                    plan._local_launch_disk_preflight(workspace, run, {}, download_estimate={"bytes": 0})
             with patch.object(plan, "probe_storages", side_effect=_roomy(plan.probe_storages, 20 * GIB + own)):
-                plan._local_launch_disk_preflight(workspace, run, {}, enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                plan._local_launch_disk_preflight(workspace, run, {}, download_estimate={"bytes": 0})
 
     def test_runpod_refuses_only_when_measured_writes_alone_exceed_the_container_disk(self) -> None:
         run = musubi_run()
@@ -226,7 +226,7 @@ class RetiredKeyTests(unittest.TestCase):
             try:
                 payload = plan.plan_run("derived")
                 plan.format_run_plan(payload)
-                launched = [plan._local_launch_disk_preflight(root, item, {}, enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                launched = [plan._local_launch_disk_preflight(root, item, {}, download_estimate={"bytes": 0})
                             for item in (frozen, current)]
                 remote = [plan._runpod_launch_disk_preflight(item, {"container_disk_gb": 500}, {"bytes": 0}) for item in (frozen, current)]
             finally:

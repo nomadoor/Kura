@@ -277,7 +277,7 @@ class ReserveOwnerTests(unittest.TestCase):
                     patch.object(plan, "local_write_paths", wraps=plan.local_write_paths) as owner, \
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 launch = plan._local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": 1}},
-                                                           enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                                                           download_estimate={"bytes": 0})
                 launched = list(watched)
                 watched.clear()
                 plan.local_reserve_problem(root, {}, {}, data_root)
@@ -297,7 +297,7 @@ class ReserveOwnerTests(unittest.TestCase):
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 run = {"type": "train", "safety": {"allow_storage_risk": True}}
                 launch = plan._local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 1}},
-                                                           enforce_model_download_safety=False, download_estimate={"bytes": 0})
+                                                           download_estimate={"bytes": 0})
                 report = plan._local_disk_preflight_report(run, root, {"docker": {"min_free_gb": 1}}, {"bytes": 0})
         self.assertNotIn("docker_data", launch["paths"])
         self.assertIn("tcp://x:2375", launch["docker_data_unwatched"])
