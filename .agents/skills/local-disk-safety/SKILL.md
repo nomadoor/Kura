@@ -142,6 +142,8 @@ kura cleanup --checkpoints <run> --keep <file>... --yes     # remove that run's 
 kura run prune <run>... --yes                               # delete whole finished runs
 ```
 
+- A run whose checkpoints an unfinished or compiled render reads is shown in
+  use by that render, and all three are refused until it ends or is discarded.
 - Archiving moves the run's `outputs/` and `downloads/`; its records stay, so
   `kura run status` keeps working, and a record in `realizations/` says where
   they went.

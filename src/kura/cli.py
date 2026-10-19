@@ -66,7 +66,7 @@ from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
-from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, run_containers, run_done, select_reclaim
+from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, render_users, run_containers, run_done, select_reclaim
 from kura.training_artifacts import ResumeSourceMismatch, compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -1391,6 +1391,11 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
                     f"run {run_id!r} is {state}; only a finished run ({', '.join(sorted(CLEANUP_ELIGIBLE_STATES))}, publication "
                     "not pending) is deleted here, and `kura run discard` removes a draft or unlaunched compiled run"
                 )
+            continue
+        users = render_users(workspace, run_id)
+        if users:
+            problems.append(f"run {run_id!r} is kept: render run(s) {', '.join(users)} will read its checkpoints (unfinished or "
+                            "compiled, or their frozen records cannot be read); prune it after those renders end or are discarded")
             continue
         actions.append({"id": run_id, "state": status["state"], "target": str(run_dir.relative_to(workspace.resolve())), "size_bytes": _path_size_bytes(run_dir)})
     if problems:
