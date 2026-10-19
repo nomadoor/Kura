@@ -941,8 +941,11 @@ def settle_finished_training(
             publication_manifest, outputs = None, []
     blocked = bool(errors)
     if completed and contract is None and not blocked:
-        outputs = output_candidates if output_candidates is not None else _local_outputs(run_dir)
-        record_unverified_publication(run_dir, realization_id, outputs)
+        # Written once; a later settlement lists what the record says, so status and record agree.
+        recorded = record_unverified_publication(
+            run_dir, realization_id, output_candidates if output_candidates is not None else _local_outputs(run_dir),
+        )
+        outputs = list(json.loads((run_dir / recorded).read_text(encoding="utf-8")).get("outputs") or [])
     attempt = record_publication_failure(run_dir, realization_id, "; ".join(errors)) if blocked else None
 
     def apply(status: dict[str, Any]) -> None:
@@ -969,7 +972,7 @@ def settle_finished_training(
             status.pop("publication_error", None)
         if publication_manifest:
             status["publication_manifest"] = publication_manifest
-        status["outputs"] = outputs if publication_manifest or (completed and not blocked) else []
+        status["outputs"] = outputs
         if completed:
             status["state"] = "recovery_required" if blocked else "completed"
             status["publication_state"] = "blocked" if blocked else "completed" if contract else "legacy-unverified"
