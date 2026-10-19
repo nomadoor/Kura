@@ -95,6 +95,19 @@ class WakingTests(unittest.TestCase):
         environment = runner.runner_environment({"PATH": "/bin", "HF_TOKEN": "x", "RUNPOD_API_KEY": "y", "KURA_NTFY_TOKEN": "z", "HOME": "/h"})
         self.assertEqual(environment, {"PATH": "/bin", "HOME": "/h"})
 
+    def test_a_follower_starts_without_the_runners_secrets_so_it_reads_the_files_again(self) -> None:
+        # The runner loaded the secrets when it started; a token set or rotated later must reach
+        # the next run, so each follower starts from the same secret-free environment as the runner.
+        loaded = {"HF_TOKEN": "hf_token_loaded_at_runner_start", "KURA_RUNNER_EPOCH": "3"}
+        with _workspace() as (root, run_dir), patch.dict(os.environ, loaded), \
+                patch.object(runner.subprocess, "Popen") as popen:
+            runner._spawn_child(root, run_dir.name, run_dir / "request.json")
+        env = popen.call_args.kwargs.get("env")
+        self.assertIsNotNone(env)
+        self.assertNotIn("HF_TOKEN", env)
+        self.assertEqual(env["KURA_RUNNER_EPOCH"], "3")
+        self.assertEqual(env, runner.runner_environment({**os.environ, **loaded}))
+
 
 class ServeTests(unittest.TestCase):
     def test_claims_a_request_starts_one_follower_and_exits_when_done(self) -> None:
