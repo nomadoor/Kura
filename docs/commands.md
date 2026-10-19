@@ -115,6 +115,13 @@ the run's `outputs/` while training continues. This makes already-saved weights
 available for evaluation and preserves the latest successfully mirrored weight
 if training later fails. The pull commands below remain available for an
 explicit immediate refresh or interrupted-controller recovery.
+A mirrored checkpoint stays in `outputs/` after the trainer prunes it on the
+Pod under its retention (`save_last_n_steps`), so a RunPod run can keep more
+step checkpoints locally than the same run on Docker, where the trainer prunes
+its own disk. Kura does not delete them: they are copies already on the user's
+disk, and deleting outputs is the user's choice. The run's status and
+publication list only what the trainer kept; delete the extra files by hand
+when they are not wanted.
 
 For newly compiled built-in training commands, trainer exit code 0 is not by
 itself `completed`. Kura first checks that the realization produced a new,
