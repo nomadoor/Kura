@@ -31,5 +31,23 @@ class BackendResolvedModelTests(unittest.TestCase):
             self.assertIn("not counted", fact)
 
 
+class UnnamedModelTests(unittest.TestCase):
+    def test_a_run_that_names_no_model_files_yet_says_its_downloads_are_unknown(self) -> None:
+        # A Musubi draft with no model_bundle, model_downloads, or model_paths: nothing is sized yet.
+        run = {"type": "train", "backend": {"name": "musubi-tuner", "config": {"architecture": "flux2", "model_version": "klein-base-4b"}}}
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor):
+                records = _model_download_preflight_report(run, {"bytes": 0, "items": []}, _plan_requirements(run, {"bytes": 0}), executor=executor, local_cache=Path("/c"))
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["severity"], "info")
+                self.assertEqual(records[0]["fact"], "model downloads: unknown until the run names its model files "
+                                                     "(compile names a missing one); nothing is counted for them yet")
+                self.assertNotIn("0 B", records[0]["fact"])
+        # A run that names only local files downloads nothing, which the plan still says as 0 B.
+        local = {"type": "train", "backend": {"name": "musubi-tuner", "config": {"architecture": "zimage", "model_paths": {"dit": "/m/d.safetensors"}}}}
+        fact = _model_download_preflight_report(local, {"bytes": 0, "items": []}, _plan_requirements(local, {"bytes": 0}), executor="docker", local_cache=Path("/c"))[0]["fact"]
+        self.assertEqual(fact, "estimated model downloads write 0 B")
+
+
 if __name__ == "__main__":
     unittest.main()
