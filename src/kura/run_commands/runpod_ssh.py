@@ -1816,6 +1816,7 @@ def _runpod_remote_job_script(
     unattended_wait_sec: int | None = None,
 ) -> str:
     declared_roots = write_roots or []
+    host_offset_minutes = int(datetime.now().astimezone().utcoffset().total_seconds() // 60)
     # An SSH session does not inherit the Pod's create-time environment, so
     # the frozen command's env is exported here; Kura's own values below win
     # (kura_container_env, the same values the Pod was created with).
@@ -1969,10 +1970,11 @@ export KURA_EXIT_CODE="$exit_code"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/realizations"
 python - <<'PY'
 import json, os, urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 run_id = os.environ["KURA_RUN_ID"]
 workspace = os.environ.get("KURA_WORKSPACE", "/workspace")
-now = datetime.now().astimezone().isoformat()
+# The Pod's clock is UTC; the record and its name use the host's offset, as Kura's own records do.
+now = datetime.now(timezone(timedelta(minutes={host_offset_minutes}))).isoformat()
 exit_code = int(os.environ.get("KURA_EXIT_CODE", "0"))
 def optional_int(name):
     try:

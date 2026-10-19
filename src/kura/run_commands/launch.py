@@ -8,7 +8,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -462,7 +462,7 @@ def launch_run(
                 )
             input_preflight = {
                 "event": "dataset_input_preflight",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
                 "executor": executor,
                 "compile_verification": input_lock.get("verification"),
                 "launch_verification": "stat-match",
@@ -646,7 +646,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
             request = runner.write_launch_request(run_dir, executor="render-runpod", notify=notify_channels, extra={
                 "options": {"max_lease_sec": max_lease_sec},
                 "runpod_config": prepared.get("runpod_config"), "remote_image": prepared.get("remote_image"),
-                "billing_confirmed_at": datetime.now(timezone.utc).isoformat(),
+                "billing_confirmed_at": datetime.now().astimezone().isoformat(),
             })
         except (OSError, ValueError) as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
@@ -741,7 +741,7 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
             request = runner.write_launch_request(run_dir, executor="runpod", image=options.get("image"), notify=options.get("notify_channels"), extra={
                 "options": {key: value for key, value in options.items() if value is not None},
                 "runpod_config": prepared.get("runpod_config"), "remote_image": prepared.get("remote_image"),
-                "billing_confirmed_at": datetime.now(timezone.utc).isoformat(),
+                "billing_confirmed_at": datetime.now().astimezone().isoformat(),
             })
         except (OSError, ValueError) as exc:
             print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
