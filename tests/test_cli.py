@@ -8606,6 +8606,31 @@ class RunPodLifecycleTests(unittest.TestCase):
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
             self.assertNotIn("kura_lease_initial", argv_text)
 
+    def test_runpod_training_refuses_a_pod_that_holds_no_lease_deadline_before_upload(self) -> None:
+        # Refused (TransferRefused), so the controller deletes the Pod at once: nothing started on it.
+        from kura.dataset_transfer import TransferRefused
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}), \
+                 patch("kura.cli.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+                with self.assertRaisesRegex(TransferRefused, "holds no lease deadline"):
+                    _runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=3600)
+            self.assertFalse(any("nohup sh" in " ".join(map(str, call.args[0])) for call in run.call_args_list))
+
     def test_runpod_training_records_the_deadline_the_pod_holds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"

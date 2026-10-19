@@ -2088,7 +2088,11 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     realization_id = str(realization.get("id") or Path(realization_ref).stem)
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
     # The Pod armed its lease from its start command; the run records the deadline it holds.
-    record_pod_lease_deadline(run_dir, details)
+    # A Pod without one has no lease, and nothing has started on it yet: refusing here deletes it.
+    try:
+        record_pod_lease_deadline(run_dir, details)
+    except ValueError as exc:
+        raise TransferRefused(str(exc)) from exc
     record_launch_phase(run_dir, realization_id, "ssh_ready", container_started_at=details.get("container_started_at"))
     _start_ssh_master(details)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
