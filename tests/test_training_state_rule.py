@@ -83,7 +83,6 @@ class OneRuleTests(unittest.TestCase):
                 self.assertEqual("--save_state" in argv, supported)
 
 
-
 class PublisherRuleTests(unittest.TestCase):
     def test_the_publishers_keep_state_exactly_when_the_compiled_command_was_built_to(self) -> None:
         # Collection holds a run to what its frozen command does, even when the live rule (here
@@ -107,6 +106,7 @@ class PublisherRuleTests(unittest.TestCase):
                 single = publish_training_state_candidate(root, run_dir, candidate, 200)
                 self.assertEqual(single is not None, frozen)
                 self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [200] if frozen else [])
+
 
 class RuleEdgeTests(unittest.TestCase):
     def test_a_custom_command_and_a_manifest_compiled_before_managed_state_keep_no_state(self) -> None:
