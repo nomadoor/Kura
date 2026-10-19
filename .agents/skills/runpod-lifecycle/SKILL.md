@@ -132,6 +132,11 @@ stop Pod
   landing there. Show the ceiling with the hourly price when asking for
   approval. When Kura says the ceiling is unknown, say so and why rather than
   estimating one.
+- What a Pod cost is shown after it runs: `pod_gpu_cost` in the summary of
+  `kura run status` and the `pod cost` line when `kura run execute` ends. It
+  is the Pod's recorded hourly GPU price times its recorded time (from its
+  start to its stop, or "so far" while the run is unfinished): approximate,
+  GPU only, without storage or network. Quote it instead of computing one.
 - A local execution failure is not permission to switch providers. In
   particular, do not rewrite `run.yaml` from a local executor to `runpod`
   because Docker, ComfyUI, or another local service is unavailable. Switching
