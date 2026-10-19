@@ -1229,7 +1229,8 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
         return None
     existing = training_state_at_step(workspace, run_dir.name, step)
     if existing is not None:
-        # The trainer's end-of-training state repeats the save already published at its step.
+        # The same save again: a RunPod state a mid-run pull already published, or the trainer's
+        # end-of-training state at the step of its last step state.
         return None if observed_step == FINAL_STATE_STEP else existing
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = str(backend.get("name"))
