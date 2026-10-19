@@ -7,7 +7,6 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from kura.executors.common import EXIT_CODE_FOR_STATE
 from kura.yamlio import YAMLError, load_yaml
 from kura.training_artifacts import checkpoint_step
 from kura.run_commands.experiment import _format_duration
@@ -29,6 +28,11 @@ def _json_mapping(path: Path) -> dict[str, Any]:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def recorded_state(run_dir: Path) -> str:
+    """The state a render's status.json records, which its summary and notifications say as is; unknown without one."""
+    return str(_json_mapping(run_dir / "status.json").get("state") or "unknown")
 
 
 def _image_records(path: Path) -> list[dict[str, Any]]:
@@ -112,9 +116,8 @@ def format_render_completion(workspace: Path, run_dir: Path, *, exit_code: int |
     status = _json_mapping(run_dir / "status.json")
     frozen = _mapping(run_dir / "resolved" / "manifest.lock.yaml")
     records = _image_records(run_dir / "samples" / "images.jsonl")
-    state = str(status.get("state") or "unknown")
-    if exit_code is not None and state not in EXIT_CODE_FOR_STATE:
-        state = next((name for name, code in EXIT_CODE_FOR_STATE.items() if code == exit_code), "failed")
+    # As recorded; the command's exit code fills in only an exit code the record lacks.
+    state = recorded_state(run_dir)
     code = status.get("exit_code") if status.get("exit_code") is not None else exit_code
     duration = _format_duration(status.get("started"), status.get("ended"))
     headline = f"{state}  exit {code if code is not None else '-'}"

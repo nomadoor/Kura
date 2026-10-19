@@ -2362,7 +2362,7 @@ class RenderNotificationTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, \
-                        patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.follow", return_value=0), \
+                        patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.follow", side_effect=lambda *a, **k: (run_dir / "status.json").write_text('{"state": "completed", "exit_code": 0}', encoding="utf-8") and 0), \
                         patch("sys.stdout", new_callable=io.StringIO) as stdout, patch("sys.stderr", new_callable=io.StringIO):
                     # No --executor: the render launches on the executor it was compiled for.
                     code = cmd_render_launch(argparse.Namespace(run_id="render-1", executor=None, dry_run=False, yes=True))
@@ -2388,7 +2388,12 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch.launch_render", return_value=0) as launch, patch("kura.run_commands.launch._notify") as notify, patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                def render(*args, **kwargs):
+                    # The render records its own end; the summary and notification say what it recorded.
+                    (run_dir / "status.json").write_text('{"state": "completed", "exit_code": 0}', encoding="utf-8")
+                    return 0
+
+                with patch("kura.run_commands.launch.launch_render", side_effect=render) as launch, patch("kura.run_commands.launch._notify") as notify, patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     code = launch_run("render-1", executor="local", dry_run=False, notify_channels="ntfy")
             finally:
                 os.chdir(previous)
