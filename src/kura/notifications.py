@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from kura.secrets import redact_text
+from kura.secrets import bearer_request, redact_text
 
 
 def safe_error(exc: BaseException | str) -> str:
@@ -74,9 +74,7 @@ def send_ntfy_notification(subject: str, body: str, priority: str | None = None)
     token = os.environ.get("KURA_NTFY_TOKEN")
     priority = priority or os.environ.get("KURA_NTFY_PRIORITY", "4")
     url = f"{server}/{topic.lstrip('/')}"
-    headers = {"Title": subject, "Tags": "rocket", "Priority": priority}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, data=body.encode("utf-8"), method="POST", headers=headers)
+    request = bearer_request(url, token, method="POST", data=body.encode("utf-8"),
+                             headers={"Title": subject, "Tags": "rocket", "Priority": priority})
     with urllib.request.urlopen(request, timeout=20) as response:
         response.read()

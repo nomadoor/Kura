@@ -38,7 +38,7 @@ class HfTokenParityTests(unittest.TestCase):
                 seen = {}
 
                 def head(request, timeout):
-                    seen["authorization"] = request.headers.get("Authorization")
+                    seen["authorization"] = request.get_header("Authorization")
                     raise OSError("offline")
 
                 with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=head):
