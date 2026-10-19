@@ -12,6 +12,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -1009,9 +1010,11 @@ def _local_launch_disk_preflight(
     errors: list[str] = []
     storage_statuses = probe_storages(paths, config)
     backing_write_estimates: dict[tuple[str, str], int] = {}
+    drive_write_estimates: dict[tuple[str, str], int] = {}
     for name, status in storage_statuses.items():
         backing = (status.backing_kind, status.backing_id)
         backing_write_estimates[backing] = backing_write_estimates.get(backing, 0) + write_estimates.get(name, 0)
+        drive_write_estimates[status.space_key] = drive_write_estimates.get(status.space_key, 0) + write_estimates.get(name, 0)
     backing_required_bytes = {backing: floor_bytes + estimated for backing, estimated in backing_write_estimates.items()}
     for name, path in paths.items():
         status = storage_statuses[name]
@@ -1035,6 +1038,25 @@ def _local_launch_disk_preflight(
         problem = storage_floor_problem(
             status, path, required_bytes, action="local Docker launch", minimum=minimum,
             risk_setting="safety.allow_storage_risk: true", risk_accepted=safety.get("allow_storage_risk") is True,
+        )
+        if problem:
+            errors.append(problem)
+    # On WSL a virtual disk and a /mnt path on one Windows drive both grow that drive: besides each store's
+    # own limit above, the drive holds the reserve plus every write that lands on it.
+    drives_checked: set[tuple[str, str]] = set()
+    for name, path in paths.items():
+        status = storage_statuses[name]
+        key = status.space_key
+        if key == (status.backing_kind, status.backing_id) or key in drives_checked:
+            continue
+        drive_free = status.host_free_bytes if status.backing_kind == "wsl2_vhdx" else status.effective_free_bytes
+        if drive_free is None or drive_write_estimates[key] == backing_write_estimates[(status.backing_kind, status.backing_id)]:
+            continue
+        drives_checked.add(key)
+        drive = replace(status, linux_free_bytes=drive_free, host_free_bytes=None, effective_free_bytes=drive_free, confidence="exact")
+        problem = storage_floor_problem(
+            drive, f"the Windows drive {status.backing_id} (WSL virtual disk and /mnt stores together)", floor_bytes + drive_write_estimates[key],
+            action="local Docker launch", minimum=minimum,
         )
         if problem:
             errors.append(problem)

@@ -104,5 +104,57 @@ class WslVirtualDiskHintTests(unittest.TestCase):
                 self.assertEqual(HINT in low[0]["message"], hinted)
 
 
+class SharedWindowsDriveTests(unittest.TestCase):
+    """The workspace on the WSL virtual disk stored on D:, and the Hugging Face cache on /mnt/d: both grow D:,
+    so D: holds the reserve once plus both stores' writes, and the virtual disk still holds its own."""
+
+    def _launch(self, *, linux_free_gib: int, drive_free_gib: int, workspace_gib: int, hf_gib: int) -> None:
+        from kura.run_commands import plan
+        from kura.storage import StorageStatus
+
+        def status(kind: str) -> StorageStatus:
+            linux = linux_free_gib if kind == "wsl2_vhdx" else drive_free_gib
+            return StorageStatus(path="x", probe="x", backing_id="D:", backing_kind=kind, linux_free_bytes=linux * GIB,
+                                 linux_total_bytes=1000 * GIB, host_free_bytes=drive_free_gib * GIB if kind == "wsl2_vhdx" else None,
+                                 effective_free_bytes=min(linux, drive_free_gib) * GIB,
+                                 confidence="estimated" if kind == "wsl2_vhdx" else "exact", mount={})
+
+        estimate = {"stores": {"workspace": workspace_gib * GIB, "hf_cache": hf_gib * GIB}, "downloads": {"bytes": hf_gib * GIB},
+                    "own_writes": {"checkpoints": 1, "trainer_states": 0, "kura_state_copies": 0, "rank": 16, "weights_files": 1,
+                                   "per_file_bytes": GIB, "bytes": GIB}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(plan, "docker_data_location", return_value=(None, "not measured in tests")), \
+                patch.object(plan, "local_write_paths", return_value={"workspace": Path(directory), "hf_cache": Path(directory) / "hf"}), \
+                patch.object(plan, "probe_storages", return_value={"workspace": status("wsl2_vhdx"), "hf_cache": status("wsl2_windows_drive")}), \
+                patch.object(plan, "run_write_estimate", return_value=estimate), \
+                patch.object(plan, "own_write_text", return_value="own writes"), \
+                patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "")):
+            plan._local_launch_disk_preflight(Path(directory), {"type": "train"}, {"docker": {"min_free_gb": 20}})
+
+    def test_the_drive_holds_both_stores_writes(self) -> None:
+        # Each store's writes fit alone (20 + 30 < 60), but D: needs 20 + 30 + 30.
+        with self.assertRaises(ValueError) as caught:
+            self._launch(linux_free_gib=900, drive_free_gib=60, workspace_gib=30, hf_gib=30)
+        self.assertIn("the Windows drive D:", str(caught.exception))
+        self.assertIn("80 GiB", str(caught.exception))
+        self.assertNotIn(HINT, str(caught.exception))
+
+    def test_writes_to_mnt_never_count_against_the_virtual_disk(self) -> None:
+        # The virtual disk has 40 GiB and gets 5 GiB; the 100 GiB of /mnt/d writes land on D:, which has room.
+        self._launch(linux_free_gib=40, drive_free_gib=900, workspace_gib=5, hf_gib=100)
+
+    def test_the_virtual_disk_keeps_its_own_limit(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            self._launch(linux_free_gib=40, drive_free_gib=900, workspace_gib=30, hf_gib=1)
+        self.assertIn(HINT, str(caught.exception))
+
+    def test_a_virtual_disk_whose_drive_is_unknown_keeps_its_own_key(self) -> None:
+        from kura.storage import StorageStatus
+
+        status = StorageStatus(path="x", probe="x", backing_id="/dev/sdd", backing_kind="wsl2_vhdx", linux_free_bytes=GIB,
+                               linux_total_bytes=GIB, host_free_bytes=None, effective_free_bytes=GIB, confidence="unknown", mount={})
+        self.assertEqual(status.space_key, ("wsl2_vhdx", "/dev/sdd"))
+
+
 if __name__ == "__main__":
     unittest.main()
