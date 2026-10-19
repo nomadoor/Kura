@@ -165,6 +165,11 @@ stop Pod
   remote inventory and the complete staged snapshot, then publishes atomically.
   Do not replace this with a broad output exclusion or treat periodic mirror
   metadata alone as completion.
+- A checkpoint mirrored while the Pod trains stays in `outputs/` after the
+  trainer prunes it on the Pod (`save_last_n_steps`), so a RunPod run can hold
+  more step checkpoints locally than the same run on Docker. Kura never deletes
+  them; status lists only what the trainer kept. Delete extras only when the
+  user says so.
 - If download/completion is uncertain, leave the Pod running and print/notify recovery steps.
 - Do not add unbounded keep-alive flags. Use bounded leases only.
 - `max-lease` is a billing safety fuse, not output preservation. Do not set it shorter than expected training unless loss of container-disk outputs is acceptable.
