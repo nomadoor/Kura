@@ -11,6 +11,18 @@ from kura.run_commands.render_completion import format_render_completion
 
 
 class RenderCompletionTests(unittest.TestCase):
+    def test_completion_prints_the_state_status_json_records(self) -> None:
+        # A render the runner has not settled is not called completed because a command returned 0.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            render_dir = root / "runs" / "render-1"
+            (render_dir / "resolved").mkdir(parents=True)
+            (render_dir / "resolved" / "manifest.lock.yaml").write_text("{}\n", encoding="utf-8")
+            (render_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            self.assertTrue(format_render_completion(root, render_dir, exit_code=0).startswith("running  exit 0"))
+            (render_dir / "status.json").unlink()
+            self.assertTrue(format_render_completion(root, render_dir, exit_code=1).startswith("unknown  exit 1"))
+
     def test_completion_surfaces_provenance_without_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

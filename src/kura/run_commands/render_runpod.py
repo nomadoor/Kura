@@ -23,6 +23,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.images import image_cuda_version, launch_image, runpod_min_cuda_version
 from kura.run_commands.common import _safe_error, runpod_launch_settings
+from kura.run_commands.render_completion import recorded_state
 from kura.run_commands.runpod_ssh import record_pod_lease_deadline
 from kura.run_commands.runpod_ssh import _free_local_port, _runpod_ssh_details, install_pod_secrets, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
 
@@ -350,7 +351,7 @@ def launch_render_runpod(
                 image_name_overrides={str(item["frozen"]): str(item["name"]) for item in images},
                 controlled_by=controlled_by,
             )
-            state_word = "completed" if code == 0 else "failed"
+            state_word = recorded_state(run_dir)
             _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"RunPod render {run_id} {state_word} with exit code {code}.", priority="3")
             return code
         finally:

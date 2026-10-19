@@ -46,6 +46,32 @@ class MaxLeaseRequiredTests(unittest.TestCase):
                 create.assert_not_called()
                 self.assertIn("--max-lease must be a positive duration", stderr.getvalue())
 
+    def test_a_remote_run_prints_the_state_its_collection_recorded(self) -> None:
+        from kura.run_commands import launch
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "failed", "exit_code": 3}), encoding="utf-8")
+            with (
+                patch.object(launch, "_run_path", return_value=run_dir),
+                patch.object(launch, "_workspace", return_value=Path(directory)),
+                patch.object(launch, "_workspace_config", return_value={}),
+                patch.object(launch, "stage_run", return_value=0),
+                patch.object(launch, "launch_run", return_value=0),
+                patch.object(launch, "_runpod_run_over_ssh", return_value=0),
+                patch.object(launch, "download_with_retries", return_value=0),
+                patch.object(launch, "_latest_realization_id", return_value=None),
+                patch.object(launch, "stop_runpod", return_value={}),
+                patch.object(launch, "_notify") as notify,
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                launch._run_remote_locked("example", upload_timeout=1, job_timeout=None, download_attempts=1, download_interval=1, yes=True)
+            # The record says failed with exit 3; the follower's own exit code does not rewrite it.
+            self.assertIn("failed  exit 3", stdout.getvalue())
+            self.assertIn("failed", notify.call_args.kwargs["subject"])
+
     def test_the_launch_check_refuses_a_zero_lease_before_billing_confirmation(self) -> None:
         from kura.run_commands import launch
 

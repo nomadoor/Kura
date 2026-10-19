@@ -28,7 +28,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.images import launch_image
 from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error, runpod_launch_settings
 from kura.run_commands.experiment import format_run_completion
-from kura.run_commands.render_completion import format_render_completion
+from kura.run_commands.render_completion import format_render_completion, recorded_state
 from kura.paths import local_docker_mounts
 from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, max_lease_seconds, stage_run
 from kura.run_commands.render_runpod import launch_render_runpod
@@ -178,16 +178,12 @@ def _run_remote_locked(
         try:
             completion_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            # Remote completion and download are already confirmed here. A
-            # missing local projection must not turn successful cleanup into a
-            # controller failure; format the facts already held by this path.
+            # A missing local projection must not turn successful cleanup into a
+            # controller failure; the summary then says the state is unknown.
             completion_status = {}
-        completion_status.update({
-            "state": "completed" if exit_code == 0 else "failed",
-            "exit_code": exit_code,
-        })
+        # Printed as recorded: the collection settles the state, and this follower's exit code does not rewrite it.
         print(format_run_completion(_workspace(), run_dir, completion_status))
-        state_word = "completed" if exit_code == 0 else "failed"
+        state_word = str(completion_status.get("state") or "finished")
         _notify(notify_channels, subject=f"Kura run {state_word}: {run_id}", body=f"Run {run_id} {state_word} with exit code {exit_code}. The Pod will be stopped now.")
         return exit_code
     except TransferRefused as exc:
@@ -410,7 +406,7 @@ def launch_run(
             code = launch_render(_workspace(), run_dir, dry_run=dry_run, executor_name="local")
             if not dry_run:
                 print(format_render_completion(_workspace(), run_dir, exit_code=code))
-                state_word = "completed" if code == 0 else "failed"
+                state_word = recorded_state(run_dir)
                 _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"Render {run_id} {state_word} with exit code {code}.", priority="3")
             return code
         except (OSError, ValueError, json.JSONDecodeError, YAMLError) as exc:
