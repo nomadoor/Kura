@@ -558,7 +558,9 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             def mutate(status: dict[str, Any]) -> None:
                 # The record that the downloaded snapshot was accepted comes first; a snapshot
                 # refused below stays on disk but never counts as the run's end.
-                # Written once: collecting the same run again accepts nothing new.
+                # Written once: collecting the same run again accepts nothing new (a forced
+                # re-download adds its own terminal-download record). The end state is read from
+                # the snapshot, never from this record, which only says the first acceptance happened.
                 accepted_id = _status_realization_id(status)
                 accepted = run_dir / "realizations" / f"{accepted_id}.snapshot-accepted.json"
                 if not accepted.exists():
