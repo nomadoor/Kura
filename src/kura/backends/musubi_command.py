@@ -9,7 +9,7 @@ from typing import Any
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths, musubi_native_dataset_architecture
-from kura.backends.shared import _extra_args as _shared_extra_args, _reject_owned_extra_args, append_config_args, argv_value, config_argv, _script_command as _shared_script_command, _truthy, family_card_hint, STATE_RUNNER, state_runner_argv, write_state_runner
+from kura.backends.shared import _extra_args as _shared_extra_args, _reject_owned_extra_args, append_config_args, argv_value, config_argv, _script_command as _shared_script_command, _truthy, family_card_hint, STATE_RUNNER, state_runner_argv, write_state_runner, validated_command_env
 from kura.backends.musubi_datasets import (
     MUSUBI_AUDIO_SUFFIXES,
     FRAMEPACK_LATENT_WINDOW_SIZE,
@@ -22,7 +22,6 @@ from kura.backends.musubi_models import _musubi_flux2_model_version, _musubi_lor
 from kura.backends.musubi_native_selectors import MUSUBI_NATIVE_TASKS, musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
-from kura.secrets import is_secret_name, undeclared_secret_refusal
 from kura.training_artifacts import EPOCH_SAVE_FLAGS, checkpoint_save_cadence, managed_state_save_args, require_constant_scheduler_for_resume, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import resume_intent, validated_recipe
 
@@ -339,14 +338,7 @@ def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], out
 
 
 def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
-    env = override.get("env", {})
-    if env is None:
-        return {}
-    if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
-        raise ValueError(f"{backend_name} command env must be a string-to-string mapping")
-    if secret := [key for key in env if is_secret_name(key)]:
-        raise ValueError(undeclared_secret_refusal(f"{backend_name} command env", secret))
-    return dict(env)
+    return validated_command_env(override.get("env", {}), label=f"{backend_name} command")
 
 
 def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
@@ -363,11 +355,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         cwd, argv, env = explicit.get("cwd"), explicit.get("argv"), explicit.get("env", {})
         if not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
             raise ValueError("Musubi Tuner command must provide string cwd and argv values")
-        if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
-            raise ValueError("Musubi Tuner command env must be a string-to-string mapping")
-        if secret := [key for key in env if is_secret_name(key)]:
-            raise ValueError(undeclared_secret_refusal("Musubi Tuner command env", secret))
-        return {"cwd": cwd, "argv": argv, "env": env}
+        return {"cwd": cwd, "argv": argv, "env": validated_command_env(env, label="Musubi Tuner command")}
 
     architecture = _musubi_architecture(run)
     _validate_musubi_resource_flags(override)

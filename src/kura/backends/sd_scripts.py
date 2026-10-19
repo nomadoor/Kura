@@ -14,11 +14,10 @@ from kura.backends.sd_scripts_datasets import (
     write_sd_scripts_dataset_config,
 )
 from kura.backends.sd_scripts_models import OPTIONAL_ROLES, sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
-from kura.backends.shared import _extra_args as _shared_extra_args, append_config_args, argv_value, _reject_owned_extra_args, _script_command, _truthy, state_runner_argv, write_state_runner
+from kura.backends.shared import _extra_args as _shared_extra_args, append_config_args, argv_value, _reject_owned_extra_args, _script_command, _truthy, state_runner_argv, write_state_runner, validated_command_env
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_yaml
-from kura.secrets import is_secret_name, undeclared_secret_refusal
 from kura.training_artifacts import EPOCH_SAVE_FLAGS, managed_state_save_args, require_constant_scheduler_for_resume, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import SettingsRefused, backend_config, resume_intent, validated_recipe
 
@@ -170,20 +169,11 @@ def _explicit_command(run: dict[str, Any], command: Any) -> dict[str, Any]:
     cwd, argv, env = command.get("cwd"), command.get("argv"), command.get("env", {})
     if not isinstance(cwd, str) or not cwd or not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
         raise ValueError("sd-scripts command must provide non-empty string cwd and argv values")
-    if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
-        raise ValueError("sd-scripts command env must be a string-to-string mapping")
-    if secret := [key for key in env if is_secret_name(key)]:
-        raise ValueError(undeclared_secret_refusal("sd-scripts command env", secret))
-    return {"cwd": cwd, "argv": list(argv), "env": dict(env)}
+    return {"cwd": cwd, "argv": list(argv), "env": validated_command_env(env, label="sd-scripts command")}
 
 
 def _validate_native_env(native: dict[str, Any]) -> dict[str, str]:
-    env = native.get("env", {})
-    if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
-        raise ValueError("sd-scripts env must be a string-to-string mapping")
-    if secret := [key for key in env if is_secret_name(key)]:
-        raise ValueError(undeclared_secret_refusal("sd-scripts env", secret))
-    return dict(env)
+    return validated_command_env(native.get("env", {}), label="sd-scripts")
 
 
 def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> None:
