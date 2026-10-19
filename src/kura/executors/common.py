@@ -798,9 +798,9 @@ def _read_text_tail(path: Path, *, max_bytes: int = 256 * 1024) -> str:
         return handle.read().decode("utf-8", errors="replace")
 
 
-def _stdout_progress(run_dir: Path) -> tuple[int | None, int | None, float | None]:
+def _stdout_progress(run_dir: Path, log: Path | None = None) -> tuple[int | None, int | None, float | None]:
     try:
-        text = _read_text_tail(run_dir / "logs" / "stdout.log")
+        text = _read_text_tail(log or run_dir / "logs" / "stdout.log")
     except OSError:
         return None, None, None
     step: int | None = None
@@ -904,11 +904,13 @@ def _configured_final_step(run_dir: Path) -> tuple[int | None, int | None]:
     return total, (continuation["source"]["observed_step"] if continuation is not None else None)
 
 
-def _apply_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
+def _apply_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str, log: Path | None = None) -> None:
     """Set the step counts in status, as every executor does: from the trainer's log, and only for
-    a completed run whose log never said, from its frozen recipe (a Resume: its target). A log
-    that stopped short of the total is what the trainer did, so it is never raised to the total."""
-    step, total, seconds_per_iter = _stdout_progress(run_dir)
+    a completed run whose log shows no training step, from its frozen recipe (a Resume: its
+    target). A log that stopped short of the total is what the trainer did, so it is never raised
+    to the total. `log` is the trainer's whole log when it is somewhere else than the run's own
+    `logs/stdout.log` (a RunPod snapshot, whose copy here is only mirrored while it trains)."""
+    step, total, seconds_per_iter = _stdout_progress(run_dir, log)
     lock = read_resume_lock(run_dir)
     steps = resume_steps({}, lock=lock) if lock is not None else None
     if steps is not None and isinstance(step, int):
