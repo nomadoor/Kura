@@ -245,8 +245,9 @@ def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> lis
 
 
 def point_status_at_launch(latest: dict[str, Any], realization_id: str, realization: dict[str, Any]) -> None:
-    """Point status at the realization a launch recorded: what the launch writes, and what settling
-    a launch that stopped before status followed it writes, on every executor."""
+    """Point status at the realization a launch recorded, on every executor: what a launch that
+    started or failed writes, and what settling a launch that stopped before status followed it
+    writes. Status says only what the realization says, so it agrees with its projection."""
     container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
     pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
     latest.update({
@@ -257,8 +258,20 @@ def point_status_at_launch(latest: dict[str, Any], realization_id: str, realizat
     })
     if container.get("id"):
         latest.update({"container_id": container["id"], "container_name": container.get("name")})
+    else:
+        latest.pop("container_id", None)
+        latest.pop("container_name", None)
     if pod.get("id"):
         latest["pod_id"] = pod["id"]
+    else:
+        # An earlier launch's Pod is not this one's. A run launches again only once that launch
+        # settled (a training run starts only from compiled or its own capacity wait, and launches
+        # refuse an unresolved create intent or an unstopped recovered Pod).
+        latest.pop("pod_id", None)
+    # How an earlier launch's Pod or container stopped says nothing about this one; kept, it would
+    # make this launch's Pod look stopped to every billing check.
+    for key in ("pod_stopped_at", "pod_missing_at", "stop_reason"):
+        latest.pop(key, None)
     if "ai_toolkit_models" in realization:
         latest["ai_toolkit_models"] = realization["ai_toolkit_models"]
     else:

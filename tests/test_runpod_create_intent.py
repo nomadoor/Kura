@@ -171,7 +171,7 @@ def _crash_after_capacity_wait():
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod.time.sleep"):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=AVAILABLE), \
                         patch("kura.executors.runpod._runpod_request", side_effect=create), \
-                        patch("kura.executors.runpod._write_status", side_effect=KeyboardInterrupt):
+                        patch("kura.executors.runpod.point_status_at_launch", side_effect=KeyboardInterrupt):
                     with unittest.TestCase().assertRaises(KeyboardInterrupt):
                         launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                                       image="registry/image:tag", config={"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]},
@@ -428,7 +428,7 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-9", "desiredStatus": "RUNNING"}), \
-                    patch("kura.executors.runpod._write_status", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod.point_status_at_launch", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"):
                 with self.assertRaises(KeyboardInterrupt):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertNotIn("pod_id", _status(run_dir))
