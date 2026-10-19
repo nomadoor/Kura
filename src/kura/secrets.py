@@ -100,11 +100,54 @@ MIN_SECRET_VALUE_LENGTH = 8
 def secret_values() -> list[str]:
     """The values Kura holds as secrets, longest first: variables whose names hold a secret.
     Output hides them and `kura check secrets` looks for them."""
-    values = {
-        value for name, value in os.environ.items()
-        if len(value) >= MIN_SECRET_VALUE_LENGTH and is_secret_name(name)
-    }
+    values = {value for name, value in os.environ.items() if holds_secret(name, value)}
     return sorted(values, key=len, reverse=True)
+
+
+def holds_secret(name: str, value: str) -> bool:
+    """Whether a value written under a name is a secret: a secret name, and a long enough value."""
+    return len(value) >= MIN_SECRET_VALUE_LENGTH and is_secret_name(name)
+
+
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def secret_flags(arguments: list[str]) -> list[str]:
+    """The names of the arguments that hold a secret: `--flag value`, `--flag=value`,
+    `--flag value` written as one item, and `NAME=value` (as `env` takes it). Never a value.
+
+    A bare flag, or a short value such as sd-scripts' `--max_token_length 225`, is a setting.
+    """
+    found = []
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--"):
+            name, equals, value = argument[2:].partition("=")
+            if not equals:
+                name, _, value = re.sub(r"\s", " ", name).partition(" ")
+            if not equals and not value:
+                following = arguments[index + 1] if index + 1 < len(arguments) else ""
+                value = "" if following.startswith("--") else following
+            # The label is only the name's leading word characters, so no input puts a value in it.
+            label = "--" + re.match(r"[A-Za-z0-9_-]*", name).group()
+        elif _ASSIGNMENT.match(argument):
+            name, _, value = argument.partition("=")
+            label = name
+        else:
+            continue
+        if holds_secret(name, value.strip()):
+            found.append(label)
+    return found
+
+
+def undeclared_secret_refusal(where: str, names: list[str]) -> str:
+    """The one refusal of a secret written into a run file or a container's env."""
+    declared = ", ".join(f"`{name}`" for name in CONTAINER_SECRETS)
+    return (
+        f"{where} must not contain secrets ({', '.join(sorted(names))}): "
+        f"a value written there is kept in the run's records, so remove it. Kura sends a trainer only "
+        f"the secrets it declares ({declared}), from Kura's secrets files, which the user fills with "
+        f"`kura secrets set NAME`; no other secret, and nothing exported in a shell, reaches a container"
+    )
 
 
 def declared_secret(name: str) -> str | None:

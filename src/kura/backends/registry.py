@@ -18,6 +18,7 @@ from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOIN
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs, sd_scripts_model_facts
 from kura.images import BUILD_SOURCES, PINNED_IMAGES
+from kura.secrets import secret_flags, undeclared_secret_refusal
 from kura.run_envelope import COMMON_RECIPE_FIELDS, RETIRED_TRAIN_RUN_KEYS, SettingsRefused, backend_config
 from kura.training_artifacts import LR_SCHEDULER_DECIDED
 
@@ -577,6 +578,15 @@ def _validate_backend_config(run: dict[str, Any], *, frozen: bool = False) -> No
                 f"{adapter.name} backend.config field(s) take a value, not true or false: "
                 + ", ".join(f"{key}={native[key]!r}" for key in flagged)
             )
+    command = native.get("command")
+    for where, arguments in (
+        ("extra_args", native.get("extra_args")),
+        ("command.argv", command.get("argv") if isinstance(command, dict) else None),
+    ):
+        # Trainer argv is kept in the frozen manifest and the run's records.
+        if isinstance(arguments, list) and all(isinstance(item, str) for item in arguments) and not frozen:
+            if secret := secret_flags(arguments):
+                raise ValueError(undeclared_secret_refusal(f"{adapter.name} backend.config.{where}", secret))
     extra_args = native.get("extra_args")
     if isinstance(extra_args, list) and not frozen:
         # A declared field has one place, the field, and only where its condition says it applies;

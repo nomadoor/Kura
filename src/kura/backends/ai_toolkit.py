@@ -17,7 +17,7 @@ from kura.backends.dataset_profiles import (
     select_projection_profile,
 )
 from kura.backends.shared import _datasets, _script_command
-from kura.secrets import is_secret_name
+from kura.secrets import is_secret_name, undeclared_secret_refusal
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
@@ -1667,8 +1667,8 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("AI-Toolkit command must provide string cwd and argv values.")
     if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError("AI-Toolkit command env must be a string-to-string mapping.")
-    if any(is_secret_name(key) for key in env):
-        raise ValueError("AI-Toolkit command env must not contain secrets; use the process environment instead.")
+    if secret := [key for key in env if is_secret_name(key)]:
+        raise ValueError(undeclared_secret_refusal("AI-Toolkit command env", secret))
     if env.get("MODELS_PATH", model_cache) != model_cache:
         raise ValueError("AI-Toolkit MODELS_PATH must use Kura's managed model cache")
     return {"cwd": cwd, "argv": argv, "env": {**env, "MODELS_PATH": model_cache}, "write_roots": write_roots}
