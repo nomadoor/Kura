@@ -374,7 +374,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
 
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
         with patch("kura.run_commands.render_runpod.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run, \
-                patch("kura.run_commands.render_runpod._runpod_secret_env_payload", return_value=None):
+                patch("kura.run_commands.render_runpod.install_pod_secrets", return_value="/tmp/kura-secrets/render-1.env"):
             _start_runpod_comfyui(
                 details, workspace="/workspace", run_id="render-1",
                 models_remote="/workspace/runs/render-1/resolved/comfyui_models.json",

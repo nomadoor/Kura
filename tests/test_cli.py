@@ -7595,8 +7595,10 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertNotIn("runpodctl receive", payload["dockerStartCmd"][2])
             self.assertIn("/usr/sbin/sshd", payload["dockerStartCmd"][2])
             self.assertIn("sleep infinity", payload["dockerStartCmd"][2])
-            self.assertIn("KURA_UPLOAD_CODE", payload["env"])
-            self.assertIn("KURA_DOWNLOAD_CODE", payload["env"])
+            # runpodctl transfer codes are gone: the upload goes over SSH, and nothing on the Pod read them.
+            self.assertNotIn("KURA_UPLOAD_CODE", payload["env"])
+            self.assertNotIn("KURA_DOWNLOAD_CODE", payload["env"])
+            self.assertNotIn("KURA_UPLOAD_ARCHIVE_NAME", payload["env"])
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
             self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
             self.assertEqual(payload["env"]["KURA_WORKSPACE"], "/workspace")
@@ -7609,7 +7611,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertNotIn("api-secret", record)
             self.assertNotIn("hf-secret", record)
             self.assertIn('"cloudTypeCandidates": [', record)
-            self.assertIn('"upload_code":', record)
+            self.assertIn('"archive_name":', record)
+            self.assertNotIn('"upload_code"', record)
             self.assertIn('"pod_id": "pod-1"', (run_dir / "status.json").read_text(encoding="utf-8"))
 
     def test_launch_runpod_records_pod_creation_phases(self) -> None:
