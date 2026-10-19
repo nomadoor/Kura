@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
+from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -276,9 +276,17 @@ def pending_requests(run_dir: Path) -> list[Path]:
     return [path for path in launch_requests(run_dir) if not _sibling(path, ".claim.json").exists()]
 
 
+def _written_order(request: Path) -> tuple[datetime, str]:
+    """Where a request falls in the order requests were written: by the time it records
+    (`written_at`). Ids are local clock times, which repeat or run backwards when the clock is
+    set back, so an id decides only between equal times and for a request with no readable time."""
+    return record_time(_read_json(request).get("written_at")) or _EARLIEST, request.name
+
+
 def latest_request(run_dir: Path) -> Path | None:
+    """The request written last."""
     requests = launch_requests(run_dir)
-    return requests[-1] if requests else None
+    return max(requests, key=_written_order) if requests else None
 
 
 def write_launch_request(run_dir: Path, *, executor: str, image: str | None = None, notify: Any = None, out: Any = None,
@@ -562,8 +570,8 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
             return 0
         busy = False
         run_dirs = sorted((workspace / "runs").glob("*")) if (workspace / "runs").is_dir() else []
-        # Requests are taken in the order they were written, across runs; their ids record it.
-        pending = sorted((request for run_dir in run_dirs for request in pending_requests(run_dir)), key=lambda path: path.name)
+        # Requests are taken in the order they were written, across runs.
+        pending = sorted((request for run_dir in run_dirs for request in pending_requests(run_dir)), key=_written_order)
         for request in pending:
             if _read_json(request).get("kura_version") != __version__:
                 # Left pending for a runner of that version; `kura runner status` names it.

@@ -430,18 +430,23 @@ def latest_launch_id(directory: Path) -> str | None:
 _EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
 
 
+def record_time(value: Any) -> datetime | None:
+    """A time a record states (ISO 8601), as an aware datetime; one without an offset is local
+    time. None when the value is not a readable time."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.astimezone()
+
+
 def launch_started_at(directory: Path, realization_id: str) -> datetime:
     """When a launch started, as its records state it: the create intent's `requested_at`, else the
     realization's `launched_at`, `attempted_at`, or a render's `timestamp`, else the capacity wait's
     `started_at`. A launch with no readable time falls back to its id read as local time."""
-    def readable(value: Any) -> datetime | None:
-        if not isinstance(value, str):
-            return None
-        try:
-            moment = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-        return moment if moment.tzinfo else moment.astimezone()
+    readable = record_time
 
     def record(name: str) -> dict[str, Any]:
         try:
