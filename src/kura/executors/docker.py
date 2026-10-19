@@ -564,10 +564,10 @@ def _write_container_create_intent(run_dir: Path, realization_id: str, name: str
     requested_at = _now()
     path = run_dir / "realizations" / f"{realization_id}{CREATE_INTENT_SUFFIX}"
     path.parent.mkdir(exist_ok=True)
-    _write_json(path, {
-        "kind": "container_create_intent", "schema_version": 1, "realization_id": realization_id, "executor": "docker",
+    _write_json(path, as_record("container_create_intent", {
+        "realization_id": realization_id, "executor": "docker",
         "container_name": name, "requested_at": requested_at, "realization": draft,
-    })
+    }))
     record_launch_phase(run_dir, realization_id, "container_start_requested", at=requested_at)
 
     def mutate(latest: dict[str, Any]) -> None:

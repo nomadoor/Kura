@@ -61,14 +61,67 @@ class RedactionTests(unittest.TestCase):
         from kura import secrets
         from kura.executors import common
 
-        self.assertIs(common.secret_values, secrets.secret_values)
+        self.assertIs(common._redact_secrets, secrets.redact)
+        self.assertIs(common._redact_secret_text, secrets.redact_text)
 
     def test_values_are_looked_up_once_per_record(self) -> None:
-        from kura.executors import common
+        from kura import secrets
 
-        with patch.object(common, "secret_values", return_value=[VALUE]) as lookup:
-            common._redact_secrets({"a": [f"x {VALUE}", "y", {"b": VALUE}]})
+        with patch.object(secrets, "secret_values", return_value=[VALUE]) as lookup:
+            secrets.redact({"a": [f"x {VALUE}", "y", {"b": VALUE}]})
         self.assertEqual(lookup.call_count, 1)
+
+
+class RecordRedactionTests(unittest.TestCase):
+    """Redaction lives in the one place every record is built, and in the one notification sender."""
+
+    def test_every_record_is_built_without_a_secret(self) -> None:
+        from kura.records import record
+
+        with patch.dict(os.environ, {"HF_TOKEN": VALUE}):
+            built = record("launch_failed", {"error": f"401 for token {VALUE}", "nested": [{"detail": VALUE}]})
+        self.assertNotIn(VALUE, str(built))
+        self.assertEqual(built["kind"], "launch_failed")
+
+    def test_records_written_outside_the_executor_writers_hold_no_secret(self) -> None:
+        # The render realization and the runner's request outcomes are written with the plain
+        # JSON writer; the record they are built from is already redacted.
+        from kura import runner
+        from kura.render import _write_realization_file
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HF_TOKEN": VALUE}):
+            run_dir = Path(directory) / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            reference = _write_realization_file(run_dir, error=f"ComfyUI refused {VALUE}")
+            request = run_dir / "requests" / "r1.launch.json"
+            request.parent.mkdir()
+            runner._record_request_outcome(request, ".launch-failed.json", "launch_failed", error=f"boom {VALUE}")
+            written = [(run_dir / reference).read_text(encoding="utf-8"),
+                       (request.parent / "r1.launch-failed.json").read_text(encoding="utf-8")]
+        for text in written:
+            self.assertIn("***", text)
+            self.assertNotIn(VALUE, text)
+
+    def test_the_runner_log_never_carries_a_secret(self) -> None:
+        import contextlib
+        import io as _io
+
+        from kura import runner
+
+        out = _io.StringIO()
+        with patch.dict(os.environ, {"HF_TOKEN": VALUE}), contextlib.redirect_stdout(out):
+            runner._log(f"follower failed: 401 for {VALUE}")
+        self.assertNotIn(VALUE, out.getvalue())
+        self.assertIn("follower failed: 401 for ***", out.getvalue())
+
+    def test_a_notification_never_carries_a_secret(self) -> None:
+        from kura import notifications
+
+        sent = []
+        with patch.dict(os.environ, {"HF_TOKEN": VALUE, "KURA_NTFY_TOPIC": "kura-topic"}), \
+                patch.object(notifications, "send_ntfy_notification", side_effect=lambda subject, body, priority=None: sent.append((subject, body))):
+            notifications.notify(["ntfy"], subject=f"failed {VALUE}", body=f"Render could not start: {VALUE}")
+        self.assertEqual(sent, [("failed ***", "Render could not start: ***")])
 
 
 if __name__ == "__main__":

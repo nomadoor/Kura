@@ -10,11 +10,11 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from kura.executors import _redact_secret_text
+from kura.secrets import redact_text
 
 
 def safe_error(exc: BaseException | str) -> str:
-    return _redact_secret_text(str(exc))
+    return redact_text(str(exc))
 
 
 NOTIFICATION_CHANNELS = ("desktop", "ntfy")
@@ -49,6 +49,8 @@ def notify(channels: Any, *, subject: str, body: str, priority: str | None = Non
         return
     if not selected:
         return
+    # Every notification leaves the machine through here, so none carries a secret.
+    subject, body = redact_text(subject), redact_text(body)
     for channel in selected:
         try:
             if channel == "desktop":
