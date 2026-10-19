@@ -405,7 +405,7 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
 
 def _progress(status: dict[str, Any], config: dict[str, Any]) -> RunProgress:
     recipe = common_recipe(config)
-    step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
+    step = _int_or_none(status.get("last_step"))
     total = _int_or_none(_first_present(status.get("total_steps"), displayed_final_step(config)))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))
     return RunProgress(
@@ -698,7 +698,7 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     pod_id = _string(status.get("pod_id") or pod_raw.get("id"))
     pod_state = _string(observation.get("desired_status") or observation.get("state") or pod_raw.get("desired_status") or pod_raw.get("state") or request.get("desiredStatus"))
     started = _parse_datetime(_first_present(observation.get("last_started_at"), pod_raw.get("last_started_at"), realization.get("launched_at")))
-    cost_per_h = _float_or_none(_first_present(observation.get("cost_per_h"), pod_raw.get("cost_per_h"), observation.get("costPerHr"), pod_raw.get("costPerHr")))
+    cost_per_h = _float_or_none(_first_present(observation.get("cost_per_h"), pod_raw.get("cost_per_h")))
     cost_stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
     cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, run_finished(status))
     pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost_used) if pod_id or pod_state else None
