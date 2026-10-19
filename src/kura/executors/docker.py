@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.dataset_handoff import handoff_was_frozen
-from kura.secrets import declared_secret
+from kura.secrets import container_secret_env, declared_secret
 from kura.install_source import kura_provenance
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
 from kura.dataset_handoff import (
@@ -445,9 +445,7 @@ def docker_command(
     )
     # The container runs as the host user, whose home does not exist in the image.
     runtime_env.setdefault("HOME", "/tmp/kura-home")
-    hf_token = declared_secret("HF_TOKEN")
-    if hf_token:
-        runtime_env["HF_TOKEN"] = hf_token
+    runtime_env.update(container_secret_env())
     write_roots = validated_write_roots(spec, workspace_path=CONTAINER_WORKSPACE)
     for key, value in sorted(runtime_env.items()):
         if _is_secret(key):

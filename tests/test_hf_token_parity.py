@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kura.executors.docker import docker_command
-from kura.secrets import declared_secret
+from kura.secrets import container_secret_env, declared_secret
 from kura.run_commands.plan import _hf_file_size_probe
 from kura.run_commands.runpod_ssh import _runpod_secret_env_payload
 
@@ -45,6 +45,26 @@ class HfTokenParityTests(unittest.TestCase):
                     _hf_file_size_probe({"repo_id": "org/model", "filename": "a.safetensors"})
                 scheme, _, token = str(seen.get("authorization")).partition(" ")
                 self.assertEqual((scheme, token), ("Bearer", "example-value"))
+
+    def test_docker_and_runpod_send_a_container_the_same_names_from_one_owner(self) -> None:
+        # One function decides which secrets a container gets and under which names; both
+        # executors send exactly those, so a trainer sees the same variables on either.
+        owned = {"HF_TOKEN": "owner-value", "KURA_TEST_SECRET_TOKEN": "second-value"}
+        clean = {key: value for key, value in os.environ.items() if key not in HF_NAMES}
+        with patch.dict(os.environ, clean, clear=True), tempfile.TemporaryDirectory() as directory, \
+                patch("kura.executors.docker.container_secret_env", return_value=owned), \
+                patch("kura.run_commands.runpod_ssh.container_secret_env", return_value=owned):
+            workspace = Path(directory)
+            _, docker_env, _ = docker_command(workspace, workspace / "runs" / "r", {"cwd": "/opt", "argv": ["x"], "env": {}}, "image", [], "r1")
+            payload = _runpod_secret_env_payload() or ""
+        self.assertEqual({key: docker_env[key] for key in docker_env if key in (*HF_NAMES, *owned)}, owned)
+        self.assertEqual(payload, "export HF_TOKEN=owner-value\nexport KURA_TEST_SECRET_TOKEN=second-value\n")
+
+    def test_the_container_gets_the_token_under_its_one_name(self) -> None:
+        with patch.dict(os.environ, _environment_with("HF_TOKEN"), clear=True):
+            self.assertEqual(container_secret_env(), {"HF_TOKEN": "example-value"})
+        with patch.dict(os.environ, _environment_with("HUGGINGFACE_HUB_TOKEN"), clear=True):
+            self.assertEqual(container_secret_env(), {})
 
 
 if __name__ == "__main__":

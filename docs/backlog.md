@@ -57,6 +57,7 @@ why, so it is not raised again.
 - 2026-10-18 | tests | Tests that call `_local_launch_disk_preflight` isolate `docker_data_location` only through the shared `subprocess.run` patch; patch it by name | review of the Docker data root watch | -
 - 2026-10-17 | AI-Toolkit baseline | The pinned UI fills `model.assistant_lora_path` (a training adapter) for `qwen_image_2:turbo`, `ming_image`, and the MiniMax-H3 entries, but the baseline fills only the keys docs/adr/upstream-training-baseline.md lists, so a Kura run of those entries trains without the adapter unless the author writes it. Decide in the ADR whether the baseline fills it; filling it changes what the MiniMax-H3 evidence trained | CodeRabbit on the AI-Toolkit 0.13.30 upgrade pull request | P11
 - 2026-10-18 | AI-Toolkit legacy lock | `own_write_bound` uses the current training-state contract, so an old AI-Toolkit lock with accumulation 2 counts states it never saved (an over-estimate, so safe) | review of the backlog batch | P8
+- 2026-10-19 | ComfyUI image | `docker/comfyui/kura_comfy_prepare.py` falls back to `HUGGINGFACE_HUB_TOKEN`, which no executor sets any more (and which is not huggingface_hub's legacy name either); drop the fallback, and `HUGGINGFACE_HUB_TOKEN` from `SECRET_OPTIONAL` in tests/test_launch_contracts.py, with the next ComfyUI image rebuild. Harmless meanwhile: the script reads `HF_TOKEN` first | 0.7.0 secrets audit | -
 
 ## Rejected
 

@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from kura.secrets import declared_secret
+from kura.secrets import container_secret_env
 from kura.yamlio import YAMLError
 from kura.storage import ensure_free_bytes
 from kura.container_scripts import script_source
@@ -1725,13 +1725,7 @@ def _try_observe_runpod_remote_exit(run_dir: Path, *, ssh_timeout_sec: int = 10)
 
 def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     lines: list[str] = []
-    hf_token = declared_secret("HF_TOKEN")
-    if hf_token:
-        quoted = shlex.quote(hf_token)
-        lines.extend([
-            f"export HF_TOKEN={quoted}",
-            f"export HUGGINGFACE_HUB_TOKEN={quoted}",
-        ])
+    lines.extend(f"export {name}={shlex.quote(value)}" for name, value in sorted(container_secret_env().items()))
     if remote_notify and os.environ.get("KURA_NTFY_TOPIC"):
         lines.append("export KURA_REMOTE_NOTIFY_NTFY=1")
         for key in ("KURA_NTFY_TOPIC", "KURA_NTFY_SERVER", "KURA_NTFY_TOKEN", "KURA_NTFY_PRIORITY"):
