@@ -17,6 +17,12 @@ NAMES = {
     "20261008-2356_smoke-test-gc_7868.safetensors": None,
     "vivi.safetensors": None,
     "my_lora_v2.safetensors": None,
+    # a step-like word inside an output name is part of the name; only the trainer's padded
+    # step at the end of the name is a step
+    "exp-lr-step2.safetensors": None,
+    "exp-lr-step2-step00000100.safetensors": 100,
+    "vivi-step00000100-copy.safetensors": None,
+    "lr_step2_000000300.safetensors": 300,
 }
 
 
