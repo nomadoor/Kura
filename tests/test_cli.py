@@ -2296,13 +2296,38 @@ class NotificationTests(unittest.TestCase):
 
 
 class RenderNotificationTests(unittest.TestCase):
+    def test_render_launch_refuses_an_executor_other_than_the_compiled_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text('{"state": "compiled"}', encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                for compiled, asked in (("runpod", "local"), ("local", "runpod")):
+                    with self.subTest(compiled=compiled):
+                        (run_dir / "resolved" / "manifest.lock.yaml").write_text(f"type: render\nexecutor: {{name: {compiled}}}\n", encoding="utf-8")
+                        with patch("kura.run_commands.launch.launch_render_runpod") as remote, patch("kura.run_commands.launch.launch_render") as local, \
+                                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                            for dry_run in (False, True):
+                                code = cmd_render_launch(argparse.Namespace(run_id="render-1", executor=asked, dry_run=dry_run, yes=True))
+                                self.assertEqual(code, 1)
+                        remote.assert_not_called()
+                        local.assert_not_called()
+                        self.assertFalse((run_dir / "requests").exists())
+                        self.assertIn(f"compiled for executor.name={compiled}", stderr.getvalue())
+            finally:
+                os.chdir(previous)
+
     def test_runpod_render_launch_forwards_explicit_yes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\nexecutor: {name: runpod}\n", encoding="utf-8")
             (run_dir / "status.json").write_text('{"state": "compiled"}', encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
@@ -2310,7 +2335,8 @@ class RenderNotificationTests(unittest.TestCase):
                 with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, \
                         patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.follow", return_value=0), \
                         patch("sys.stdout", new_callable=io.StringIO) as stdout, patch("sys.stderr", new_callable=io.StringIO):
-                    code = cmd_render_launch(argparse.Namespace(run_id="render-1", executor="runpod", dry_run=False, yes=True))
+                    # No --executor: the render launches on the executor it was compiled for.
+                    code = cmd_render_launch(argparse.Namespace(run_id="render-1", executor=None, dry_run=False, yes=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)

@@ -35,6 +35,37 @@ class GpuChoiceTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(prepared["runpod_config"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
 
+    def test_a_render_launches_the_image_frozen_at_compile(self) -> None:
+        from kura.run_commands import render_runpod
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\nimages:\n  comfyui: remote/comfy@sha256:" + "2" * 64 + "\nrunpod:\n  gpu_type_ids: [A]\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({
+                "type": "render", "generator": {"name": "comfyui"}, "executor": {"name": "runpod"},
+                "comfyui_models": [], "comfyui_model_registry": {},
+            }), encoding="utf-8")
+            frozen = "remote/comfy@sha256:" + "1" * 64
+            (run_dir / "resolved" / "env.lock").write_text(yaml.safe_dump({"selected_image": frozen, "image_origin": "override"}), encoding="utf-8")
+            (run_dir / "status.json").write_text('{"state": "compiled"}', encoding="utf-8")
+            prepared: dict = {}
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(render_runpod, "confirm_runpod_billing"):
+                    self.assertEqual(render_runpod.launch_render_runpod("example", dry_run=False, yes=True, check_only=True, prepared=prepared), 0)
+                # A render compiled by an older Kura froze no image and launches the current one.
+                (run_dir / "resolved" / "env.lock").write_text("generator: comfyui\n", encoding="utf-8")
+                older: dict = {}
+                with patch.object(render_runpod, "confirm_runpod_billing"):
+                    self.assertEqual(render_runpod.launch_render_runpod("example", dry_run=False, yes=True, check_only=True, prepared=older), 0)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(prepared["remote_image"], frozen)
+            self.assertEqual(older["remote_image"], "remote/comfy@sha256:" + "2" * 64)
+
     def test_every_reader_takes_the_cuda_floor_from_one_place(self) -> None:
         from kura.executors import runpod
         from kura.run_commands import plan

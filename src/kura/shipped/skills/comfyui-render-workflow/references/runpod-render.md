@@ -28,8 +28,9 @@ it automatically. Create a new render with `kura render new --slug <words>`,
 copy `intent`, `inputs`, `generator`, `workflow_patches`, `render`, and
 `compute` (when it set one) from the failed render's `run.yaml` into the new one, set `executor.name: runpod`, and
 run `kura render compile <run-id>`. Show `kura render launch <run-id>
---executor runpod --dry-run` and obtain approval under `runpod-lifecycle`
-before launching it with `--executor runpod`.
+--dry-run` and obtain approval under `runpod-lifecycle` before launching it
+with `kura render launch <run-id>`; the render runs on the executor it was
+compiled for, with the ComfyUI image frozen at compile.
 
 ## Model registry
 

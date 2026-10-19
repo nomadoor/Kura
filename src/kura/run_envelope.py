@@ -170,6 +170,14 @@ def run_executor(run: dict[str, Any]) -> str:
     return executor if isinstance(executor, str) and executor else "docker"
 
 
+def render_executor(run: dict[str, Any]) -> str:
+    """Where a render runs: its `executor.name`, local when absent. Compile, launch, and execute read it here."""
+
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    name = executor.get("name")
+    return name if isinstance(name, str) and name else "local"
+
+
 def capacity_policy(run: dict[str, Any]) -> dict[str, Any]:
     """How a RunPod run gets its GPU: by default it waits for one (no Pod, so no billing,
     while it waits), because RunPod GPUs are often taken; `mode: immediate` fails at once."""
