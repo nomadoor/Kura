@@ -36,6 +36,13 @@ source: owner (2026-08-15)
 - Recorded: that Musubi Klein 4B LoRA ran 1000 steps in 35 minutes on Musubi
   Tuner v0.3.5. The run folder was not kept.
   source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
+- Recorded on Musubi Tuner v0.3.6 on RunPod: Klein Base 4B
+  (`model_bundle: flux2-klein-base-4b`) on an RTX A5000 (24 GB) at 1024 px in
+  bf16 (no fp8), rank 32 / alpha 16, learning rate 2e-4 constant, adamw8bit,
+  `timestep_sampling: flux2_shift`, gradient checkpointing, batch size 1:
+  2.32 to 2.36 s per step, 100 steps in 3 min 53 s. Each LoRA file (saved
+  bf16) was 92,436,184 bytes.
+  source: acceptance test 2026-10-19, run 20261019-0751_vivi-klein4b-runpod_8992
 - Musubi 9B on an NVIDIA A40 (48 GB): at 1024-class resolution and rank 32,
   training without gradient checkpointing ran out of memory even at
   batch_size 1, and batch_size above 1 (a GPU micro-batch in Musubi) ran out of
@@ -49,6 +56,10 @@ source: owner (2026-08-15)
   `discrete_flow_shift`. Kura requires `timestep_sampling` for
   `architecture: flux2` because the trainer's generic default is `sigma`.
   source: upstream (Musubi Tuner flux_2.md guide at the pinned v0.3.5)
+- Caption style for this family's Qwen3 text encoder (tag lists or natural
+  language): not recorded yet. regrets.md flags tag captions for a model
+  prompted in natural language; no recorded FLUX.2 run compared the two.
+  source: acceptance test 2026-10-19 (the card had no entry)
 - No evaluated task entries yet.
 
 ## Model files
