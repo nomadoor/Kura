@@ -16,7 +16,7 @@ from kura.training_artifacts import checkpoint_files, displayed_final_step, expe
 from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
-from kura.executors.runpod import pod_gpu_cost
+from kura.executors.runpod import pod_gpu_cost, pods_left
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, _EARLIEST, latest_launch_id, record_time, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
@@ -673,12 +673,12 @@ def _executor(run_type: str | None, config: dict[str, Any], status: dict[str, An
     return None
 
 
-def _executor_info(executor: str | None, config: dict[str, Any], status: dict[str, Any], realization: dict[str, Any], run_dir: Path | None = None) -> ExecutorInfo:
+def _executor_info(executor: str | None, config: dict[str, Any], status: dict[str, Any], realization: dict[str, Any], run_dir: Path) -> ExecutorInfo:
     provider = "runpod" if executor == "runpod" else None
     kind = "remote" if provider else ("local" if executor else None)
     request = realization.get("request") if isinstance(realization.get("request"), dict) else {}
     pod_raw = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
-    observation = _latest_observation(run_dir, status) if run_dir else {}
+    observation = _latest_observation(run_dir, status)
     gpu = None
     gpu_ids = request.get("gpuTypeIds") if isinstance(request, dict) else None
     machine = observation.get("machine") if isinstance(observation.get("machine"), dict) else {}
@@ -713,7 +713,8 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
         remote_state=_string(status.get("remote_state")),
         downloaded=bool(status.get("downloaded_run")),
         recovery_required=status.get("state") == "recovery_required",
-        pod_stopped=bool(status.get("pod_stopped_at")),
+        # A Pod that may still bill is up; one a stop deleted or RunPod reported gone is not.
+        pod_stopped=provider == "runpod" and isinstance(status.get("pod_id"), str) and not pods_left(run_dir, status),
         mirrored_checkpoint_step=mirrored_step,
         checkpoint_sync_error=_string(status.get("checkpoint_sync_error")),
     )
