@@ -104,7 +104,8 @@ The classes:
   are not read); there, name each model by id after the user confirms no
   other workspace uses it.
 - **resume data**: the training states of a finished run, in its `outputs/`
-  (the `*-state` folders) and in `artifacts/training-state/`. Removing it means
+  and a RunPod run's `downloads/<run>/outputs/` (the `*-state` folders) and
+  in `artifacts/training-state/`. Removing it means
   that run can no longer be resumed; every LoRA and checkpoint stays. States a
   continuation run references are never listed.
 - **outputs**: not listed by default and never in the totals.

@@ -9,6 +9,7 @@ frozen image choices) and decides nothing by age: last use only sorts it.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import shutil
 from datetime import datetime, timezone
@@ -222,9 +223,36 @@ def last_observation_container_missing(run_dir: Path, status: dict[str, Any]) ->
     return observation.get("container_missing") is True and names_realization(realization, str(observation.get("realization_id")))
 
 
+def _files(path: Path) -> list[Path]:
+    """The files at or under `path`, never following a link."""
+    if path.is_symlink() or not path.is_dir():
+        return [path] if path.exists() or path.is_symlink() else []
+    return [Path(root) / name for root, _dirs, files in os.walk(path) for name in files]
+
+
 def _sizes(paths: list[Path]) -> int | None:
-    sizes = [doctor._path_size_bytes(path) for path in paths]
-    return None if any(size is None for size in sizes) else sum(sizes)
+    """The bytes the files under `paths` hold, a file with several names (a RunPod run's outputs are
+    hardlinked into its downloads snapshot) counted once. A file that vanishes or cannot be read while
+    walking is skipped; None when a path itself cannot be read."""
+    seen: set[tuple[int, int]] = set()
+    total = 0
+    for path in paths:
+        try:
+            files = _files(path)
+        except OSError:
+            return None
+        for file in files:
+            try:
+                stat = file.lstat()
+            except OSError:
+                continue
+            if stat.st_nlink > 1:
+                # Only a file with several names can be met twice; some filesystems give every file inode 0.
+                if (stat.st_dev, stat.st_ino) in seen:
+                    continue
+                seen.add((stat.st_dev, stat.st_ino))
+            total += stat.st_size
+    return total
 
 
 def run_containers(run_dir: Path, containers: list[dict[str, Any]]) -> list[str]:
@@ -401,7 +429,7 @@ def _model_items(workspace: Path, hf_cache: Path, runs: dict[str, dict[str, Any]
                            last_used=_last_used(refs, runs, path), runs=runs))
     legacy = workspace / LEGACY_AI_TOOLKIT_CACHE
     if legacy.is_dir():
-        items.append(_item("download", "legacy-ai-toolkit-models", LEGACY_AI_TOOLKIT_CACHE, paths=[legacy], size=doctor._path_size_bytes(legacy),
+        items.append(_item("download", "legacy-ai-toolkit-models", LEGACY_AI_TOOLKIT_CACHE, paths=[legacy], size=_sizes([legacy]),
                            refs=legacy_refs, last_used=_last_used(legacy_refs, runs, legacy), runs=runs))
     return items
 
@@ -457,16 +485,71 @@ def _image_items(config: dict[str, Any], runs: dict[str, dict[str, Any]], unread
     return items
 
 
+def output_roots(run_dir: Path) -> list[Path]:
+    """Where a run's trainer outputs are on this machine: `outputs/`, and for a RunPod run the snapshot of
+    the Pod's outputs in `downloads/<run>/outputs/`, whose weights are hardlinked into `outputs/` and which
+    alone keeps the trainer's state folders."""
+    return [root for root in (run_dir / "outputs", run_dir / "downloads" / run_dir.name / "outputs") if root.is_dir() and not root.is_symlink()]
+
+
 def native_state_directories(run_dir: Path) -> list[Path]:
-    """The trainer's own state folders in a run's outputs (every executor names them `*-state`)."""
-    outputs = run_dir / "outputs"
+    """The trainer's own state folders in a run's output roots (every executor names them `*-state`)."""
     found: list[Path] = []
-    for path in sorted(outputs.rglob("*-state")) if outputs.is_dir() else []:
-        relative = path.relative_to(outputs)
-        if path.is_dir() and not path.is_symlink() and is_training_state_output(relative / "x", run_dir.name) \
-                and not any(relative.is_relative_to(parent.relative_to(outputs)) for parent in found):
-            found.append(path)
+    for outputs in output_roots(run_dir):
+        kept: list[Path] = []
+        for path in sorted(outputs.rglob("*-state")):
+            relative = path.relative_to(outputs)
+            if path.is_dir() and not path.is_symlink() and is_training_state_output(relative / "x", run_dir.name) \
+                    and not any(relative.is_relative_to(parent) for parent in kept):
+                kept.append(relative)
+                found.append(path)
     return found
+
+
+def run_checkpoints(run_dir: Path) -> list[dict[str, Any]]:
+    """Each checkpoint in a run's `outputs/` (step saves and the final file; never a state folder's), with
+    every name it has on this machine (`files`, relative to the run): the file itself and, for a RunPod
+    run, its copy in the downloads snapshot (the same file hardlinked, or a copy at the path the trainer
+    gave it, `<run>/` prefix included)."""
+    outputs = run_dir / "outputs"
+    if not outputs.is_dir():
+        return []
+    snapshot = run_dir / "downloads" / run_dir.name / "outputs"
+    by_inode: dict[tuple[int, int], list[Path]] = {}
+    for path in snapshot.rglob("*.safetensors") if snapshot.is_dir() else []:
+        if path.is_file() and not path.is_symlink():
+            stat = path.lstat()
+            by_inode.setdefault((stat.st_dev, stat.st_ino), []).append(path)
+    entries = []
+    for path in sorted(outputs.rglob("*.safetensors")):
+        relative = path.relative_to(outputs)
+        if not path.is_file() or is_training_state_output(relative, run_dir.name):
+            continue
+        stat = path.stat()
+        copies = set(by_inode.get((stat.st_dev, stat.st_ino), [])) if stat.st_nlink > 1 else set()
+        if not copies:
+            # The collector copies when it cannot link: the copy is at the path the trainer gave it.
+            copies.update(candidate for candidate in (snapshot / relative, snapshot / run_dir.name / relative)
+                          if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size == stat.st_size)
+        files = [path, *sorted(copies - {path})]
+        entries.append({"path": relative.as_posix(), "size_bytes": stat.st_size,
+                        "files": [file.relative_to(run_dir).as_posix() for file in files]})
+    return entries
+
+
+def freed_bytes(paths: list[Path]) -> int:
+    """The bytes removing exactly these files frees: a file counts once, and only when every name it has is removed."""
+    names: dict[tuple[int, int], tuple[int, int, set[Path]]] = {}
+    for path in paths:
+        try:
+            stat = path.lstat()
+        except OSError:
+            continue
+        key = (stat.st_dev, stat.st_ino)
+        if stat.st_nlink <= 1:
+            key = (stat.st_dev, -len(names) - 1)  # one name: never the same file as another path here
+        names.setdefault(key, (stat.st_size, stat.st_nlink, set()))[2].add(path)
+    return sum(size for size, links, removed in names.values() if len(removed) >= links)
 
 
 def _resume_items(workspace: Path, runs: dict[str, dict[str, Any]], notes: list[str]) -> list[dict[str, Any]]:
@@ -499,12 +582,7 @@ def _output_items(workspace: Path, runs: dict[str, dict[str, Any]]) -> list[dict
         native = native_state_directories(run_dir)
         size = _sizes(paths)
         native_size = _sizes(native)
-        outputs = run_dir / "outputs"
-        checkpoints = [
-            {"path": path.relative_to(outputs).as_posix(), "size_bytes": path.stat().st_size}
-            for path in sorted(outputs.rglob("*.safetensors")) if outputs.is_dir()
-            and path.is_file() and not is_training_state_output(path.relative_to(outputs), run_id)
-        ]
+        checkpoints = run_checkpoints(run_dir)
         item = _item("outputs", "run-outputs", run_id, paths=paths,
                      size=None if size is None or native_size is None else size - native_size, refs={run_id},
                      last_used=_last_used({run_id}, runs, run_dir), runs=runs, checkpoints=checkpoints)
@@ -636,9 +714,11 @@ def select_reclaim(
                 problems.append(f"run {checkpoints!r} has no checkpoint named {', '.join(map(repr, unmatched))}; it has {', '.join(names) or 'none'}")
             else:
                 removed = [path for path in names if path not in keep and Path(path).name not in keep]
-                actions.append({"action": "remove-checkpoints", "item": item, "remove": removed,
-                                "keep": [path for path in names if path not in removed],
-                                "remove_bytes": sum(entry["size_bytes"] for entry in item["checkpoints"] if entry["path"] in removed)})
+                run_dir = Path(item["paths"][0]).parent
+                removed_files = [file for entry in item["checkpoints"] if entry["path"] in removed for file in entry["files"]]
+                files = [run_dir / name for name in removed_files]
+                actions.append({"action": "remove-checkpoints", "item": item, "remove": removed, "remove_files": removed_files,
+                                "keep": [path for path in names if path not in removed], "remove_bytes": freed_bytes(files)})
     if archive is not None:
         item = outputs.get(archive)
         if item is None:

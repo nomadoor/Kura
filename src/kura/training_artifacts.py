@@ -1151,10 +1151,25 @@ def _frozen_command_lock(run_dir: Path) -> dict[str, Any]:
 
 
 def training_state_capture_required(run_dir: Path) -> bool:
-    """Return whether a completed run is expected to publish recoverable state."""
+    """Return whether a completed run is expected to publish recoverable state: one that kept training
+    state, unless the user has since freed its resume data (collecting it again then finds none, and
+    that is what the user chose, not a failed publication)."""
 
     run, _, _ = _published_run_context(run_dir)
-    return frozen_training_state_managed(run, _frozen_command_lock(run_dir))
+    return frozen_training_state_managed(run, _frozen_command_lock(run_dir)) and not resume_data_removed(run_dir)
+
+
+def resume_data_removed(run_dir: Path) -> bool:
+    """Whether `kura cleanup --resume-data` freed this run's training states: the `reclaim` record it appends
+    to `realizations/` (`kura.reclaim.record_reclaim`) with action `remove-resume-data`."""
+    for path in (run_dir / "realizations").glob("*.reclaim-*.json"):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(value, dict) and value.get("kind") == "reclaim" and value.get("action") == "remove-resume-data":
+            return True
+    return False
 
 
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:

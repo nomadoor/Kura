@@ -1110,11 +1110,12 @@ def _apply_reclaim(workspace: Path, inventory: dict[str, Any], action: dict[str,
     elif action["action"] == "remove-checkpoints":
         run_dir = workspace / "runs" / item["id"]
         removed = []
-        for name in action["remove"]:
-            path = run_dir / "outputs" / name
-            if path.exists():
+        # Every name each checkpoint has: outputs/ and a RunPod run's downloads snapshot (`run_checkpoints`).
+        for name in action["remove_files"]:
+            path = run_dir / name
+            if path.exists() or path.is_symlink():
                 _remove_tree(workspace, path)
-                removed.append(f"outputs/{name}")
+                removed.append(name)
         done.update({"removed": removed, "kept": [f"outputs/{name}" for name in action["keep"]]})
         done["record"] = record_reclaim(run_dir, "remove-checkpoints", {"removed": removed, "kept": done["kept"]})
     elif action["action"] == "archive-outputs":
@@ -1168,7 +1169,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     planned = [
         {"action": action["action"], "class": action["item"]["class"], "id": action["item"]["id"], "kind": action["item"]["kind"],
          "size_bytes": action["item"]["size_bytes"], "recovery": action["item"]["recovery"], "paths": action["item"]["paths"],
-         **{key: action[key] for key in ("remove", "keep", "remove_bytes", "destination") if key in action}}
+         **{key: action[key] for key in ("remove", "remove_files", "keep", "remove_bytes", "destination") if key in action}}
         for action in actions
     ]
     payload: dict[str, Any] = {

@@ -786,6 +786,79 @@ class RenderUserTests(unittest.TestCase):
             self.assertEqual(became_in_use(root, item), ["render"])
 
 
+class RunPodDownloadLayoutTests(unittest.TestCase):
+    """A RunPod run's checkpoints are in outputs/ and, hardlinked, in the snapshot downloads/<run>/outputs/,
+    which also keeps the trainer's state folders: removing frees both, and each file is counted once."""
+
+    def _remote_run(self, root: Path) -> Path:
+        run_dir = _run(root, "remote", ended="2026-10-01T00:00:00+00:00")
+        snapshot = run_dir / "downloads" / "remote" / "outputs"
+        for name in ("remote-step00000100.safetensors", "remote.safetensors"):
+            _write(snapshot / name, b"w" * 1000)
+            (run_dir / "outputs").mkdir(exist_ok=True)
+            os.link(snapshot / name, run_dir / "outputs" / name)
+        _write(snapshot / "remote-step00000100-state" / "optimizer.bin", b"s" * 5000)
+        return run_dir
+
+    @posix_only(POSIX_PATHS)
+    def test_removing_a_checkpoint_frees_its_snapshot_link_too(self) -> None:
+        with _workspace() as root:
+            run_dir = self._remote_run(root)
+            outputs = next(item for item in _items(root, outputs=True) if item["class"] == "outputs")
+            # Two weights of 1000 bytes each, counted once although each has two names; the state is not an output.
+            self.assertEqual(outputs["size_bytes"], 2000)
+            code, out, _ = _cleanup(["--checkpoints", "remote", "--keep", "remote.safetensors", "--yes"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["total_bytes"], 1000)
+            self.assertFalse((run_dir / "outputs" / "remote-step00000100.safetensors").exists())
+            self.assertFalse((run_dir / "downloads" / "remote" / "outputs" / "remote-step00000100.safetensors").exists())
+            self.assertTrue((run_dir / "downloads" / "remote" / "outputs" / "remote.safetensors").is_file())
+            record = json.loads(next((run_dir / "realizations").glob("r1.reclaim-*.json")).read_text(encoding="utf-8"))
+            self.assertEqual(sorted(record["removed"]), ["downloads/remote/outputs/remote-step00000100.safetensors",
+                                                         "outputs/remote-step00000100.safetensors"])
+
+    def test_a_snapshot_copy_the_collector_could_not_link_goes_with_its_checkpoint(self) -> None:
+        # Without hardlinks the collector copies, at the path the trainer gave the file (here under `<run>/`).
+        with _workspace() as root:
+            run_dir = _run(root, "copied", ended="2026-10-01T00:00:00+00:00")
+            snapshot = run_dir / "downloads" / "copied" / "outputs" / "copied"
+            for name in ("copied-step00000100.safetensors", "copied.safetensors"):
+                _write(snapshot / name, b"w" * 1000)
+                _write(run_dir / "outputs" / name, b"w" * 1000)
+            sample = _write(snapshot / "samples" / "a.png")
+            code, out, _ = _cleanup(["--checkpoints", "copied", "--keep", "copied.safetensors", "--yes"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["total_bytes"], 2000)
+            self.assertFalse((snapshot / "copied-step00000100.safetensors").exists())
+            self.assertTrue((snapshot / "copied.safetensors").is_file())
+            self.assertTrue((run_dir / "outputs" / "copied.safetensors").is_file())
+            self.assertTrue(sample.is_file())
+
+    def test_collecting_again_after_freeing_resume_data_is_not_a_failed_publication(self) -> None:
+        # `kura run download` on a collected run publishes from the snapshot again; once the user freed the
+        # states, finding none is their choice, so the run expects none.
+        from kura import training_artifacts
+
+        with _workspace() as root:
+            run_dir = _run(root, "remote", ended="2026-10-01T00:00:00+00:00")
+            with patch.object(training_artifacts, "_published_run_context", return_value=({}, {}, {})), \
+                    patch.object(training_artifacts, "frozen_training_state_managed", return_value=True):
+                self.assertTrue(training_artifacts.training_state_capture_required(run_dir))
+                from kura.reclaim import record_reclaim
+                record_reclaim(run_dir, "remove-resume-data", {"removed_paths": [], "removed_artifact_ids": []})
+                self.assertFalse(training_artifacts.training_state_capture_required(run_dir))
+
+    @posix_only(POSIX_PATHS)
+    def test_resume_data_includes_the_snapshot_state_folders(self) -> None:
+        with _workspace() as root:
+            run_dir = self._remote_run(root)
+            resume = next(item for item in _items(root) if item["class"] == "resume")
+            self.assertEqual(resume["size_bytes"], 5000)
+            self.assertEqual(_cleanup(["--resume-data", "remote", "--yes"])[0], 0)
+            self.assertFalse((run_dir / "downloads" / "remote" / "outputs" / "remote-step00000100-state").exists())
+            self.assertTrue((run_dir / "outputs" / "remote.safetensors").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
 
