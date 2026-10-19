@@ -78,8 +78,11 @@ The classes:
 
 - **free**: costs nothing. Finished runs' `cache/`, `tmp/`, and `.cache/`, a
   leftover dataset view of a run whose container Docker reported missing, the
-  model links in `cache/models`, Docker build cache, and stopped Kura
-  containers and volumes. The model links are kept while a run is unfinished.
+  model links in `cache/models`, Docker build cache, the stopped containers
+  of this workspace's finished runs, and Kura volumes. The model links are
+  kept while a run is unfinished; a container of an unfinished run or of
+  another workspace is never listed, and `kura run prune` removes a run's
+  stopped containers with the run.
   `docker builder prune` frees unused build cache of the whole Docker host,
   not only Kura's; say so when other projects use Docker.
 - **download**: comes back as a download the next time a run needs it.

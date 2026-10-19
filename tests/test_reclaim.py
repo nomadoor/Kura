@@ -558,5 +558,80 @@ class ReclaimPointerTests(unittest.TestCase):
             self.assertEqual(runpod_ssh._local_reserve_bytes(root / "runs" / "missing", {"docker": {"min_free_gb": 7}}), 7 * 1024**3)
 
 
+def _container(container_id: str, run_id: str | None, *, state: str = "exited", realization: str = "r1") -> dict[str, Any]:
+    """A `docker ps --format '{{json .}}'` entry: Labels is one comma-separated string."""
+    labels = "io.kura.managed=true" + (f",io.kura.run_id={run_id},io.kura.realization_id={realization}" if run_id else "")
+    return {"ID": container_id, "State": state, "Labels": labels}
+
+
+class DockerContainerTests(unittest.TestCase):
+    """A stopped Kura container is offered only for a finished run of this workspace: an unfinished run
+    still needs its container's exit code, and another workspace's container is not this workspace's to remove."""
+
+    def test_only_containers_of_this_workspaces_finished_runs_are_offered_and_removed(self) -> None:
+        from kura.reclaim import became_in_use
+
+        containers = [
+            _container("c-done", "done"), _container("c-running", "running"), _container("c-other", "other-workspace"),
+            _container("c-unlabelled", None), _container("c-live", "done", state="running"),
+            # The same run id in a copy of this workspace, launched again there: a realization this run never recorded.
+            _container("c-copy", "done", realization="r9"),
+        ]
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with _workspace() as root:
+            done = _run(root, "done", ended="2026-10-01T00:00:00+00:00")
+            _run(root, "running", state="running")
+            with (
+                patch("kura.reclaim.shutil.which", return_value="/usr/bin/docker"),
+                patch("kura.doctor.kura_docker_containers", return_value=containers),
+                patch("kura.doctor.kura_docker_volumes", return_value=[]),
+                patch("kura.doctor._docker_json_lines", return_value=[]),
+            ):
+                inventory = reclaim_inventory(root, {}, docker={"daemon_reachable": True, "usage": []})
+                item = next(item for item in inventory["items"] if item["kind"] == "docker-containers")
+                self.assertEqual(item["docker_ids"], ["c-done"])
+                self.assertEqual(item["referenced_by"], ["done"])
+                with patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}), \
+                        patch("kura.cli.subprocess.run", side_effect=fake_run), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cmd_cleanup(build_parser().parse_args(["cleanup", "--yes"])), 0)
+                self.assertEqual([command for command in calls if command[:2] == ["docker", "rm"]], [["docker", "rm", "c-done"]])
+                # Relaunched after the listing: its container is left.
+                self.assertEqual(became_in_use(root, item), [])
+                _write(done / "status.json", json.dumps({"state": "running"}))
+                self.assertEqual(became_in_use(root, item), ["done"])
+
+    def test_pruning_a_run_removes_its_stopped_containers_first(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 1 if len(calls) == 1 else 0, "", "busy")
+
+        with _workspace() as root:
+            run_dir = _run(root, "done", ended="2026-10-01T00:00:00+00:00")
+            with (
+                patch("kura.cli.shutil.which", side_effect=lambda name: "/usr/bin/docker" if name == "docker" else None),
+                patch("kura.doctor.kura_docker_containers", return_value=[_container("c-done", "done"), _container("c-x", "other")]),
+                patch("kura.cli.subprocess.run", side_effect=fake_run),
+                contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err,
+            ):
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "done"])), 0)
+                self.assertEqual(json.loads(out.getvalue())["actions"][0]["containers"], ["c-done"])
+                self.assertEqual(calls, [])
+                # A container Docker refuses to remove keeps the run, so it can be tried again.
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "done", "--yes"])), 1)
+                self.assertIn("busy", err.getvalue())
+                self.assertTrue(run_dir.is_dir())
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "done", "--yes"])), 0)
+            self.assertEqual(calls, [["docker", "rm", "c-done"]] * 2)
+            self.assertFalse(run_dir.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
+

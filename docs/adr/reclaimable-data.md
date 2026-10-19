@@ -37,8 +37,12 @@ fills, and this one decides how a user gets space back.
 the user.** One owner decides the class.
 
 - **free**: costs nothing. A run's `cache/`, `tmp/`, and `.cache/`, leftover
-  dataset views, Docker build cache, and stopped Kura-labelled containers and
-  volumes. Removed by a dry run followed by `--yes`, as before.
+  dataset views, Docker build cache, the stopped containers of this
+  workspace's finished runs (a container whose labels name a run and a
+  realization it recorded; never an unfinished run's or another
+  workspace's), and Kura-labelled volumes. The whole-run delete removes
+  the run's stopped containers with it. Removed by a dry run followed by
+  `--yes`, as before.
 - **download**: re-downloading restores it. A model in the Hugging Face cache
   (one item per repository, or per file AI-Toolkit resolved into
   `ai-toolkit-models/`), and a Kura Docker image that is old: not the current
