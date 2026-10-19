@@ -28,9 +28,9 @@ from kura.runtime_io import validated_write_roots
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
 from kura.secrets import MissingSecret, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase
 from kura.container_scripts import script_source
-from kura.records import realization_reference, record as as_record
+from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
 
 
@@ -734,17 +734,8 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
             lines.append(f"found Pod {ids} named {pod_name}; it is recorded as interrupted and still billing: run `kura run stop {run_dir.name}` to delete it")
         _write_json(realization_path, as_record("realization", realization))
 
-        def mutate(latest: dict[str, Any], realization: dict[str, Any] = realization, pod_id: str | None = pod_id) -> None:
-            latest.update({"state": realization["state"], "ended": at, "exit_code": None, "host": "runpod",
-                           "last_realization": realization_reference(realization_id)})
-            latest.pop("capacity_wait", None)
-            latest.pop("last_observation", None)
-            if pod_id:
-                latest["pod_id"] = pod_id
-            else:
-                latest.pop("pod_id", None)
-
-        _mutate_run_status(run_dir, mutate)
+        # Status follows the realization through the one launch writer, as its projection does.
+        _mutate_run_status(run_dir, lambda latest, realization=realization, realization_id=realization_id: point_status_at_launch(latest, realization_id, realization))
         append_run_event(run_dir, {"event": "runpod_create_intent_resolved", "timestamp": at, "executor": "runpod", "realization_id": realization_id,
                                    "pod_name": pod_name, "pod_ids": [pod["id"] for pod in pods]})
     return lines
@@ -787,9 +778,7 @@ def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]
     stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
     stage_path.parent.mkdir(exist_ok=True)
     _write_json(stage_path, as_record("stage", record))
-    status = _load_status(run_dir)
-    status["last_stage"] = str(stage_path.relative_to(run_dir))
-    _write_status(run_dir, status)
+    _mutate_run_status(run_dir, lambda latest: latest.update({"last_stage": str(stage_path.relative_to(run_dir))}))
     append_run_event(run_dir, {
         "event": "run_staged",
         **{key: value for key, value in record.items() if key != "entries"},
@@ -852,9 +841,7 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
     stage_path.parent.mkdir(exist_ok=True)
     _write_json(stage_path, as_record("stage", record))
-    status = _load_status(run_dir)
-    status["last_stage"] = str(stage_path.relative_to(run_dir))
-    _write_status(run_dir, status)
+    _mutate_run_status(run_dir, lambda latest: latest.update({"last_stage": str(stage_path.relative_to(run_dir))}))
     append_run_event(run_dir, {"event": "run_staged", **record})
     return {**record, "stage_record": str(stage_path.relative_to(run_dir))}
 
@@ -1393,12 +1380,13 @@ sleep infinity
         if intent_written and pod is None:
             # Every create so far was refused, so no Pod exists; settle the intent here.
             realization_path = run_dir / "realizations" / f"{realization_id}.json"
-            _write_json(realization_path, as_record("realization", {
+            cancelled = {
                 "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
                 "request": safe_request, "logs_path": log_path, "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
                 "error": "the capacity wait was cancelled; every create attempt had been refused, so no Pod exists", **kura_provenance(),
-            }))
-            _mutate_run_status(run_dir, lambda latest: latest.update({"state": "launch_failed", "last_realization": realization_reference(realization_id)}))
+            }
+            _write_json(realization_path, as_record("realization", cancelled))
+            _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, cancelled))
         raise ValueError("RunPod capacity wait cancelled; no Pod was created") from exc
     except Exception as exc:
         # An unconfirmed create, or any other failure, still ends the wait.
@@ -1423,12 +1411,7 @@ sleep infinity
             **kura_provenance(),
         }
         _write_json(realization_path, as_record("realization", realization))
-        status = _load_status(run_dir)
-        status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": realization_reference(realization_id)})
-        status.pop("pod_id", None)
-        status.pop("last_observation", None)
-        status.pop("capacity_wait", None)
-        _write_status(run_dir, status)
+        _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
         append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
         raise ValueError("RunPod launch failed for all configured cloud types: " + realization["error"])
     safe_used_request = dict(used_request)
@@ -1458,9 +1441,7 @@ sleep infinity
     }
     _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
-    status = _load_status(run_dir)
-    point_status_at_launch(status, realization_id, realization)
-    _write_status(run_dir, status)
+    _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
     if capacity_wait_started_at is not None:
         append_run_event(run_dir, {"event": "runpod_capacity_acquired", "timestamp": _now(), "executor": "runpod", "attempts": capacity_rounds + 1, "pod_id": pod_id})
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "realization_id": realization_id, "pod_id": pod_id})
@@ -1625,11 +1606,7 @@ sleep infinity
         failed_request["launch_attempts"] = launch_errors
         realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), **kura_provenance()}
         _write_json(realization_path, as_record("realization", realization))
-        status = _load_status(run_dir)
-        status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": realization_reference(realization_id)})
-        status.pop("pod_id", None)
-        status.pop("last_observation", None)
-        _write_status(run_dir, status)
+        _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
         append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
         raise ValueError("RunPod session launch failed for all configured cloud types: " + realization["error"])
     pod_id = pod.get("id")
@@ -1648,10 +1625,7 @@ sleep infinity
     realization_path.parent.mkdir(exist_ok=True)
     realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "lease_guard": "deadline_file", "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
     _write_json(realization_path, as_record("realization", realization))
-    status = _load_status(run_dir)
-    status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": realization_reference(realization_id), "pod_id": pod_id})
-    status.pop("last_observation", None)
-    _write_status(run_dir, status)
+    _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "purpose": purpose, "realization_id": realization_id, "pod_id": pod_id})
     return realization_id
 
