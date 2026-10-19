@@ -885,9 +885,12 @@ def _docker_cleanup_image() -> str:
     raise ValueError("no Kura training image is available locally for cleanup/fix-permissions; run a training once so its image is pulled")
 
 
-def _workspace_relative_target(workspace: Path, target: Path) -> str:
+def _workspace_relative_target(workspace: Path, target: Path, *, follow_link: bool = True) -> str:
+    """`target`'s path inside a container that mounts `workspace` at /workspace. A removal passes
+    `follow_link=False`: only the parent is resolved, so a link maps to the link itself and
+    `rm -rf` removes the link, never what it points to."""
     resolved_workspace = workspace.resolve()
-    resolved_target = target.resolve()
+    resolved_target = target.resolve() if follow_link else target.parent.resolve() / target.name
     try:
         relative = resolved_target.relative_to(resolved_workspace)
     except ValueError as exc:
@@ -898,7 +901,7 @@ def _workspace_relative_target(workspace: Path, target: Path) -> str:
 
 
 def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None:
-    container_targets = [_workspace_relative_target(workspace, target) for target in targets]
+    container_targets = [_workspace_relative_target(workspace, target, follow_link=False) for target in targets]
     if not container_targets:
         return
     image = _docker_cleanup_image()
@@ -924,7 +927,7 @@ def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None
 def _remove_tree(root: Path, target: Path) -> None:
     """Delete a directory or file below `root` (the workspace, or a Hugging Face cache outside it),
     falling back to a container for files a container left owned by root."""
-    _workspace_relative_target(root, target)
+    _workspace_relative_target(root, target, follow_link=False)
     try:
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
@@ -1065,7 +1068,7 @@ def _apply_reclaim(workspace: Path, inventory: dict[str, Any], action: dict[str,
 
         def remove(path: Path) -> None:
             if path.exists() or path.is_symlink():
-                _remove_tree(workspace if path.resolve().is_relative_to(workspace.resolve()) else hf_cache, path)
+                _remove_tree(workspace if path.parent.resolve().is_relative_to(workspace.resolve()) else hf_cache, path)
 
         paths = [Path(raw) for raw in item["paths"]]
         if kind == "hf-repository":

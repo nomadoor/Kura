@@ -24,6 +24,7 @@ from kura.images import PINNED_IMAGES
 from kura.reclaim import reclaim_inventory
 from kura.status_projection import project_status
 from kura.storage import RECLAIM_POINTER
+from tests.platform_support import POSIX_PATHS, posix_only
 
 MIB = 1024**2
 NO_DOCKER = {"daemon_reachable": False, "diagnosis": "Docker CLI was not found on PATH."}
@@ -630,6 +631,61 @@ class DockerContainerTests(unittest.TestCase):
                 self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "done", "--yes"])), 0)
             self.assertEqual(calls, [["docker", "rm", "c-done"]] * 2)
             self.assertFalse(run_dir.exists())
+class RootOwnedRemovalTests(unittest.TestCase):
+    """The container fallback for a root-owned file removes the path it was given, never a link's target."""
+
+    @posix_only(POSIX_PATHS)
+    def test_a_link_falls_back_to_removing_the_link_not_its_target(self) -> None:
+        from kura import cli
+
+        with _workspace() as root:
+            target = _write(root / "runs" / "other" / "outputs" / "keep.safetensors")
+            link = root / "runs" / "done" / "outputs" / "keep.safetensors"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(target)
+            calls: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with (
+                patch.object(Path, "unlink", side_effect=PermissionError("root-owned")),
+                patch("kura.cli._docker_cleanup_image", return_value="kura/image"),
+                patch("kura.cli.subprocess.run", side_effect=fake_run),
+            ):
+                cli._remove_tree(root, link)
+            self.assertEqual(calls[0][-1], "/workspace/runs/done/outputs/keep.safetensors")
+            self.assertTrue(target.is_file())
+
+    @posix_only(POSIX_PATHS)
+    def test_a_workspace_link_into_an_outside_cache_is_removed_through_the_workspace_mount(self) -> None:
+        # The root used to be picked from the resolved path, so the cache outside was mounted and its file removed.
+        from kura import cli
+
+        with _workspace() as root, tempfile.TemporaryDirectory() as elsewhere:
+            hf_cache = Path(elsewhere).resolve()
+            target = _write(hf_cache / "hub" / "models--org--m" / "blobs" / "x")
+            link = root / "runs" / "done" / "cache" / "model"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(target)
+            calls: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            item = {"kind": "run-scratch", "id": "done", "paths": [str(link)]}
+            with (
+                patch.object(Path, "unlink", side_effect=PermissionError("root-owned")),
+                patch("kura.cli._docker_cleanup_image", return_value="kura/image"),
+                patch("kura.cli.subprocess.run", side_effect=fake_run),
+            ):
+                cli._apply_reclaim(root, {"hf_cache": str(hf_cache)}, {"action": "free", "item": item})
+            self.assertIn(f"{root}:/workspace", calls[0])
+            self.assertEqual(calls[0][-1], "/workspace/runs/done/cache/model")
+            self.assertTrue(target.is_file())
+
 
 
 if __name__ == "__main__":
