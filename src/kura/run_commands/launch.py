@@ -15,7 +15,7 @@ from typing import Any
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.yamlio import YAMLError
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_never_requested, remote_job_started, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -200,6 +200,15 @@ def _run_remote_locked(
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         message = _safe_error(exc)
         print(f"cannot run remote job: {message}", file=sys.stderr)
+        realization_id = _latest_realization_id(run_dir)
+        if launched and not reattach and realization_id and remote_job_never_requested(run_dir, realization_id):
+            # Nothing was ever started on the Pod (its container did not come up, or setup failed
+            # before the job): it holds nothing to collect, so it goes now instead of billing.
+            safe_to_stop = True
+            print("the Pod never started its job, so it holds nothing to collect; deleting it now", file=sys.stderr)
+            _notify(notify_channels, subject=f"Kura run failed to start: {run_id}",
+                    body=f"Run {run_id}'s Pod never started its job:\n{message}\nThe Pod is being deleted; nothing was lost.")
+            return 1
         deadline_note = (
             "The Pod deletes itself (with its outputs) at the maximum lease after it started, collected or not, "
             "and earlier by the unattended wait: "

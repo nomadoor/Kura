@@ -397,6 +397,17 @@ def remote_job_started(run_dir: Path, realization_id: str) -> bool:
     )
 
 
+def remote_job_never_requested(run_dir: Path, realization_id: str) -> bool:
+    """Whether no remote job was ever asked to start on this realization's Pod: no start is recorded
+    and no start intent was written, so nothing on the Pod can be collected and it can go at once.
+
+    A written intent without a recorded start leaves the answer to the Pod (its pid file).
+    """
+    return not remote_job_started(run_dir, realization_id) and not (
+        run_dir / "realizations" / f"{realization_id}.remote-job-intent.json"
+    ).exists()
+
+
 def append_capacity_wait(run_dir: Path, realization_id: str, line: dict[str, Any]) -> None:
     """Append one capacity-wait fact; the last line says where the wait stands."""
     path = run_dir / "realizations" / f"{realization_id}{CAPACITY_WAIT_SUFFIX}"

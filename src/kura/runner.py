@@ -1025,7 +1025,7 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
 
 def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int | None:
     """Pick up a launch an earlier follower started, from its records."""
-    from kura.executors.common import remote_job_started
+    from kura.executors.common import remote_job_never_requested, remote_job_started
     from kura.run_commands.runpod_ssh import remote_job_pid
 
     from kura.executors.common import end_run
@@ -1055,6 +1055,9 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
                          f"Run {run_dir.name}'s Pod no longer exists; outputs not collected before it went are gone.")
             return 0
         return _remote(run_dir, request, details, reattach=True)
+    if remote_job_never_requested(run_dir, realization_id):
+        # Nothing was ever started on the Pod, so nothing on it can be collected (run-records ADR).
+        return _delete_unstarted_pod(workspace, run_dir, request, details)
     intent = _read_json(run_dir / "realizations" / f"{realization_id}.remote-job-intent.json")
     if intent:
         pid = remote_job_pid(run_dir, str(intent.get("pid_path")))  # raises when the Pod cannot be asked
@@ -1064,7 +1067,7 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
                 "intent": f"{realization_id}.remote-job-intent.json", "recovered": True,
             }))
             return _remote(run_dir, request, details, reattach=True)
-    # The job never started, so nothing on the Pod can be collected (run-records ADR).
+    # The Pod has no pid file: the job never started there.
     return _delete_unstarted_pod(workspace, run_dir, request, details)
 
 
