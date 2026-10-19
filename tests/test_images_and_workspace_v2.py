@@ -424,6 +424,20 @@ class DevelopmentImageTests(unittest.TestCase):
         self.assertIn("SD_SCRIPTS_REF=690ea7f96c23182352ec63def76d431c6120bd2f", build)
         self.assertEqual(build[build.index("--tag") + 1], "kura-sd-scripts:dev")
 
+    def test_the_build_context_is_only_the_docker_directory(self) -> None:
+        # The checkout is the build context, and a checkout used as a workspace holds runs and model caches:
+        # .dockerignore sends only docker/, which is all any Dockerfile copies from.
+        rules = [line.strip() for line in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+                 if line.strip() and not line.startswith("#")]
+        self.assertEqual(rules, ["*", "!docker"])
+        dockerfiles = sorted((ROOT / "docker").glob("*/Dockerfile"))
+        self.assertTrue(dockerfiles)
+        for dockerfile in dockerfiles:
+            for line in dockerfile.read_text(encoding="utf-8").splitlines():
+                if line.startswith(("COPY ", "ADD ")) and "--from=" not in line:
+                    with self.subTest(dockerfile=dockerfile.parent.name, line=line):
+                        self.assertTrue(all(source.startswith("docker/") for source in line.split()[1:-1] if not source.startswith("--")))
+
     def test_build_refuses_inside_another_checkout_and_names_the_one_it_builds(self) -> None:
         # An editable install builds its own checkout's docker/ files; a worktree's are another checkout's.
         with tempfile.TemporaryDirectory() as directory:

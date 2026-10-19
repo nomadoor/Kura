@@ -1,0 +1,4 @@
+# `kura image build` sends the checkout as build context, and a checkout used as a workspace holds runs
+# and model caches. Every Dockerfile copies only from docker/, so nothing else is sent.
+*
+!docker

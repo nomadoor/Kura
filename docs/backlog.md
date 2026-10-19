@@ -39,6 +39,9 @@ why, so it is not raised again.
 
 - 2026-10-19 | launch disk | When one WSL virtual-disk store holds all of a drive's writes and a `/mnt` store on that drive holds none, the drive check repeats the virtual disk's own check, so one shortage can show as two errors; and the plan shows each store's own requirement but not the drive's total | re-check of the shared Windows drive check | -
 - 2026-10-19 | doctor disk | `kura doctor disk` groups stores by `backing_id` alone, so a WSL virtual disk on D: and a `/mnt/d` store show as one entry with the first store's kind and Linux free space, which can hide the virtual disk's own limit (display only) | review of the shared Windows drive check | P8
+
+
+- 2026-10-19 | images | The build-context test reads only unindented `COPY `/`ADD ` lines, so a lower-case instruction or a `RUN --mount=type=bind,source=...` from outside docker/ would pass it and fail the build instead | review of the build context | -
 - 2026-10-19 | tests | The moved-lease-during-retry test stubs `kura_pod_self_delete`, so the real `kura_lease_moved` check never runs in a test, and it runs under bash, not sh; drive the real self-delete against the 503 sandbox with a stubbed sleep that moves the deadline | review of the self-delete retry | P6
 - 2026-10-19 | RunPod lease | A delete attempt already in flight when `kura run lease` moves the deadline can still delete the Pod (a window of one attempt, at most about 60 s) | review of the self-delete retry | P6
 - 2026-10-19 | render cost | `kura render launch` has no way to shorten the RunPod lease, so the cost ceiling of a render that takes minutes is computed over the 12 h default lease (about $7 on an A40) | ComfyUI v0.41.3 upgrade | -

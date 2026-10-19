@@ -1568,8 +1568,10 @@ def cmd_image_build(args: argparse.Namespace) -> int:
         )
         return 1
     # A build writes its layers where Docker keeps its data. The accident is that disk filling up,
-    # so the build stops below the reserve a local launch keeps (docker.min_free_gb). A
-    # development checkout may build outside any workspace; there the default floor applies.
+    # so a build starts only while that disk keeps the reserve a local launch keeps
+    # (docker.min_free_gb); nothing watches it once `docker build` runs. A development checkout
+    # may build outside any workspace; there the default floor applies. The context is the
+    # checkout, narrowed to docker/ by .dockerignore.
     try:
         config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
         docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
