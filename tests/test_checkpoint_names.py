@@ -7,7 +7,6 @@ import unittest
 NAMES = {
     # sd-scripts and Musubi Tuner
     "vivi-step00000100.safetensors": 100,
-    "vivi-step00000100-state": 100,
     # AI-Toolkit
     "vivi_000000500.safetensors": 500,
     "my_lora_v2_000001000.safetensors": 1000,

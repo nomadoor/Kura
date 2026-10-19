@@ -904,16 +904,16 @@ def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:
     return adapter.training_state(run)
 
 
-# The step a trainer writes at the end of a checkpoint or state directory name, as the
-# container scripts read it: `-step` plus eight or more digits (sd-scripts, Musubi Tuner, the
-# state directories) or `_` plus exactly nine digits (AI-Toolkit), right before
-# `.safetensors` or `-state`. Anything else is part of the name: a slug such as `lr-step2`,
-# or a run ID's four hex digits. Final weights carry none.
-_CHECKPOINT_STEP = re.compile(r"(?:-step(\d{8,})|_(\d{9}))(?:\.safetensors|-state)\Z", re.IGNORECASE)
+# The step a trainer writes at the end of a checkpoint name, as the container scripts read it:
+# `-step` plus eight or more digits (sd-scripts, Musubi Tuner) or `_` plus exactly nine digits
+# (AI-Toolkit), right before `.safetensors`. Anything else is part of the name: a slug such as
+# `lr-step2`, or a run ID's four hex digits. Final weights carry none. A state directory's step
+# is read by `state_directory_step`, which knows the run's output name.
+_CHECKPOINT_STEP = re.compile(r"(?:-step(\d{8,})|_(\d{9}))\.safetensors\Z", re.IGNORECASE | re.ASCII)
 
 
 def checkpoint_step(name: str) -> int | None:
-    """The training step in a checkpoint or state directory name, for every backend; None for final weights."""
+    """The training step in a checkpoint's file name, for every backend; None for final weights."""
     match = _CHECKPOINT_STEP.search(name)
     if match is None:
         return None
