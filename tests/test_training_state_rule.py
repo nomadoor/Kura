@@ -83,6 +83,31 @@ class OneRuleTests(unittest.TestCase):
                 self.assertEqual("--save_state" in argv, supported)
 
 
+
+class PublisherRuleTests(unittest.TestCase):
+    def test_the_publishers_keep_state_exactly_when_the_compiled_command_was_built_to(self) -> None:
+        # Collection holds a run to what its frozen command does, even when the live rule (here
+        # the run's own policy) says otherwise, as after a Kura upgrade between compile and collection.
+        from tests.test_state_save_parity import StatePublicationParityTests
+        from tests.test_resume_steps import sd_scripts_run
+        from kura.training_artifacts import publish_completed_training_states, publish_training_state_candidate
+
+        for frozen, live in ((False, True), (True, False)):
+            with self.subTest(frozen=frozen, live=live), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = sd_scripts_run()
+                run["recovery"] = {"training_state": {"enabled": live, "keep_generations": 2}}
+                run_dir = root / "runs" / "derived"
+                (run_dir / "resolved").mkdir(parents=True)
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+                (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"training_state_managed": frozen}), encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+                candidate = StatePublicationParityTests._write_state(None, run_dir / "outputs" / "derived-step0200-state", 200)
+                self.assertEqual(training_state_capture_required(run_dir), frozen)
+                single = publish_training_state_candidate(root, run_dir, candidate, 200)
+                self.assertEqual(single is not None, frozen)
+                self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [200] if frozen else [])
+
 class RuleEdgeTests(unittest.TestCase):
     def test_a_custom_command_and_a_manifest_compiled_before_managed_state_keep_no_state(self) -> None:
         custom = base_run("sdxl", "lora")

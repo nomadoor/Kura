@@ -997,6 +997,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "model": {"base": "example/model"},
                 "datasets": [{"id": "tiny", "digest": "sha256:data"}],
                 "recipe": {"steps": 20, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
@@ -1917,6 +1918,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "model": {"base": "example/model"},
                 "datasets": [{"id": "tiny", "digest": "sha256:data"}],
                 "recipe": {"steps": 20, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "failed"}), encoding="utf-8")
@@ -1970,6 +1972,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "model": {"base": "example/model"},
                 "datasets": [{"id": "tiny", "digest": "sha256:data"}],
                 "recipe": {"steps": 2, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             periodic = run_dir / "outputs" / "source-step00000002-state"
@@ -2564,6 +2567,7 @@ class ResumeRunTests(unittest.TestCase):
                 "model": {"base": "example/model"},
                 "datasets": [{"id": "tiny", "digest": "sha256:data"}],
                 "recipe": {"steps": 20, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             realization = {"id": "launch", "container": {"id": "container-1"}}

@@ -1196,10 +1196,10 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     complete save at a step is kept.
     """
     run, status, runtime_identity = _published_run_context(run_dir)
+    if not frozen_training_state_managed(run, _frozen_command_lock(run_dir)):
+        return None
     policy = training_state_policy(run)
     contract = compiled_training_state_contract(run_dir, run)
-    if not training_state_managed(run, contract):
-        return None
     native_format = contract["native_format"]
     required = contract["required_files"]
     restoration = contract["restoration_contract"]
@@ -1278,10 +1278,9 @@ def publish_completed_training_states(
 ) -> list[dict[str, Any]]:
     """Publish structurally complete step-state directories already on local disk."""
 
-    run, _, _ = _published_run_context(run_dir)
-    contract = compiled_training_state_contract(run_dir, run)
-    if not training_state_managed(run, contract):
+    if not training_state_capture_required(run_dir):
         return []
+    run, _, _ = _published_run_context(run_dir)
     output_name = run_output_name(run)
     published: list[dict[str, Any]] = []
     outputs = run_dir / "outputs"
