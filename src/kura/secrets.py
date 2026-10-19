@@ -212,6 +212,12 @@ def bearer_request(url: str, token: str | None, *, method: str, data: bytes | No
     return request
 
 
+def container_secrets_record() -> dict[str, list[str]]:
+    """What a realization says about the secrets Kura sends its container: their names, never
+    values, in a list, since a text value under a secret-named key is hidden from every record."""
+    return {"container_secrets": sorted(container_secret_env())}
+
+
 def known_names() -> list[str]:
     """Names `kura secrets set` accepts: the declared variables."""
     return [variable.name for variable in USER_VARIABLES]

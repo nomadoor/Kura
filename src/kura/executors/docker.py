@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.dataset_handoff import handoff_was_frozen
-from kura.secrets import container_secret_env, declared_secret, undeclared_secret_refusal
+from kura.secrets import container_secret_env, container_secrets_record, undeclared_secret_refusal
 from kura.install_source import kura_provenance
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
 from kura.dataset_handoff import (
@@ -525,7 +525,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "output_baseline": output_baseline,
         **({"dataset_view": dataset_view} if dataset_view is not None else {}),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": True,
-        "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"},
+        **container_secrets_record(),
         "platform": platform.platform(), "host": platform.node(), **kura_provenance(), "preflight": preflight,
     }
     with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):
