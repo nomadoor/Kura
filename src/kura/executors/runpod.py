@@ -794,13 +794,20 @@ def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int 
     return {**kura_container_env(workspace_path=workspace_path, run_id=run_id), "KURA_MAX_LEASE_SEC": str(max_lease_sec)}
 
 
+def _local_reserve_bytes(run_dir: Path, config: dict[str, Any]) -> int:
+    # Imported here: kura.run_commands.plan imports this module.
+    from kura.run_commands.plan import local_reserve_bytes
+
+    return local_reserve_bytes(run_dir, config)
+
+
 def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     """Stage exactly the files a manifest-v2 run's frozen handoff selected."""
     inventory = build_transfer_inventory(workspace, run_dir, run)
     estimate = estimate_transfer(inventory)
     transfer_dir = run_dir / "transfer"
     transfer_dir.mkdir(exist_ok=True)
-    ensure_free_bytes(transfer_dir, estimate["local_stage_free_bytes"], context="RunPod stage", config=config)
+    ensure_free_bytes(transfer_dir, _local_reserve_bytes(run_dir, config) + estimate["local_stage_free_bytes"], context="RunPod stage", config=config)
     archive_name = f"kura-upload-{run_dir.name}.tar"
     archive_path = transfer_dir / archive_name
     manifest_path = transfer_dir / f"kura-upload-{run_dir.name}.manifest.json"
@@ -874,6 +881,8 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     staged_at = _now()
     transfer_dir = run_dir / "transfer"
     transfer_dir.mkdir(exist_ok=True)
+    # Compressed, the archive is at most about the payload (model weights barely compress).
+    ensure_free_bytes(transfer_dir, _local_reserve_bytes(run_dir, config) + total_bytes, context="RunPod stage", config=config)
     archive_name = f"kura-upload-{run_dir.name}.tar.gz"
     archive_path = transfer_dir / archive_name
     with tarfile.open(archive_path, "w:gz") as archive:

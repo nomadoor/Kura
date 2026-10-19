@@ -382,6 +382,19 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             self.assertFalse(any((run_dir / "transfer").iterdir()))
 
 
+    def test_stage_keeps_the_local_reserve_besides_the_archive(self) -> None:
+        # The archive fits, but writing it would leave less than the reserve a local run keeps.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, _ = self._compiled(root)
+            with (
+                patch("kura.storage.is_wsl", return_value=False),
+                patch("kura.storage.shutil.disk_usage", return_value=SimpleNamespace(free=5 * 1024**3, total=1000 * 1024**3)),
+                self.assertRaisesRegex(ValueError, "RunPod stage requires at least 7.1 GiB"),
+            ):
+                stage_runpod(workspace=root, run_dir=run_dir, config={**self._workspace_config(), "docker": {"min_free_gb": 7}})
+            self.assertFalse(any((run_dir / "transfer").iterdir()))
+
     def test_plan_reads_write_roots_in_the_command_lock_shape(self) -> None:
         from kura.run_commands.plan import _command_write_roots
 

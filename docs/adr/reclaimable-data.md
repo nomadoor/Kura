@@ -36,9 +36,10 @@ fills, and this one decides how a user gets space back.
 **1. Every reclaimable item has one class, decided by what deleting it costs
 the user.** One owner decides the class.
 
-- **free**: costs nothing. A run's `cache/`, `tmp/`, and `.cache/` (less a
-  directory where a trainer writes weights before Kura publishes them, such
-  as Anima LoRA's `cache/sd-scripts/native-output`), leftover
+- **free**: costs nothing. A run's `cache/`, `tmp/`, `.cache/`, and
+  `transfer/` (the RunPod upload archive of its inputs), less a directory
+  where a trainer writes weights before Kura publishes them (such as Anima
+  LoRA's `cache/sd-scripts/native-output`), leftover
   dataset views, Docker build cache, the stopped containers of this
   workspace's finished runs (a container whose labels name a run and a
   realization it recorded; never an unfinished run's or another
@@ -111,8 +112,8 @@ apply. Nothing cleans up in the background.
   reclaimable totals per class, from the same owner as the listing.
 - `--keep-last 30` and `kura run prune --keep 30` are retired: the listing
   shows every finished run, and recency only sorts it.
-- `runpod.download_min_free_gb` is retired: RunPod downloads and pulls keep
-  the same local reserve as a local run.
+- `runpod.download_min_free_gb` is retired: RunPod stages, downloads, and
+  pulls keep the same local reserve as a local run.
 - Of the two commands that deleted whole runs, one remains.
 
 ## Alternatives considered
@@ -146,6 +147,6 @@ apply. Nothing cleans up in the background.
 - A source run's resume data can now be freed. Resuming that run afterwards
   is refused as before, because no recoverable state exists.
 - Promises: P7 (nothing a user made is deleted without their yes, and outputs
-  never by default), P8 (the RunPod pulls keep the one reserve), P9 (archives
+  never by default), P8 (the RunPod stage and pulls keep the one reserve), P9 (archives
   and removals are recorded), and P11 (each pointer and refusal names the
   next command).

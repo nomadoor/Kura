@@ -42,7 +42,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, kura_env_exports, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, settle_finished_training
 from kura.run_commands.common import _load_frozen_command, _safe_error
-from kura.run_commands.plan import local_reserve_gib
+from kura.run_commands.plan import local_reserve_bytes
 from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_training_state_candidate, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state
 from kura.runtime_io import validated_write_roots
 
@@ -87,19 +87,6 @@ def _link_or_copy_snapshot_file(
             config=config,
         )
         shutil.copy2(source, target)
-
-
-def _local_reserve_bytes(run_dir: Path, config: dict[str, Any]) -> int:
-    """The reserve a RunPod download or pull keeps on the local disk: the one a local run keeps
-    (`local_reserve_gib`), read from the run's frozen manifest; docs/adr/reclaimable-data.md retired
-    the separate `runpod.download_min_free_gb`."""
-    try:
-        run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-    except (OSError, ValueError, YAMLError):
-        run = {}
-    docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
-    reserve_gib, _ = local_reserve_gib(run if isinstance(run, dict) else {}, docker)
-    return int(reserve_gib * 1024**3)
 
 
 def _validated_snapshot_manifest(items: Any) -> list[dict[str, Any]]:
@@ -589,7 +576,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         if not shutil.which("runpodctl"):
             raise ValueError("runpodctl is not installed locally; install it before downloading")
         config = _workspace_config()
-        reserve = _local_reserve_bytes(run_dir, config)
+        reserve = local_reserve_bytes(run_dir, config)
         details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
         _start_ssh_master(details)
         _mark_runpod_outputs_collecting(details, run_id)
@@ -945,7 +932,7 @@ def _pull_remote_training_state_items(
         total_size = sum(entry.get("size") for entry in files if isinstance(entry, dict) and isinstance(entry.get("size"), int))
         config = _workspace_config()
         # Twice the state: the pulled `.partial` copy stays on disk while publish_training_state copies it into the store.
-        ensure_free_bytes(pending_root, _local_reserve_bytes(run_dir, config) + 2 * total_size, context="RunPod training-state pull", config=config)
+        ensure_free_bytes(pending_root, local_reserve_bytes(run_dir, config) + 2 * total_size, context="RunPod training-state pull", config=config)
         partial = pending_root / f".{name}.partial"
         if partial.exists():
             shutil.rmtree(partial)
@@ -1005,7 +992,7 @@ def _pull_remote_output_items(
     if not items:
         return []
     config = _workspace_config()
-    reserve = _local_reserve_bytes(run_dir, config)
+    reserve = local_reserve_bytes(run_dir, config)
     destination = run_dir / "outputs"
     destination.mkdir(parents=True, exist_ok=True)
     try:

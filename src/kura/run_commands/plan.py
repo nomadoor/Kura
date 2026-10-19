@@ -967,6 +967,19 @@ def local_reserve_gib(run: dict[str, Any], docker_config: dict[str, Any]) -> tup
     return reserve, setting
 
 
+def local_reserve_bytes(run_dir: Path, config: dict[str, Any]) -> int:
+    """The reserve a RunPod stage, download, or pull keeps on the local disk: the one a local run keeps
+    (`local_reserve_gib`), read from the run's frozen manifest; docs/adr/reclaimable-data.md retired
+    the separate `runpod.download_min_free_gb`."""
+    try:
+        run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+    except (OSError, ValueError, YAMLError):
+        run = {}
+    docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    reserve_gib, _ = local_reserve_gib(run if isinstance(run, dict) else {}, docker)
+    return int(reserve_gib * 1024**3)
+
+
 def local_reserve_problem(
     workspace: Path, run: dict[str, Any], config: dict[str, Any], docker_data: Path | None,
 ) -> tuple[str | None, list[str]]:

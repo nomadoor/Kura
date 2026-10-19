@@ -565,14 +565,25 @@ class ReclaimPointerTests(unittest.TestCase):
                 self.assertTrue(runner._disk_watch(root, run_dir, request, set(), {"root": None}))
         self.assertTrue(stop.call_args.kwargs["reason"].endswith(RECLAIM_POINTER))
 
+    def test_a_finished_runs_staged_upload_is_free(self) -> None:
+        # The RunPod upload archive is the run's inputs again, in one tar; nothing reads it once the run ended.
+        with _workspace() as root:
+            done = _run(root, "done", ended="2026-10-01T00:00:00+00:00")
+            running = _run(root, "running", state="running")
+            for run_dir in (done, running):
+                _write(run_dir / "transfer" / f"kura-upload-{run_dir.name}.tar", b"t" * 100)
+            self.assertEqual(_cleanup(["--yes"])[0], 0)
+            self.assertFalse((done / "transfer").exists())
+            self.assertTrue((running / "transfer" / "kura-upload-running.tar").is_file())
+
     def test_runpod_pulls_keep_the_local_reserve(self) -> None:
-        from kura.run_commands import runpod_ssh
+        from kura.run_commands.plan import local_reserve_bytes
 
         with _workspace({"docker": {"min_free_gb": 7}}) as root:
             run_dir = _run(root, "remote")
             _write(run_dir / "resolved" / "manifest.lock.yaml", yaml.safe_dump({"type": "train", "safety": {"max_run_disk_gb": 9}}))
-            self.assertEqual(runpod_ssh._local_reserve_bytes(run_dir, {"docker": {"min_free_gb": 7}}), 9 * 1024**3)
-            self.assertEqual(runpod_ssh._local_reserve_bytes(root / "runs" / "missing", {"docker": {"min_free_gb": 7}}), 7 * 1024**3)
+            self.assertEqual(local_reserve_bytes(run_dir, {"docker": {"min_free_gb": 7}}), 9 * 1024**3)
+            self.assertEqual(local_reserve_bytes(root / "runs" / "missing", {"docker": {"min_free_gb": 7}}), 7 * 1024**3)
 
 
 def _container(container_id: str, run_id: str | None, *, state: str = "exited", realization: str = "r1") -> dict[str, Any]:
