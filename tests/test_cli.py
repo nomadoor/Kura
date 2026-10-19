@@ -2084,7 +2084,8 @@ class RunPlanTests(unittest.TestCase):
             }
         )
         self.assertEqual(payload["bytes"], 0)
-        self.assertIn("invalid backend model download spec", payload["unknown"])
+        self.assertTrue(payload["invalid"])
+        self.assertEqual(payload["unknown"], [])
 
     def test_runpod_plan_counts_remote_downloads_even_when_local_cache_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

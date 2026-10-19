@@ -190,6 +190,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ):
                 BACKENDS[backend].download_specs(run)
 
+    def test_the_launch_preflight_names_the_doubled_role_of_a_compiled_run(self) -> None:
+        from kura.run_commands.plan import collect_run_preflight, enforce_preflight_errors
+
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                run["safety"] = {"allow_large_model_downloads": True}
+                with self.assertRaisesRegex(ValueError, f"model-downloads: .*model_downloads.{role} and model_paths.{role} both name"):
+                    enforce_preflight_errors(collect_run_preflight(run, Path(directory), config={}, executor="docker"))
+
     def test_a_bundle_role_may_still_be_pointed_at_your_own_file(self) -> None:
         run = {"id": "r", "type": "train", "backend": {"name": "musubi-tuner", "config": {
             "architecture": "krea2", "model_bundle": "krea2-raw", "model_paths": {"vae": "/workspace/models/vae.safetensors"},

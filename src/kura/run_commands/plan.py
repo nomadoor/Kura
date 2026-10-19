@@ -338,8 +338,9 @@ def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | N
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
     try:
         specs, _ = adapter.download_specs(run)
-    except ValueError:
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid backend model download spec"], "probe_failures": []}
+    except ValueError as exc:
+        # The plan and the launch preflight name what is wrong; no size can be counted for it.
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": [], "invalid": str(exc)}
     download_total = 0
     size_total = 0
     cached_total = 0
@@ -441,6 +442,10 @@ def _model_download_preflight_report(
         records.append(_preflight_record("model-acquisition", "warning", trainer_downloads, "run.yaml"))
         if not any(item.get("acquisition") == "kura" for item in requirements):
             return records
+    invalid = download_estimate.get("invalid")
+    if isinstance(invalid, str) and invalid:
+        records.append(_preflight_record("model-downloads", "error", invalid, "run.yaml"))
+        return records
     probe_failures = download_estimate.get("probe_failures")
     if isinstance(probe_failures, list) and probe_failures:
         first = probe_failures[0]
@@ -748,7 +753,7 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
         payload = _runpod_launch_disk_preflight(run, runpod_config, download_estimate)
     except ValueError as exc:
         return [_preflight_record("runpod-disk", "error", str(exc), "workspace.yaml")]
-    incomplete = bool(download_estimate.get("unknown") or download_estimate.get("probe_failures"))
+    incomplete = bool(download_estimate.get("unknown") or download_estimate.get("probe_failures") or download_estimate.get("invalid"))
     suffix = "; estimate is incomplete because some model sizes are unavailable" if incomplete else ""
     fits = payload["estimated_write_bytes"] <= payload["container_disk_bytes"]
     verdict = "" if fits else (
