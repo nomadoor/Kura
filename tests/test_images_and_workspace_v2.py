@@ -303,9 +303,18 @@ class WorkspaceSchemaTests(unittest.TestCase):
             ({"storage": {"host_drive": " D: "}}, "storage.host_drive must be a drive letter and colon"),
             ({"runner": {"local_slots": 0}}, "runner.local_slots must be at least 1"),
             ({"runpod": {"cloud_type": "ANY"}}, "runpod.cloud_type"),
+            ({"comfyui": {"endpoint": "http://me:pw-1234567@127.0.0.1:8188"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
+            ({"comfyui": {"endpoint": "http://me@127.0.0.1:8188"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
+            ({"comfyui": {"endpoint": "http://127.0.0.1:8188/?token=pw-1234567"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
+            ({"comfyui": {"endpoint": "http://127.0.0.1:8188#pw-1234567"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
+            ({"comfyui": {"endpoint": "http://127.0.0.1:8188/?"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
         ):
-            with self.subTest(config=config), self.assertRaisesRegex(ValueError, message):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, message) as caught:
                 validate_workspace_config({"schema_version": 2, **config})
+            # The refusal never repeats the credential it refuses.
+            self.assertNotIn("pw-1234567", str(caught.exception))
+        for endpoint in ("https://comfy.example.com:8443/base", "http://[::1]:8188", "http://127.0.0.1:8188/a@b"):
+            validate_workspace_config({"schema_version": 2, "comfyui": {"endpoint": endpoint}})
         migrated, notes = migrate_workspace_config({"schema_version": 2, "storage": {"host_drive": "e"}, "runpod": {"cloud_type": "SECURE"}})
         self.assertEqual(migrated, {"schema_version": 2, "storage": {"host_drive": "E:"}, "runpod": {"cloud_types": ["SECURE"]}})
         migrated, _ = migrate_workspace_config({"schema_version": 2, "runpod": {"cloud_type": "ANY"}})

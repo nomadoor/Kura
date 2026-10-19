@@ -215,10 +215,11 @@ class InitCommandTests(unittest.TestCase):
             (root / "workspace.yaml").write_text("schema_version: 2\ncomfyui:\n  endpoint: http://user:hunter2-secret@10.0.0.5:8188\n", encoding="utf-8")
             with patch("kura.doctor.shutil.which", return_value=None), patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")):
                 gaps = readiness_gaps(root)
-        comfy = [gap for gap in gaps if gap.startswith("ComfyUI")]
+        # The endpoint is refused by its one rule, which never repeats the value, and not probed.
+        comfy = [gap for gap in gaps if "comfyui.endpoint" in gap or gap.startswith("ComfyUI")]
         self.assertEqual(len(comfy), 1)
         self.assertNotIn("hunter2-secret", comfy[0])
-        self.assertIn("10.0.0.5:8188", comfy[0])
+        self.assertIn("must not hold a user name, password, query, or fragment", comfy[0])
 
     def test_render_new_creates_only_draft_files(self) -> None:
         previous = Path.cwd()
@@ -3566,20 +3567,6 @@ class RenderNotificationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "object_info is unavailable"):
             _ensure_lora_stage_visible(FailingClient(), "http://127.0.0.1:8190", plan)
-
-    def test_lora_visibility_check_redacts_endpoint_userinfo(self) -> None:
-        class FailingClient:
-            def lora_names(self) -> set[str]:
-                raise RuntimeError("object_info unavailable")
-
-        plan = {"target": "/tmp/Kura_tmp/example.safetensors", "lora_name": "Kura_tmp/example.safetensors"}
-
-        with self.assertRaises(ValueError) as caught:
-            _ensure_lora_stage_visible(FailingClient(), "http://user:secret@127.0.0.1:8190", plan)
-
-        message = str(caught.exception)
-        self.assertIn("http://***@127.0.0.1:8190", message)
-        self.assertNotIn("secret", message)
 
     def test_lora_visibility_check_retries_once_for_stale_object_info(self) -> None:
         class EventuallyVisibleClient:
@@ -9591,25 +9578,29 @@ class RunPodLifecycleTests(unittest.TestCase):
             urlopen.assert_not_called()
             self.assertIn("unsupported comfyui.endpoint scheme", payload["diagnostics"]["object_info_error"])
 
-    def test_doctor_comfyui_redacts_endpoint_userinfo(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("comfyui: {endpoint: 'http://user:pa55@example.invalid:8188?debug=abc123#frag123'}\n", encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("connection refused")), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                    code = cmd_doctor_comfyui(argparse.Namespace())
-            finally:
-                os.chdir(previous)
-            payload_text = stdout.getvalue()
-            payload = json.loads(payload_text)
-            self.assertEqual(code, 1)
-            self.assertNotIn("pa55", payload_text)
-            self.assertNotIn("abc123", payload_text)
-            self.assertNotIn("frag123", payload_text)
-            self.assertEqual(payload["diagnostics"]["endpoint"], "http://***@example.invalid:8188")
-            self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
+    def test_doctor_comfyui_refuses_an_endpoint_with_credentials_without_repeating_them(self) -> None:
+        for written, option in (
+            ("comfyui: {endpoint: 'http://user:pa55word@example.invalid:8188?debug=abc123'}\n", None),
+            ("schema_version: 2\n", "http://user:pa55word@example.invalid:8188"),
+        ):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "workspace.yaml").write_text(written, encoding="utf-8")
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with patch("kura.doctor.urllib.request.urlopen") as urlopen, \
+                            patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
+                            patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                        code = cmd_doctor_comfyui(argparse.Namespace(endpoint=option))
+                finally:
+                    os.chdir(previous)
+                output = stdout.getvalue() + stderr.getvalue()
+                self.assertEqual(code, 1)
+                urlopen.assert_not_called()
+                self.assertIn("must not hold a user name, password, query, or fragment", output)
+                self.assertNotIn("pa55word", output)
+                self.assertNotIn("abc123", output)
 
     def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
         class FakeResponse:

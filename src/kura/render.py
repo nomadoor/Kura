@@ -25,7 +25,7 @@ from kura.records import realization_reference, record as as_record
 from kura.fsio import atomic_write_yaml as dump_yaml
 from kura.images import effective_image
 from kura.run_envelope import gpu_choice_problem, render_executor
-from kura.workspace import plain_relative_folder, validate_workspace_config
+from kura.workspace import comfyui_endpoint_problem, plain_relative_folder, validate_workspace_config
 
 
 # Promptset keys Kura owns directly. Every other key in a promptset item must be
@@ -854,7 +854,6 @@ def _ensure_model_patch_stage_visible(client: Any, endpoint: str, plan: dict[str
     if not plan:
         return
     name = str(plan.get("model_patch_name", ""))
-    safe_endpoint = _redact_url_userinfo(endpoint)
     try:
         if name in client.model_patch_names():
             return
@@ -862,8 +861,8 @@ def _ensure_model_patch_stage_visible(client: Any, endpoint: str, plan: dict[str
         if name in client.model_patch_names():
             return
     except RuntimeError as exc:
-        raise ValueError(f"ComfyUI model-patch visibility could not be checked; endpoint={safe_endpoint}; error={exc}") from exc
-    raise ValueError(f"ComfyUI model-patch stage is not visible; endpoint={safe_endpoint}; model_patch_name={name}")
+        raise ValueError(f"ComfyUI model-patch visibility could not be checked; endpoint={endpoint}; error={exc}") from exc
+    raise ValueError(f"ComfyUI model-patch stage is not visible; endpoint={endpoint}; model_patch_name={name}")
 
 
 def _lora_name_visible(client: Any, lora_name: str) -> bool:
@@ -872,18 +871,9 @@ def _lora_name_visible(client: Any, lora_name: str) -> bool:
     return lora_name in client.lora_names()
 
 
-def _redact_url_userinfo(value: str) -> str:
-    parsed = urllib.parse.urlparse(value)
-    if "@" not in parsed.netloc:
-        return urllib.parse.urlunparse(parsed)
-    host = parsed.netloc.rsplit("@", 1)[1]
-    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}"))
-
-
 def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] | None) -> None:
     if not plan:
         return
-    safe_endpoint = _redact_url_userinfo(endpoint)
     try:
         if _lora_name_visible(client, str(plan.get("lora_name", ""))):
             return
@@ -893,13 +883,13 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
     except RuntimeError as exc:
         raise ValueError(
             "ComfyUI LoRA visibility could not be checked because object_info is unavailable. "
-            f"endpoint={safe_endpoint}; error={exc}. "
-            f"Run `kura doctor comfyui --endpoint {safe_endpoint}` to check the endpoint."
+            f"endpoint={endpoint}; error={exc}. "
+            f"Run `kura doctor comfyui --endpoint {endpoint}` to check the endpoint."
         ) from exc
     raise ValueError(
         "ComfyUI LoRA stage is not visible from the configured endpoint. "
-        f"endpoint={safe_endpoint}; lora_name={plan.get('lora_name')}; lora_dir={Path(str(plan.get('target'))).parent.parent}. "
-        f"Run `kura doctor comfyui --endpoint {safe_endpoint} --probe-stage` to verify staging, "
+        f"endpoint={endpoint}; lora_name={plan.get('lora_name')}; lora_dir={Path(str(plan.get('target'))).parent.parent}. "
+        f"Run `kura doctor comfyui --endpoint {endpoint} --probe-stage` to verify staging, "
         "then set comfyui.lora_dir to a LoRA directory used by that ComfyUI instance and recompile the render run."
     )
 
@@ -1239,7 +1229,7 @@ def _refuse_missing_models(missing: list[dict[str, Any]], endpoint: str) -> None
     if missing:
         labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
         raise ValueError(
-            f"ComfyUI at {_redact_url_userinfo(endpoint)} does not have model(s) this workflow loads: {labels}. "
+            f"ComfyUI at {endpoint} does not have model(s) this workflow loads: {labels}. "
             "Add them to that ComfyUI's model folders or change the workflow; a local render never downloads models."
         )
 
@@ -1279,6 +1269,8 @@ def _validate_render_run_fields(run: dict[str, Any]) -> None:
     generator = run.get("generator") if isinstance(run.get("generator"), dict) else {}
     if generator.get("name", "comfyui") != "comfyui":
         problems.append(f"generator.name must be comfyui, not {generator['name']!r}")
+    if problem := comfyui_endpoint_problem(generator.get("endpoint"), where="generator.endpoint"):
+        problems.append(problem)
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     if executor.get("name", "local") not in ("local", "runpod"):
         problems.append(f"executor.name must be local or runpod, not {executor['name']!r}")
@@ -1426,7 +1418,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             try:
                 object_info = _fetch_endpoint_object_info(endpoint)
             except Exception as exc:
-                print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {_redact_url_userinfo(endpoint)}: {exc}", flush=True)
+                print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {endpoint}: {exc}", flush=True)
             else:
                 visible, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
                 _refuse_missing_models(missing, endpoint)
@@ -1504,6 +1496,9 @@ def launch_render(
         legacy_cases = _legacy_render_cases(legacy_items, legacy_checkpoint, patches=frozen.get("workflow_patches", {}), default_seed=frozen.get("render", {}).get("default_seed"), workflow_fixed=workflow_fixed)
         cases = _indexed_cases(legacy_cases)
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
+    # A run compiled before such endpoints were refused cannot reach ComfyUI either.
+    if problem := comfyui_endpoint_problem(endpoint, where="generator.endpoint"):
+        raise ValueError(f"{problem}; compile a new run from a corrected run.yaml")
     image_names = image_patch_names(frozen.get("workflow_patches", {}))
     if resolved_executor == "runpod":
         expected_images: set[str] = set()
@@ -1633,7 +1628,7 @@ def launch_render(
         if expected_identity.get("sha256") != observed_identity.get("sha256"):
             raise ValueError(
                 "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
-                f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
+                f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={endpoint}"
             )
         _refuse_missing_models(visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))[1], endpoint)
     if check_only:

@@ -29,7 +29,7 @@ from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import RECLAIM_POINTER, probe_storage, probe_storages, storage_floor_problem
 from kura.run_commands.plan import local_min_free_gib
-from kura.workspace import comfyui_endpoint, validate_workspace_config, workspace_schema_description
+from kura.workspace import comfyui_endpoint, comfyui_endpoint_problem, validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -793,15 +793,6 @@ def _kura_stage_files(stage_dir: Path | None) -> list[str]:
         return []
 
 
-def _redact_url_userinfo(value: str) -> str:
-    parsed = urllib.parse.urlparse(value)
-    replacement = {"query": "", "fragment": ""}
-    if "@" not in parsed.netloc:
-        return urllib.parse.urlunparse(parsed._replace(**replacement))
-    host = parsed.netloc.rsplit("@", 1)[1]
-    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}", **replacement))
-
-
 def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
@@ -811,6 +802,9 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         return 1
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
     endpoint = str(getattr(args, "endpoint", None) or comfyui_endpoint(config)).rstrip("/")
+    if problem := comfyui_endpoint_problem(endpoint, where="--endpoint"):
+        print(f"comfyui: configuration error: {problem}", file=sys.stderr)
+        return 1
     parsed_endpoint = urllib.parse.urlparse(endpoint)
     lora_dir = _workspace_relative_path(str(comfyui["lora_dir"])) if isinstance(comfyui.get("lora_dir"), str) and comfyui.get("lora_dir") else None
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
@@ -827,7 +821,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         "core_anima_lllite_apply": None,
     }
     diagnostics: dict[str, Any] = {
-        "endpoint": _redact_url_userinfo(endpoint),
+        "endpoint": endpoint,
         "lora_dir": str(lora_dir) if lora_dir else None,
         "stage_dir": str(stage_dir) if stage_dir else None,
     }
@@ -1054,9 +1048,12 @@ def readiness_gaps(root: Path) -> list[str]:
     if not declared_secret("RUNPOD_API_KEY"):
         gaps.append("RUNPOD_API_KEY is not set: RunPod training and renders need it. Run `kura secrets set RUNPOD_API_KEY` in your own terminal.")
     endpoint = comfyui_endpoint(config)
+    if problem := comfyui_endpoint_problem(endpoint, where="comfyui.endpoint in workspace.yaml"):
+        gaps.append(f"{problem}. See `kura doctor workspace`.")
+        return gaps
     try:
         with urllib.request.urlopen(f"{endpoint}/system_stats", timeout=2):
             pass
     except (OSError, ValueError, http.client.HTTPException):
-        gaps.append(f"ComfyUI is not reachable at {_redact_url_userinfo(endpoint)}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
+        gaps.append(f"ComfyUI is not reachable at {endpoint}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
     return gaps
