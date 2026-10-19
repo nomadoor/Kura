@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura.container_scripts import script_source
-from kura.secrets import is_secret_name, undeclared_secret_refusal
 from kura.fsio import atomic_write_text
 from kura.run_envelope import run_datasets as _datasets
+from kura.secrets import is_secret_name, undeclared_secret_refusal
 
 
 def _toml_scalar(value: Any) -> str:
@@ -141,10 +141,9 @@ def explicit_model_paths(native: dict[str, Any], *, label: str) -> dict[str, str
 
 def validated_command_env(env: Any, *, label: str) -> dict[str, str]:
     """A trainer command's `env` as compile freezes it: names mapped to string values, and no secret
-    name (`kura.secrets.is_secret_name`); a secret reaches the container from Kura's secrets, never
+    name (`kura.secrets.is_secret_name`); leaving `env` out means none, and null is refused like any
+    other non-mapping. A secret reaches the container from Kura's secrets, never
     from a frozen command. Every backend's authored and generated command env is checked here."""
-    if env is None:
-        return {}
     if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError(f"{label} env must be a mapping of names to string values")
     if secret := [key for key in env if is_secret_name(key)]:
