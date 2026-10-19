@@ -60,11 +60,14 @@ No single convention for local API tokens exists. The options were:
    `ACCESS KEY`, `PRIVATE KEY`, split at `_`, `-`, and case changes); every
    refusal of a secret name in a configuration or command uses it.
    `kura.secrets.secret_values` decides which values are secrets: those of
-   eight or more characters under such names and under the key names
-   `workspace.yaml` chooses; a shorter value is neither hidden nor looked for. Output redaction
+   eight or more characters under such names; a shorter value is neither
+   hidden nor looked for. Output redaction
    and the check above use it. A value the user picks as a plain word, such as
    an ntfy topic, is not one: hiding it would rewrite matching text in every
-   record.
+   record. `kura.secrets.holds_secret` applies this name and length rule to one
+   name and value; the same rule refuses trainer arguments in `run.yaml`
+   (`backend.config.extra_args`, `command.argv`) that hold a secret, since
+   they are kept in the run's records.
 
 ## Consequences
 

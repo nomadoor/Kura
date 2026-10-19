@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.dataset_handoff import handoff_was_frozen
-from kura.secrets import container_secret_env, declared_secret
+from kura.secrets import container_secret_env, declared_secret, undeclared_secret_refusal
 from kura.install_source import kura_provenance
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
 from kura.dataset_handoff import (
@@ -431,7 +431,7 @@ def docker_command(
     runtime_env = dict(spec["env"])
     spec_secret_keys = [key for key in runtime_env if _is_secret(key)]
     if spec_secret_keys:
-        raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
+        raise ValueError(undeclared_secret_refusal("Docker command env", spec_secret_keys))
     runtime_env.update(kura_container_env(workspace_path=CONTAINER_WORKSPACE, run_id=run_dir.name, realization_id=realization_id))
     runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(
         workspace_mount_mappings(

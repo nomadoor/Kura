@@ -26,7 +26,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
-from kura.secrets import MissingSecret, declared_secret
+from kura.secrets import MissingSecret, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
@@ -1128,7 +1128,7 @@ def launch_runpod(
     log_path = runtime_env["KURA_LOG_PATH"]
     secret_keys = [key for key in runtime_env if _is_secret(key)]
     if secret_keys:
-        raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))
+        raise ValueError(undeclared_secret_refusal("RunPod pod env", secret_keys))
     transfer_codes: dict[str, str] = {}
     status = _load_status(run_dir)
     stage_ref = status.get("last_stage")

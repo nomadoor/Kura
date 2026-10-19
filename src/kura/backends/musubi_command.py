@@ -22,7 +22,7 @@ from kura.backends.musubi_models import _musubi_flux2_model_version, _musubi_lor
 from kura.backends.musubi_native_selectors import MUSUBI_NATIVE_TASKS, musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
-from kura.secrets import is_secret_name
+from kura.secrets import is_secret_name, undeclared_secret_refusal
 from kura.training_artifacts import EPOCH_SAVE_FLAGS, checkpoint_save_cadence, managed_state_save_args, require_constant_scheduler_for_resume, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import resume_intent, validated_recipe
 
@@ -344,8 +344,8 @@ def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
         return {}
     if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError(f"{backend_name} command env must be a string-to-string mapping")
-    if any(is_secret_name(key) for key in env):
-        raise ValueError(f"{backend_name} command env must not contain secrets; use the process environment instead")
+    if secret := [key for key in env if is_secret_name(key)]:
+        raise ValueError(undeclared_secret_refusal(f"{backend_name} command env", secret))
     return dict(env)
 
 
@@ -365,8 +365,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Tuner command must provide string cwd and argv values")
         if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
             raise ValueError("Musubi Tuner command env must be a string-to-string mapping")
-        if any(is_secret_name(key) for key in env):
-            raise ValueError("Musubi Tuner command env must not contain secrets; use the process environment instead")
+        if secret := [key for key in env if is_secret_name(key)]:
+            raise ValueError(undeclared_secret_refusal("Musubi Tuner command env", secret))
         return {"cwd": cwd, "argv": argv, "env": env}
 
     architecture = _musubi_architecture(run)
