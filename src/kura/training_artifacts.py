@@ -468,7 +468,15 @@ def select_training_state(workspace: Path, source_run: str, artifact_id: str | N
         candidates.append(candidate)
     if not candidates:
         raise ValueError(f"source run {source_run} has no recoverable training-state artifact")
-    return max(candidates, key=lambda item: (_manifest_observed_step(item), str(item.get("id"))))
+    return max(candidates, key=lambda item: (_manifest_observed_step(item), *_identity_preference(item)))
+
+
+def _identity_preference(manifest: dict[str, Any]) -> tuple[bool, str]:
+    """Which of two states of one run at one step a reader takes: the one published with the
+    run's identity (its executor and launch record). Kura before 0.7.0 published a RunPod
+    snapshot's states a second time without it; those records stay and are read past."""
+    runtime = manifest.get("runtime_identity") if isinstance(manifest.get("runtime_identity"), dict) else {}
+    return runtime.get("actual_executor") is not None, str(manifest.get("id"))
 
 
 def training_state_at_step(
@@ -478,6 +486,7 @@ def training_state_at_step(
     *,
     verify_payload: bool = True,
 ) -> dict[str, Any] | None:
+    found: list[dict[str, Any]] = []
     for path in _artifact_root(workspace).glob("*/manifest.json"):
         try:
             candidate = _load_manifest_path(path)
@@ -485,10 +494,10 @@ def training_state_at_step(
                 continue
             if verify_payload:
                 verify_training_state(workspace, candidate)
-            return candidate
+            found.append(candidate)
         except ValueError:
             continue
-    return None
+    return max(found, key=_identity_preference) if found else None
 
 
 def recipe_fingerprint(run: dict[str, Any]) -> str:
@@ -1190,12 +1199,15 @@ def state_logical_step(
 def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: Path, observed_step: int) -> dict[str, Any] | None:
     """Publish one complete state directory at its logical step, or return None.
 
+    `run_dir` is the local run, whose records give the state its identity (launch record,
+    executor, image) on every path; `candidate` may lie elsewhere, such as a RunPod snapshot.
     `observed_step` is the native step its name gives (`state_directory_step`). A backend's
     verified step marker decides the step when it has one, and is the only way to place the
-    final state directory (FINAL_STATE_STEP), whose name carries no step. A final state at a
-    step that already has a verified state of this run is the same save again (sd-scripts and
-    Musubi Tuner write one at the end under `--save_state`), so it is not published: the first
-    complete save at a step is kept.
+    final state directory (FINAL_STATE_STEP), whose name carries no step. A state at a step
+    that already has a verified state of this run is the same save again (a RunPod state pulled
+    while the Pod trained and collected again with the snapshot; the end-of-training state
+    sd-scripts and Musubi Tuner write under `--save_state`), so it is not copied again: the
+    first complete save at a step is kept, and returned for a step state.
     """
     run, status, runtime_identity = _published_run_context(run_dir)
     if not frozen_training_state_managed(run, _frozen_command_lock(run_dir)):
@@ -1215,9 +1227,10 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     step = state_logical_step(run_dir, run, contract, native_step, marked_step)
     if step is None:
         return None
-    if observed_step == FINAL_STATE_STEP and training_state_at_step(workspace, run_dir.name, step) is not None:
+    existing = training_state_at_step(workspace, run_dir.name, step)
+    if existing is not None:
         # The trainer's end-of-training state repeats the save already published at its step.
-        return None
+        return None if observed_step == FINAL_STATE_STEP else existing
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = str(backend.get("name"))
     if backend_name == "sd-scripts" and (candidate / "train_state.json").is_file():
@@ -1276,16 +1289,20 @@ def publish_completed_training_states(
     workspace: Path,
     run_dir: Path,
     *,
+    outputs_root: Path | None = None,
     allow_final_state: bool = False,
 ) -> list[dict[str, Any]]:
-    """Publish structurally complete step-state directories already on local disk."""
+    """Publish structurally complete step-state directories already on local disk.
+
+    They are read from `outputs_root` (a RunPod snapshot's outputs), else the run's own
+    outputs, and published in the context of the local run `run_dir` on every executor."""
 
     if not training_state_capture_required(run_dir):
         return []
     run, _, _ = _published_run_context(run_dir)
     output_name = run_output_name(run)
     published: list[dict[str, Any]] = []
-    outputs = run_dir / "outputs"
+    outputs = run_dir / "outputs" if outputs_root is None else outputs_root
     candidates = []
     for candidate in sorted(outputs.glob("*-state")) if outputs.is_dir() else []:
         observed_step = state_directory_step(candidate.name, output_name, allow_final=allow_final_state)
