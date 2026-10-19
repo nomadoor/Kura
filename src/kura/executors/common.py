@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.secrets import is_secret_name, secret_values
+from kura.secrets import is_secret_name, redact as _redact_secrets, redact_text as _redact_secret_text
 from kura.yamlio import YAMLError, load_yaml
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import names_realization, realization_reference, record, without_record_fields
@@ -632,29 +632,9 @@ def kura_container_env(*, workspace_path: str, run_id: str, realization_id: str 
     return env
 
 
-def _redact_secret_text(text: str, values: list[str] | None = None) -> str:
-    redacted = text
-    for value in secret_values() if values is None else values:
-        redacted = redacted.replace(value, "***")
-    return redacted
-
-
-def _redact_secrets(value: Any, values: list[str] | None = None) -> Any:
-    # The secret values are looked up once per record, not once per string in it.
-    values = secret_values() if values is None else values
-    if isinstance(value, dict):
-        return {key: "***" if isinstance(key, str) and _is_secret(key) and isinstance(item, str) else _redact_secrets(item, values) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_secrets(item, values) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_secrets(item, values) for item in value)
-    if isinstance(value, str):
-        return _redact_secret_text(value, values)
-    return value
-
-
-def _write_json(path: Path, value: Any) -> None:
-    atomic_write_json(path, _redact_secrets(value))
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    """Write a run record; `record()` built it, so it holds no secret."""
+    atomic_write_json(path, value)
 
 
 def _safe_env(env: dict[str, str]) -> dict[str, str]:
@@ -702,7 +682,7 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
         status.pop("epoch", None)
         if epoch:
             status["runner_epoch"] = epoch
-        redacted = _redact_secrets(record("run_status", status))
+        redacted = record("run_status", status)
         # Adding the record fields alone is no new fact, so it never rewrites the file.
         if without_record_fields(redacted) != without_record_fields(original):
             atomic_write_json(_status_path(run_dir), redacted)

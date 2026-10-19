@@ -486,7 +486,10 @@ def _spawn_child(workspace: Path, run_id: str, request: Path) -> subprocess.Pope
 
 
 def _log(message: str) -> None:
-    print(f"{_now()} {message}", flush=True)
+    """A line in the runner's log; many carry an exception's text, so secrets are removed here."""
+    from kura.secrets import redact_text
+
+    print(f"{_now()} {redact_text(message)}", flush=True)
 
 
 def serve(

@@ -16,6 +16,7 @@ import re
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import platformdirs
 
@@ -148,6 +149,29 @@ def undeclared_secret_refusal(where: str, names: list[str]) -> str:
         f"the secrets it declares ({declared}), from Kura's secrets files, which the user fills with "
         f"`kura secrets set NAME`; no other secret, and nothing exported in a shell, reaches a container"
     )
+
+
+def redact_text(text: str, values: list[str] | None = None) -> str:
+    """`text` with every secret value replaced by `***`."""
+    redacted = text
+    for value in secret_values() if values is None else values:
+        redacted = redacted.replace(value, "***")
+    return redacted
+
+
+def redact(value: Any, values: list[str] | None = None) -> Any:
+    """`value` with every secret value replaced, and every text under a secret-named key hidden."""
+    # The secret values are looked up once per record, not once per string in it.
+    values = secret_values() if values is None else values
+    if isinstance(value, dict):
+        return {key: "***" if isinstance(key, str) and is_secret_name(key) and isinstance(item, str) else redact(item, values) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item, values) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact(item, values) for item in value)
+    if isinstance(value, str):
+        return redact_text(value, values)
+    return value
 
 
 def declared_secret(name: str) -> str | None:

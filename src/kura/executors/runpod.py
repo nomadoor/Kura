@@ -615,12 +615,12 @@ def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, r
     requested_at = _now()
     path = run_dir / "realizations" / f"{realization_id}{CREATE_INTENT_SUFFIX}"
     path.parent.mkdir(exist_ok=True)
-    _write_json(path, {
-        "kind": "pod_create_intent", "schema_version": 1, "realization_id": realization_id, "executor": "runpod",
+    _write_json(path, as_record("pod_create_intent", {
+        "realization_id": realization_id, "executor": "runpod",
         "pod_name": pod_name, "requested_at": requested_at, "remote_image": image, "logs_path": logs_path,
         "request": request, **({"purpose": purpose} if purpose else {}),
         **({"controlled_by": controlled_by} if controlled_by else {}),
-    })
+    }))
     record_launch_phase(run_dir, realization_id, "pod_create_requested", at=requested_at)
 
     def mutate(latest: dict[str, Any]) -> None:

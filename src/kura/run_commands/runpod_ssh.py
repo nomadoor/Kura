@@ -32,7 +32,7 @@ from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication, recorded_output_paths
-from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
+from kura.executors import _materialize_stdout_progress, _redact_secret_text
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell, format_cost_ceiling, pod_cost_ceiling
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
@@ -1690,7 +1690,7 @@ def _record_remote_exit_observation(run_dir: Path, exit_record: dict[str, Any]) 
         "exit_code": exit_code,
         "remote_timestamp": exit_record.get("timestamp"),
     }
-    atomic_write_json(observation_path, _redact_secrets(record("remote_exit_observation", observation)))
+    atomic_write_json(observation_path, record("remote_exit_observation", observation))
     def mutate(current: dict[str, Any]) -> None:
         current.update({
             "remote_state": observation["remote_state"],
