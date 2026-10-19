@@ -52,7 +52,6 @@ class ProgressParityTests(unittest.TestCase):
             progress = (run_dir / "realizations" / "r1.progress.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(json.loads(progress[-1])["last_step"], 5)
 
-
     def test_runpod_collection_counts_from_the_snapshot_log_when_the_local_copy_stopped_mirroring(self) -> None:
         # The local log on RunPod is only a mirror kept while the Pod trains; the snapshot has it all.
         from tests.test_run_end import _download, _runpod_run
