@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import urllib.parse
 from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -317,6 +318,8 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     storage = config.get("storage") if isinstance(config.get("storage"), dict) else {}
     if "host_drive" in storage and not re.fullmatch(r"[A-Z]:", storage["host_drive"]):
         raise ValueError(f"{source} storage.host_drive must be a drive letter and colon such as D:, not {storage['host_drive']!r}")
+    if problem := comfyui_endpoint_problem(comfyui.get("endpoint"), where=f"{source} comfyui.endpoint"):
+        raise ValueError(problem)
     for key in ("lora_stage_subdir", "model_patch_stage_subdir", "input_stage_subdir"):
         value = comfyui.get(key)
         if value is not None and not plain_relative_folder(value):
@@ -340,6 +343,22 @@ def plain_relative_folder(value: Any) -> bool:
         and not PureWindowsPath(value).drive
         and bool(Path(value).parts) and not set(Path(value).parts) & {".", ".."}
     )
+
+
+def comfyui_endpoint_problem(value: Any, *, where: str) -> str | None:
+    """Why a ComfyUI endpoint cannot be used, or None.
+
+    Kura reaches ComfyUI without a user name, password, or query (they cannot reach it through
+    the URL anyway), and keeps the endpoint in run records; the message never repeats the value.
+    """
+    if not isinstance(value, str):
+        return None
+    if "@" in urllib.parse.urlsplit(value.strip()).netloc or "?" in value or "#" in value:
+        return (
+            f"{where} must not hold a user name, password, query, or fragment; write the scheme, host, port, "
+            "and an optional path, such as http://127.0.0.1:8188"
+        )
+    return None
 
 
 def comfyui_endpoint(config: dict[str, Any]) -> str:

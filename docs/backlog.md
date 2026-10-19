@@ -62,6 +62,7 @@ why, so it is not raised again.
 - 2026-10-19 | ComfyUI image | `docker/comfyui/kura_comfy_prepare.py` falls back to `HUGGINGFACE_HUB_TOKEN`, which no executor sets any more (and which is not huggingface_hub's legacy name either); drop the fallback, and `HUGGINGFACE_HUB_TOKEN` from `SECRET_OPTIONAL` in tests/test_launch_contracts.py, with the next ComfyUI image rebuild. Harmless meanwhile: the script reads `HF_TOKEN` first | 0.7.0 secrets audit | -
 - 2026-10-19 | secrets | Records a Pod writes (`*.runpod-input*.json`, `*-video-preflight.json`, `remote-exit-*`, the AI-Toolkit models record) are taken in byte for byte and never pass `record()`; an error or stderr text in one is not redacted; redact where the Pod writes them (taking them in redacted would break the byte comparison that detects a conflict) | review of redaction in record() | P10
 - 2026-10-19 | run records | `_record_sync_error` compares the raw error with the redacted one kept in status, so an error holding a secret writes a new identical sync_error record on every pass | review of redaction in record() | P9
+- 2026-10-19 | ComfyUI endpoint | An endpoint with no scheme (`user:pw@host:8188`) passes `comfyui_endpoint_problem` (urlsplit finds no netloc) and is printed by `kura doctor comfyui` and `kura init`; have the owner require http:// or https://, which also replaces the doctor's own scheme check | review of the endpoint credential refusal | P10
 
 ## Rejected
 
