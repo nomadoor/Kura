@@ -191,15 +191,19 @@ root-owned files; it changes ownership and deletes nothing.
   and refuses when a store's free space minus it is below the reserve:
   - the downloads Kura makes (sd-scripts and Musubi Tuner model files), sized
     from Hugging Face metadata; a file already in the cache counts 0;
-  - the run's own weights-sized files on disk at once, each bounded by
-    `rank × 64 MiB` (the rank is `network_dim`): the most checkpoints at once,
+  - the run's own weights-sized files on disk at once, each bounded by the
+    rank (`network_dim`) times a size per rank: the most checkpoints at once,
     the training states the trainer keeps, and Kura's copies of them, a state
-    counting as 3 such files (weights and the optimizer's moments). LoRA files
-    are far smaller than this bound (the measured runs wrote at most 163 MiB at
-    rank 16 and 267 MiB at rank 32), so it is a safe ceiling, not a prediction.
-    It assumes linear LoRA; conv LoRA, LoKr, full-matrix training, and very
-    large models can exceed it, and the disk watch covers them. A run with no
-    rank is not bounded, and the plan says so.
+    counting as 5 such files (weights and up to four optimizer tensors, as
+    Prodigy keeps). A model a
+    recorded run measured (Musubi Tuner Z-Image, FLUX.2 Klein Base 4B, and
+    Wan 2.1 T2V 1.3B; sd-scripts SD 1.5 LoRA) counts its measured fp32 size per
+    rank, rounded up to a whole MiB; any other model counts `rank × 64 MiB`, a
+    safe ceiling well above what the measured runs wrote, not a prediction.
+    It assumes the trainer's linear LoRA modules; conv LoRA, LoKr,
+    full-matrix training, modules added through `extra_args`, and very large
+    models can exceed it, and the disk watch covers them. A run with no rank
+    is not bounded, and the plan says so.
   Checkpoints are counted at the cadence the trainer is given, the final file
   included: retention that prunes during training (AI-Toolkit and sd-scripts
   `save_last_n_steps`) bounds them near the kept count, while Musubi Tuner's
@@ -210,7 +214,8 @@ root-owned files; it changes ownership and deletes nothing.
   AI-Toolkit saves at its own default, which Kura does not know: only its final
   file is counted, and the line says `trainer-default saves not counted`. The
   disk lines in `kura run plan` and the disk refusals show this part as
-  `own writes: N weights-sized files (...) at rank R × 64 MiB`.
+  `own writes at most <size>: N weights-sized files of up to <size> (rank R ×
+  M MiB, measured for <model> | no measurement for this model): ...`.
 - The RunPod check shows the same estimate against `runpod.container_disk_gb`
   and refuses only when the downloads Kura makes and the input transfer alone
   do not fit. A full Pod disk fails the run and the maximum lease bounds the

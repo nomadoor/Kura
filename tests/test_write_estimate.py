@@ -53,8 +53,9 @@ class BoundTests(unittest.TestCase):
         # one being written and its final state (3); Kura keeps two copies and stages one (3).
         musubi = bound(musubi_run, save_every_n_steps=50)
         self.assertEqual((musubi["checkpoints"], musubi["trainer_states"], musubi["kura_state_copies"]), (21, 3, 3))
-        self.assertEqual(musubi["weights_files"], 21 + 3 * (3 + 3))
-        self.assertEqual(musubi["bytes"], musubi["weights_files"] * 4 * 64 * MIB)
+        self.assertEqual(musubi["weights_files"], 21 + 5 * (3 + 3))
+        # FLUX.2 Klein Base 4B has a measured size: 6 MiB per rank.
+        self.assertEqual(musubi["bytes"], musubi["weights_files"] * 4 * 6 * MIB)
         # sd-scripts with no cadence writes its final file and its final state only.
         sd = bound(sd_scripts_run)
         self.assertEqual((sd["checkpoints"], sd["trainer_states"], sd["kura_state_copies"], sd["rank"]), (1, 1, 3, 8))
@@ -130,6 +131,65 @@ class BoundTests(unittest.TestCase):
         self.assertNotIn("disk watch", remote)
 
 
+class MeasuredSizeTests(unittest.TestCase):
+    """A model a recorded run measured is bounded at its measured fp32 size per rank, rounded up to a
+    whole MiB; any other model keeps `rank × 64 MiB`."""
+
+    @staticmethod
+    def _zimage(rank: int = 32):
+        run = musubi_run()
+        config = run["backend"]["config"]
+        config.pop("model_version")
+        config.update({"architecture": "zimage", "network_dim": rank, "save_every_n_steps": 50})
+        run["recipe"]["steps"] = 100
+        return run
+
+    def test_the_measured_size_holds_the_files_the_measuring_runs_wrote(self) -> None:
+        # (run, rank, the fp32 LoRA in a training state, its optimizer.bin, the saved checkpoint)
+        zimage = self._zimage()
+        klein = musubi_run()
+        klein["backend"]["config"]["network_dim"] = 32
+        for label, run, state_model, optimizer, checkpoint in (
+            ("zimage", zimage, 280_241_816, 142_770_613, 140_160_116),
+            ("flux2 klein-base-4b", klein, 184_840_232, 94_041_035, 92_436_184),
+        ):
+            with self.subTest(run=label):
+                bound = plan.own_write_bound(run, executor="docker")
+                self.assertGreaterEqual(bound["per_file_bytes"], state_model)
+                self.assertGreaterEqual(bound["per_file_bytes"], checkpoint)
+                self.assertGreaterEqual(plan.STATE_WEIGHT_FILES * bound["per_file_bytes"], state_model + optimizer)
+                self.assertLess(bound["per_file_bytes"], 32 * plan.WEIGHTS_BYTES_PER_RANK)
+
+    def test_a_measured_model_is_bounded_near_what_it_writes(self) -> None:
+        # The 0.7.0 acceptance run: Z-Image at rank 32, 100 steps, a save every 50. It wrote 3
+        # checkpoints and 3 trainer states locally, and Kura copied 2: about 2.5 GB at once. A state
+        # counts 5 files, so a Prodigy state (5 fp32 files) is held too.
+        bound = plan.own_write_bound(self._zimage(), executor="docker")
+        self.assertEqual((bound["checkpoints"], bound["trainer_states"], bound["kura_state_copies"]), (3, 3, 3))
+        self.assertEqual(bound["per_file_bytes"], 32 * 9 * MIB)
+        self.assertEqual(bound["bytes"], 33 * 32 * 9 * MIB)
+        self.assertGreaterEqual(bound["bytes"], 3 * 140_160_116 + 5 * 5 * 280_241_816)
+        self.assertLess(bound["bytes"], 10 * GIB)
+        self.assertEqual(
+            plan.own_write_text(bound, executor="docker"),
+            "own writes at most 9.3 GiB: 33 weights-sized files of up to 288.0 MiB (rank 32 × 9 MiB, measured for "
+            "musubi-tuner architecture=zimage): 3 checkpoint files, and 6 training states at 5 files each "
+            "(3 the trainer keeps, 3 Kura copies)",
+        )
+        remote = plan.own_write_bound(self._zimage(), executor="runpod")
+        self.assertTrue(plan.own_write_text(remote, executor="runpod").endswith(
+            ": 3 checkpoint files, and 3 training states at 5 files each (3 the trainer keeps)"))
+
+    def test_a_model_without_a_measurement_keeps_the_rank_bound(self) -> None:
+        for model_version in ("klein-base-9b", "klein-4b"):
+            run = musubi_run()
+            run["backend"]["config"]["model_version"] = model_version
+            with self.subTest(model_version=model_version):
+                bound = plan.own_write_bound(run, executor="docker")
+                self.assertEqual(bound["per_file_bytes"], 4 * plan.WEIGHTS_BYTES_PER_RANK)
+                self.assertIn("rank 4 × 64 MiB, no measurement for this model", plan.own_write_text(bound, executor="docker"))
+
+
 class OneOwnerTests(unittest.TestCase):
     def test_the_local_launch_the_runpod_check_and_the_plan_read_the_one_estimate(self) -> None:
         run = musubi_run()
@@ -172,7 +232,8 @@ class LaunchCheckTests(unittest.TestCase):
 
     def test_runpod_refuses_only_when_measured_writes_alone_exceed_the_container_disk(self) -> None:
         run = musubi_run()
-        run["backend"]["config"].update({"save_every_n_steps": 50, "network_dim": 64})
+        # A model without a measured size, so the bound is rank × 64 MiB.
+        run["backend"]["config"].update({"save_every_n_steps": 50, "network_dim": 64, "model_version": "klein-base-9b"})
         with patch.object(plan, "_runpod_input_transfer_estimate", return_value={"remote_peak_bytes": 2 * GIB}):
             # The bound alone is far above 30 GiB: shown, not refused.
             payload = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 30}, {"bytes": 10 * GIB})

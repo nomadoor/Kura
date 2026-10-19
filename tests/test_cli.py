@@ -1947,7 +1947,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 # The host's real free space must not decide this test.
                 with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
-                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}, "docker_data_unwatched": None}):
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "per_rank_bytes": 64 * 1024**2, "measured_for": None, "per_file_bytes": 256 * 1024**2, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}, "docker_data_unwatched": None}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1992,7 +1992,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}, "docker_data_unwatched": None}),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"own_writes": {"rank": 4, "checkpoints": 0, "trainer_states": 0, "kura_state_copies": 0, "weights_files": 0, "per_rank_bytes": 64 * 1024**2, "measured_for": None, "per_file_bytes": 256 * 1024**2, "bytes": 0}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}, "docker_data_unwatched": None}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
@@ -2221,7 +2221,7 @@ class RunPlanTests(unittest.TestCase):
                 run = {"type": "train", "recipe": {"steps": 3000}, "backend": {"name": backend, "config": config}, "model": {"base": "example/model"}}
                 records = _checkpoint_preflight_report(run)
                 self.assertEqual([record["severity"] for record in records], ["info"])
-                self.assertIn("about 30 checkpoint(s)", records[0]["fact"])
+                self.assertIn("about 30 step checkpoint(s)", records[0]["fact"])
 
 
 class NotificationTests(unittest.TestCase):

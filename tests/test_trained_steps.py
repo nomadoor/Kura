@@ -84,7 +84,7 @@ class ResumeEstimateTests(unittest.TestCase):
         # 1000-step recipe resumed +50 with a cadence of 10: 5 checkpoints, not 100.
         estimates = _estimates(_resume(save_every=10, additional=50), 10)
         self.assertEqual(estimates["disk_warnings"], [])
-        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 5 checkpoint(s) over the 50 steps this run trains"])
+        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 5 step checkpoint(s) over the 50 steps this run trains, plus the final file"])
         self.assertEqual(estimates["write_count"], 6)
         self.assertEqual(estimates["monitor_expected"], 5)
 
@@ -93,7 +93,7 @@ class ResumeEstimateTests(unittest.TestCase):
         estimates = _estimates(_resume(save_every=500, additional=5000), 500)
         self.assertEqual(len(estimates["disk_warnings"]), 1)
         self.assertIn("about 10 checkpoints over the 5000 steps this run trains;", estimates["disk_warnings"][0])
-        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 10 checkpoint(s) over the 5000 steps this run trains"])
+        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 10 step checkpoint(s) over the 5000 steps this run trains, plus the final file"])
         self.assertEqual(estimates["write_count"], 11)
         self.assertEqual(estimates["monitor_expected"], 10)
 
@@ -192,7 +192,7 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         cadence.assert_called_once_with(run, 50)
         # The plan's preflight line now names the one save a Musubi run with no cadence makes.
         records = [record["fact"] for record in plan._checkpoint_preflight_report(musubi_run())]
-        self.assertEqual(records, ["checkpoint cadence implies about 1 checkpoint(s)"])
+        self.assertEqual(records, ["checkpoint cadence implies about 1 step checkpoint(s), plus the final file"])
 
     def test_every_count_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
@@ -216,7 +216,7 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         checkpoint = plan._adapter_display(run)["checkpoint"]
         self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"})
         self.assertIn("about 20 checkpoints", plan._disk_warnings(run, checkpoint)[0])
-        self.assertEqual([record["fact"] for record in plan._checkpoint_preflight_report(run)], ["checkpoint cadence implies about 20 checkpoint(s)"])
+        self.assertEqual([record["fact"] for record in plan._checkpoint_preflight_report(run)], ["checkpoint cadence implies about 20 step checkpoint(s), plus the final file"])
         # The disk peak adds the final file to the 20 step saves.
         self.assertEqual(_peak_count(run), 21)
         self.assertEqual(_monitor_expected(run, checkpoint), 20)
@@ -252,7 +252,7 @@ class CheckpointRetentionTests(unittest.TestCase):
         """The kept count drives every count but the disk estimate, which adds the final file."""
         counts = _counts(run)
         self.assertIn(f"about {expected} checkpoints", counts["disk_warnings"][0])
-        self.assertEqual(counts["preflight"], [f"checkpoint cadence implies about {expected} checkpoint(s)"])
+        self.assertEqual(counts["preflight"], [f"checkpoint cadence implies about {expected} step checkpoint(s), plus the final file"])
         self.assertEqual(counts["write_count"], peak)
         self.assertEqual(counts["monitor_expected"], expected)
 
@@ -426,7 +426,9 @@ class PeakCheckpointsTests(unittest.TestCase):
         run = musubi_run()
         run["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
         run["safety"] = {"allow_storage_risk": True}
-        part = "own writes: 39 weights-sized files (21 checkpoint(s) + 6 training state(s) × 3) at rank 4 × 64 MiB"
+        part = ("own writes at most 1.2 GiB: 51 weights-sized files of up to 24.0 MiB (rank 4 × 6 MiB, measured for "
+                "musubi-tuner architecture=flux2, model_version=klein-base-4b): 21 checkpoint files, and 6 training states "
+                "at 5 files each (3 the trainer keeps, 3 Kura copies)")
         real_probe = plan.probe_storages
 
         def roomy(paths, config=None):
@@ -530,7 +532,7 @@ class FreshRunPlanTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(current, before)
-        self.assertIn("about 20 checkpoint(s)", current)
+        self.assertIn("about 20 step checkpoint(s)", current)
 
 
 
