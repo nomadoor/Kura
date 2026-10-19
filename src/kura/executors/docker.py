@@ -16,7 +16,7 @@ from typing import Any
 from kura.dataset_handoff import handoff_was_frozen
 from kura.secrets import container_secret_env, container_secrets_record, undeclared_secret_refusal
 from kura.install_source import kura_provenance
-from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
+from kura.artifact_publication import existing_output_snapshot
 from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
@@ -25,12 +25,12 @@ from kura.dataset_handoff import (
     remove_dataset_views,
 )
 from kura.provenance import image_reference_identity
-from kura.training_artifacts import publish_completed_training_states, training_state_capture_required, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.executors.common import (
     host_time,
     kura_container_env,
     CREATE_INTENT_SUFFIX,
     point_status_at_launch,
+    settle_finished_training,
     settle_status_from_realization,
     _event_exists,
     unresolved_create_intents,
@@ -44,7 +44,7 @@ from kura.executors.common import (
     record_launch_phase,
     _is_secret,
     _load_status,
-    _materialize_stdout_progress,
+    _apply_stdout_progress,
     _mutate_run_status,
     _now,
     _realization_id,
@@ -792,92 +792,18 @@ def reconcile_docker(
                     latest["execution_state"] = state
                     latest["publication_state"] = "pending"
             effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
-            _materialize_stdout_progress(run_dir, latest, state=effective_state)
+            _apply_stdout_progress(run_dir, latest, state=effective_state)
 
         status = _mutate_run_status(run_dir, mutate, blocking=blocking)
         if state in TERMINAL_STATES:
             if state != "unknown":
                 # Before the status says completed, so a reader that sees it finds the listing.
                 _record_ai_toolkit_models(run_dir, realization)
-            published: list[dict[str, Any]] = []
-            state_error: str | None = None
-            try:
-                published = publish_completed_training_states(
-                    run_dir.parent.parent,
-                    run_dir,
-                    allow_final_state=exit_code == 0,
-                )
-            except (OSError, ValueError) as exc:
-                state_error = _redact_secret_text(str(exc))
-            try:
-                capture_required = training_state_capture_required(run_dir)
-            except (OSError, ValueError) as exc:
-                capture_required = (run_dir / "resolved" / "manifest.lock.yaml").is_file()
-                state_error = _redact_secret_text(str(exc))
-            output_error: str | None = None
-            publication_manifest: str | None = None
-            published_outputs: list[str] = []
-            contract: dict[str, Any] | None = None
-            if state == "completed":
-                try:
-                    contract = output_contract(run_dir)
-                    if contract is not None:
-                        reused = existing_publication(run_dir, realization["id"])
-                        if reused is not None:
-                            publication_manifest, published_outputs = reused
-                        else:
-                            publication_manifest, published_outputs = publish_outputs(
-                                run_dir, realization["id"], contract, baseline=realization.get("output_baseline")
-                            )
-                except (OSError, ValueError) as exc:
-                    output_error = _redact_secret_text(str(exc))
-            errors = [item for item in (state_error, output_error) if item]
-            missing_state = missing_training_state_error(
-                capture_required and not published and not state_error, trainer_completed=state == "completed",
-            )
-            if missing_state:
-                errors.append(MISSING_STATE_PUBLICATION_ERROR)
-            publication_attempt = record_publication_failure(run_dir, realization["id"], "; ".join(errors)) if errors else None
+            settle = settle_finished_training(run_dir, realization["id"], state=state, output_baseline=realization.get("output_baseline"))
 
             def record_publication(latest: dict[str, Any]) -> None:
-                if latest.get("last_realization") != realization_ref:
-                    return
-                if publication_attempt:
-                    latest["last_publication_attempt"] = publication_attempt
-                if published:
-                    latest.pop("training_state_sync_error", None)
-                    latest["recoverable_training_states"] = [
-                        {
-                            "artifact_id": item["id"],
-                            "manifest_sha256": item["manifest_sha256"],
-                            "observed_step": item["observed_step"],
-                            "restoration_level": item["restoration_contract"]["level"],
-                        }
-                        for item in published
-                    ]
-                elif state_error:
-                    latest["training_state_sync_error"] = state_error
-                elif missing_state:
-                    latest["training_state_sync_error"] = missing_state
-                else:
-                    latest.pop("training_state_sync_error", None)
-                if state == "completed":
-                    if output_error:
-                        latest["publication_error"] = output_error
-                    else:
-                        latest.pop("publication_error", None)
-                    if publication_manifest:
-                        latest["publication_manifest"] = publication_manifest
-                        latest["outputs"] = published_outputs
-                    blocked = (capture_required and not published) or output_error is not None
-                    latest["state"] = "recovery_required" if blocked else "completed"
-                    latest["publication_state"] = "blocked" if blocked else "completed" if contract else "legacy-unverified"
-                    if not blocked and not contract:
-                        record_unverified_publication(run_dir, realization["id"], list(latest.get("outputs") or []))
-                    if not blocked:
-                        _materialize_stdout_progress(run_dir, latest, state="completed")
-                else:
-                    latest["publication_state"] = "blocked" if state_error else "not-required"
+                if latest.get("last_realization") == realization_ref:
+                    settle(latest)
 
             status = _mutate_run_status(run_dir, record_publication, blocking=blocking)
             if state != "unknown":

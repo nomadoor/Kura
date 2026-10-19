@@ -25,7 +25,7 @@ from kura.backends.ai_toolkit import compile_ai_toolkit
 from kura.backends.musubi_command import command_musubi_tuner
 from kura.backends.sd_scripts import command_sd_scripts
 from kura.dataset_transfer import _resume_entries
-from kura.executors.common import _configured_final_step, _materialize_stdout_progress
+from kura.executors.common import _configured_final_step, _apply_stdout_progress
 from kura.executors.runpod import stage_runpod
 from kura.run_commands.plan import _resume_plan_payload
 from kura.run_commands.runpod_ssh import _pull_remote_training_state_items
@@ -292,7 +292,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
             root = Path(directory)
             run_dir = self._derived(root, process_local=True)
             status: dict[str, Any] = {}
-            _materialize_stdout_progress(run_dir, status, state="running")
+            _apply_stdout_progress(run_dir, status, state="running")
             self.assertEqual((status["last_step"], status["total_steps"]), (1150, 1200))
             self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (150, 200))
             # Its states carry no marker and are placed by name through the lock, as before; the
@@ -321,7 +321,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
                 root = Path(directory)
                 run_dir = self._derived(root)
                 status: dict[str, Any] = {}
-                _materialize_stdout_progress(run_dir, status, state="running")
+                _apply_stdout_progress(run_dir, status, state="running")
                 statuses[executor] = status["last_step"]
                 status_owner.assert_called()
                 name = "derived-step0150-state"
@@ -378,7 +378,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
                 run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
                 _write_state(run_dir / "outputs" / "derived-step0150-state")
                 checks = {
-                    "status": lambda: _materialize_stdout_progress(run_dir, {}, state="running"),
+                    "status": lambda: _apply_stdout_progress(run_dir, {}, state="running"),
                     "plan": lambda: _resume_plan_payload(root, run, run_dir),
                     "publish": lambda: publish_completed_training_states(root, run_dir),
                 }
@@ -418,7 +418,7 @@ class SdScriptsLogicalResumeTests(unittest.TestCase):
     def _progress(self, run_dir: Path, line: str) -> dict[str, Any]:
         (run_dir / "logs" / "stdout.log").write_text(line + "\n", encoding="utf-8")
         status: dict[str, Any] = {}
-        _materialize_stdout_progress(run_dir, status, state="running")
+        _apply_stdout_progress(run_dir, status, state="running")
         return status
 
     def test_a_multi_epoch_resume_saves_on_logical_multiples_and_stops_at_its_target(self) -> None:
@@ -623,8 +623,10 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         import kura.run_commands.runpod_ssh as runpod_ssh
         import kura.training_artifacts as training_artifacts
 
-        self.assertIs(docker.publish_completed_training_states, training_artifacts.publish_completed_training_states)
-        self.assertIs(runpod_ssh.publish_completed_training_states, training_artifacts.publish_completed_training_states)
+        import kura.executors.common as common
+
+        self.assertIs(docker.settle_finished_training, common.settle_finished_training)
+        self.assertIs(runpod_ssh.settle_finished_training, common.settle_finished_training)
         for executor in ("docker", "runpod"):
             with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory, patch.object(
                 training_artifacts, "publish_training_state_candidate", wraps=training_artifacts.publish_training_state_candidate,

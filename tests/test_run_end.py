@@ -90,8 +90,8 @@ class StateVerificationErrorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = _runpod_run(root, exit_code=0, state_dir=True)
-            with patch("kura.run_commands.runpod_ssh.training_state_capture_required", return_value=True), \
-                    patch("kura.run_commands.runpod_ssh.publish_completed_training_states", side_effect=ValueError("state manifest does not verify")):
+            with patch("kura.training_artifacts.training_state_capture_required", return_value=True), \
+                    patch("kura.training_artifacts.publish_completed_training_states", side_effect=ValueError("state manifest does not verify")):
                 self.assertEqual(_download(root), 3)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         self.assertEqual(status["state"], "recovery_required")
@@ -104,8 +104,8 @@ class FailedRunStateErrorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = _runpod_run(root, exit_code=1, state_dir=True)
-            with patch("kura.run_commands.runpod_ssh.training_state_capture_required", return_value=True), \
-                    patch("kura.run_commands.runpod_ssh.publish_completed_training_states", side_effect=ValueError("state manifest does not verify")):
+            with patch("kura.training_artifacts.training_state_capture_required", return_value=True), \
+                    patch("kura.training_artifacts.publish_completed_training_states", side_effect=ValueError("state manifest does not verify")):
                 _download(root)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         self.assertEqual((status["state"], status["publication_state"]), ("failed", "blocked"))

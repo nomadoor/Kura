@@ -137,7 +137,7 @@ and local download are confirmed.
 | `running` | the trainer is running; on RunPod, also until its outputs are collected | follow with `kura run execute <run-id>` |
 | `publishing` | local Docker only: the trainer exited 0; its outputs are not published yet | keep following; it is not finished |
 | `completed` | the trainer exited 0 and its outputs are published | verify the outputs and report |
-| `failed` | the trainer exited non-zero | read `kura run logs <run-id>`; any fix goes in a new run |
+| `failed` | the trainer exited non-zero | read `kura run logs <run-id>`; any fix goes in a new run; with `publication_state: blocked`, `kura run status <run-id>` shows in `publication_error` which files or training state could not be collected |
 | `interrupted` | stopped by `kura run stop`, or by the disk watch when a store a local run writes to fell below the reserve (`kura run status <run-id>` shows `stop_reason`), or its Pod or container went away or was never confirmed created; a local run keeps what it wrote, but outputs a RunPod Pod held uncollected are gone | report; a new run needs approval |
 | `launch_failed` | the trainer never started | read the error; any fix goes in a new run |
 | `unknown` | the outcome was not observed: the container is gone, or the Pod exited, without an exit code | do not start the same run again; `kura run reconcile <run-id>` or `kura run stop <run-id>` so no Pod or container remains, then a new run with approval |

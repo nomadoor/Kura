@@ -23,7 +23,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, compile_ai_toolk
 from kura.backends.sd_scripts import training_state_contract_sd_scripts
 from kura.container_scripts import script_source
 from kura.executors.docker import reconcile_docker
-from kura.executors.common import _materialize_stdout_progress
+from kura.executors.common import _apply_stdout_progress, settle_finished_training
 from kura.executors.runpod import stage_runpod
 from kura.run_commands.runpod_ssh import _download_run_unlocked, _local_reusable_training_state_sources, _pull_remote_training_state_items, _same_remote_training_state_version
 from kura.run_commands.plan import format_run_plan
@@ -875,8 +875,10 @@ class TrainingStateArtifactTests(unittest.TestCase):
             state.mkdir(parents=True)
             (state / "optimizer.bin").write_bytes(b"optimizer")
             (run_dir / "outputs" / "source.safetensors").write_bytes(b"weight")
+            (run_dir / "realizations").mkdir()
             status: dict[str, object] = {}
-            _materialize_stdout_progress(run_dir, status, state="completed")
+            # A run compiled before frozen command locks: its outputs are listed, unverified.
+            settle_finished_training(run_dir, "launch", state="completed")(status)
             self.assertEqual(status["outputs"], ["outputs/source.safetensors"])
 
     def test_musubi_resume_progress_projects_current_and_cumulative_steps(self) -> None:
@@ -903,12 +905,12 @@ class TrainingStateArtifactTests(unittest.TestCase):
             )
             (run_dir / "logs" / "stdout.log").write_text("steps:  20%|██| 10/50 [00:10<00:40, 1.0s/it, avr_loss=0.5]\n", encoding="utf-8")
             status: dict[str, object] = {}
-            _materialize_stdout_progress(run_dir, status, state="running")
+            _apply_stdout_progress(run_dir, status, state="running")
             self.assertEqual(status["last_step"], 110)
             self.assertEqual(status["total_steps"], 150)
             self.assertEqual(status["current_run_step"], 10)
             self.assertEqual(status["current_run_total_steps"], 50)
-            _materialize_stdout_progress(run_dir, status, state="running")
+            _apply_stdout_progress(run_dir, status, state="running")
             self.assertEqual(status["last_step"], 110)
 
     def test_completed_resume_counts_the_logged_step_and_else_its_target(self) -> None:
@@ -928,7 +930,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 (run_dir / "logs" / "stdout.log").write_text(stdout, encoding="utf-8")
                 status: dict[str, object] = {}
 
-                _materialize_stdout_progress(run_dir, status, state="completed")
+                _apply_stdout_progress(run_dir, status, state="completed")
 
                 self.assertEqual((status["last_step"], status["total_steps"]), (expected_step, 3))
                 self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (expected_current, 1))
@@ -2253,7 +2255,7 @@ class ResumeRunTests(unittest.TestCase):
             }
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.select_training_state", return_value=state):
+                with patch("kura.training_artifacts.realization_training_states", return_value=[state]):
                     self.assertEqual(_download_run_unlocked("source"), 0)
             finally:
                 os.chdir(previous)
@@ -2641,12 +2643,12 @@ class ResumeRunTests(unittest.TestCase):
                 self.assertEqual(status["publication_state"], "not-required")
 
     def test_both_executors_ask_one_rule_whether_missing_state_is_an_error(self) -> None:
-        from kura import training_artifacts
-        from kura.executors import docker
+        from kura.executors import common, docker
         from kura.run_commands import runpod_ssh
 
-        self.assertIs(docker.missing_training_state_error, training_artifacts.missing_training_state_error)
-        self.assertIs(runpod_ssh.missing_training_state_error, training_artifacts.missing_training_state_error)
+        # Both settle a finished run with the one function, which asks missing_training_state_error.
+        self.assertIs(docker.settle_finished_training, common.settle_finished_training)
+        self.assertIs(runpod_ssh.settle_finished_training, common.settle_finished_training)
 
 
 if __name__ == "__main__":

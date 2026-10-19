@@ -476,7 +476,7 @@ class LocalOutputPublicationTests(unittest.TestCase):
 
             observed = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}', "")
             with patch("kura.executors.docker.subprocess.run", return_value=observed), patch(
-                "kura.executors.docker.training_state_capture_required", side_effect=replace_latest_run
+                "kura.training_artifacts.training_state_capture_required", side_effect=replace_latest_run
             ):
                 result = reconcile_docker(run_dir)
 
