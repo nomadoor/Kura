@@ -71,6 +71,10 @@ the user.** One owner decides the class.
   Archiving, removing checkpoints, and removing resume data each append a
   record to the run's `realizations/` saying what moved or went, so no record
   goes on naming a file as present without a later record saying it left.
+  None of the three applies to a run whose checkpoints a render run reads
+  now or at its next launch (a checkpoint path the render froze at compile
+  is inside the run, and the render is unfinished or compiled): it is listed
+  as in use by that render.
 
 **2. Kura reports; it does not decide what is "unused".** Each item shows its
 size, what it costs to recover, the runs that reference it, and when it was

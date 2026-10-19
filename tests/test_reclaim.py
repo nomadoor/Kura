@@ -722,6 +722,59 @@ class RunScratchTests(unittest.TestCase):
             self.assertFalse(staging.exists() or latents.exists() or scratch.exists())
 
 
+def _render(root: Path, run_id: str, state: str, checkpoints: list[str]) -> Path:
+    """A render run whose cases froze these checkpoint paths."""
+    run_dir = root / "runs" / run_id
+    _write(run_dir / "status.json", json.dumps({"state": state}))
+    _write(run_dir / "resolved" / "manifest.lock.yaml", yaml.safe_dump({"id": run_id, "type": "render", "inputs": {"train_run": None}}))
+    _write(run_dir / "resolved" / "cases.jsonl", "".join(
+        json.dumps({"id": f"c{index}", "index": index, "values": {}, "checkpoint": {"path": path}}) + "\n" for index, path in enumerate(checkpoints)))
+    return run_dir
+
+
+class RenderUserTests(unittest.TestCase):
+    """A render that will read a training run's checkpoints keeps that run's outputs."""
+
+    def test_an_unfinished_or_compiled_render_keeps_the_checkpoints_it_reads(self) -> None:
+        with _workspace() as root:
+            train = _run(root, "train", ended="2026-10-01T00:00:00+00:00")
+            _write(train / "outputs" / "a.safetensors")
+            _write(train / "outputs" / "b.safetensors")
+            # The render names no train_run: what it reads is the checkpoint path each case froze.
+            render = _render(root, "render", "compiled", ["runs/train/outputs/b.safetensors"])
+            # Neither a render reading another run, nor a stray directory with no records, holds this run.
+            _render(root, "other", "compiled", ["runs/elsewhere/outputs/x.safetensors"])
+            (root / "runs" / "stray").mkdir()
+            outputs = next(item for item in _items(root, outputs=True) if item["class"] == "outputs")
+            self.assertEqual(outputs["in_use_by"], ["render"])
+            for argv in (["--checkpoints", "train", "--keep", "a.safetensors", "--yes"], ["--archive-outputs", "train", "--to", str(root / "elsewhere"), "--yes"]):
+                code, _, err = _cleanup(argv)
+                self.assertEqual(code, 1)
+                self.assertIn("render", err)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(cmd_run_prune(build_parser().parse_args(["run", "prune", "train", "--yes"])), 1)
+            self.assertIn("render run(s) render", err.getvalue())
+            self.assertTrue((train / "outputs" / "b.safetensors").is_file())
+            # Finished, the render no longer holds them.
+            _write(render / "status.json", json.dumps({"state": "completed", "ended": "2026-10-02T00:00:00+00:00"}))
+            self.assertEqual(_cleanup(["--checkpoints", "train", "--keep", "a.safetensors", "--yes"])[0], 0)
+            self.assertFalse((train / "outputs" / "b.safetensors").exists())
+
+    def test_a_render_compiled_after_the_listing_is_seen_before_removal(self) -> None:
+        from kura.reclaim import became_in_use
+
+        with _workspace() as root:
+            train = _run(root, "train", ended="2026-10-01T00:00:00+00:00")
+            _write(train / "outputs" / "a.safetensors")
+            item = next(item for item in _items(root, outputs=True) if item["class"] == "outputs")
+            self.assertEqual(became_in_use(root, item), [])
+            # A legacy render's single checkpoint, absolute.
+            render = _render(root, "render", "running", [])
+            _write(render / "resolved" / "manifest.lock.yaml", yaml.safe_dump(
+                {"type": "render", "inputs": {"checkpoint": {"path": str(train / "outputs" / "a.safetensors")}}}))
+            self.assertEqual(became_in_use(root, item), ["render"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

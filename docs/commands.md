@@ -20,7 +20,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura cleanup --images old --yes` | Remove only Kura images that are not the current pin, an `images.<name>` override, or frozen in an unfinished or compiled run |
 | `uv run kura cleanup --resume-data <run>... --yes` | Remove only these finished runs' training states (`finished`: every finished run's); states a continuation references stay, and every LoRA stays |
 | `uv run kura cleanup --archive-outputs <run> --to <dir> --yes` | Move a finished run's `outputs/` and `downloads/` to `<dir>/<run>`; its records stay and a record in `realizations/` says where they went |
-| `uv run kura cleanup --checkpoints <run> --keep <file>... --yes` | Remove that finished run's checkpoints except the ones named (a path under `outputs/` or a file name); samples and state folders stay |
+| `uv run kura cleanup --checkpoints <run> --keep <file>... --yes` | Remove that finished run's checkpoints except the ones named (a path under `outputs/` or a file name); samples and state folders stay. Refused, as archiving and `kura run prune` are, while an unfinished or compiled render reads the run's checkpoints |
 | `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
 | `uv run kura fix-links` | Preview repair for Kura symlinks with container-private targets |
 | `uv run kura --version` | Print the installed Kura version |

@@ -95,6 +95,50 @@ def run_uses_inputs(status: dict[str, Any] | None) -> bool:
     return status is None or not run_finished(status) or status.get("state") == "compiled"
 
 
+def _render_checkpoint_paths(run_dir: Path) -> list[str] | None:
+    """The checkpoint paths a compiled render froze (each case's `checkpoint.path` in `resolved/cases.jsonl`,
+    and a legacy render's `inputs.checkpoint.path`); [] for a run that is not a render with frozen records, and None
+    when its frozen records exist but cannot be read."""
+    frozen = run_dir / "resolved" / "manifest.lock.yaml"
+    if not frozen.is_file():
+        return []
+    try:
+        run = load_yaml(frozen)
+        cases_path = run_dir / "resolved" / "cases.jsonl"
+        lines = cases_path.read_text(encoding="utf-8").splitlines() if cases_path.is_file() else []
+        cases = [json.loads(line) for line in lines if line.strip()]
+    except (OSError, ValueError, YAMLError):
+        return None
+    if not isinstance(run, dict):
+        return None
+    if run.get("type") != "render":
+        return []
+    inputs = run.get("inputs") if isinstance(run.get("inputs"), dict) else {}
+    checkpoints = [case.get("checkpoint") for case in cases if isinstance(case, dict)] + [inputs.get("checkpoint")]
+    return [item["path"] for item in checkpoints if isinstance(item, dict) and isinstance(item.get("path"), str)]
+
+
+def render_users(workspace: Path, train_run: str) -> list[str]:
+    """The render runs that read a training run's files now or at their next launch: a checkpoint path they
+    froze is inside `runs/<train_run>/`, and they are unfinished, compiled, or unreadable (`run_uses_inputs`).
+    A render whose frozen records exist but cannot be read counts too, as an unreadable record does for models."""
+    root = (workspace / "runs" / train_run).resolve()
+    users = []
+    for run_dir in sorted((workspace / "runs").glob("*")):
+        if not run_dir.is_dir() or run_dir.name == train_run or not run_uses_inputs(read_run_status(run_dir)):
+            continue
+        paths = _render_checkpoint_paths(run_dir)
+        if paths is None or any(_workspace_file(workspace, path).is_relative_to(root) for path in paths):
+            users.append(run_dir.name)
+    return users
+
+
+def _workspace_file(workspace: Path, value: str) -> Path:
+    """A path a render names, relative to the workspace or absolute, resolved without requiring it to exist."""
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else workspace / path).resolve()
+
+
 def _runs(workspace: Path) -> dict[str, dict[str, Any]]:
     runs: dict[str, dict[str, Any]] = {}
     for run_dir in sorted((workspace / "runs").glob("*")):
@@ -137,7 +181,10 @@ def became_in_use(workspace: Path, item: dict[str, Any]) -> list[str]:
                       if not run_done(workspace / "runs" / run_id, read_run_status(workspace / "runs" / run_id)))
     if item["class"] in ("resume", "outputs") or item["kind"] == "run-scratch":
         run_dir = workspace / "runs" / item["id"]
-        return [item["id"]] if run_dir.is_dir() and not run_done(run_dir, read_run_status(run_dir)) else []
+        if run_dir.is_dir() and not run_done(run_dir, read_run_status(run_dir)):
+            return [item["id"]]
+        # A render that will read this run's checkpoints keeps its outputs.
+        return render_users(workspace, item["id"]) if item["class"] == "outputs" else []
     return []
 
 
@@ -441,7 +488,7 @@ def _resume_items(workspace: Path, runs: dict[str, dict[str, Any]], notes: list[
     return items
 
 
-def _output_items(runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _output_items(workspace: Path, runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     items = []
     for run_id, run in runs.items():
         run_dir = run["dir"]
@@ -457,9 +504,13 @@ def _output_items(runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
             for path in sorted(outputs.rglob("*.safetensors")) if outputs.is_dir()
             and path.is_file() and not is_training_state_output(path.relative_to(outputs), run_id)
         ]
-        items.append(_item("outputs", "run-outputs", run_id, paths=paths,
-                           size=None if size is None or native_size is None else size - native_size, refs={run_id},
-                           last_used=_last_used({run_id}, runs, run_dir), runs=runs, checkpoints=checkpoints))
+        item = _item("outputs", "run-outputs", run_id, paths=paths,
+                     size=None if size is None or native_size is None else size - native_size, refs={run_id},
+                     last_used=_last_used({run_id}, runs, run_dir), runs=runs, checkpoints=checkpoints)
+        users = render_users(workspace, run_id)
+        if users:
+            item["in_use_by"] = users
+        items.append(item)
     return items
 
 
@@ -490,7 +541,7 @@ def reclaim_inventory(workspace: Path, config: dict[str, Any], *, outputs: bool 
         notes.append("models and images cannot be removed while a run record that may name them cannot be read: " + "; ".join(unreadable))
     items += _resume_items(workspace, runs, notes)
     if outputs:
-        items += _output_items(runs)
+        items += _output_items(workspace, runs)
     order = {cls: index for index, cls in enumerate(CLASSES)}
     items.sort(key=lambda item: (order[item["class"]], _when(item["last_used"]) or datetime.max.replace(tzinfo=timezone.utc), -(item["size_bytes"] or 0)))
     return {
@@ -565,6 +616,10 @@ def select_reclaim(
         problems.append("--keep names the checkpoints to keep for --checkpoints <run>")
     if archive_to is not None and archive is None:
         problems.append("--to names where --archive-outputs <run> moves the run's outputs")
+    for name in (checkpoints, archive):
+        if name in outputs and "in_use_by" in outputs[name]:
+            problems.append(f"run {name!r} has checkpoints that render run(s) {', '.join(outputs[name]['in_use_by'])} will read "
+                            "(unfinished or compiled, or their frozen records cannot be read); change them after those renders end or are discarded")
     if checkpoints is not None:
         item = outputs.get(checkpoints)
         if item is None:
