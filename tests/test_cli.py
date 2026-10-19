@@ -172,7 +172,7 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 stdout = io.StringIO()
                 with patch("sys.stdout", stdout):
-                    code = cmd_run_new(argparse.Namespace(experiment="exp", slug="krea2-run", backend="musubi-tuner", executor="runpod", gpu="NVIDIA RTX A5000"))
+                    code = cmd_run_new(argparse.Namespace(experiment="exp", slug="krea2-run", backend="musubi-tuner", executor="runpod", gpu=["NVIDIA RTX A5000"]))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
@@ -406,7 +406,7 @@ class InitCommandTests(unittest.TestCase):
                 )
                 stdout = io.StringIO()
                 with patch("sys.stdout", stdout):
-                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="runpod", backend="ai-toolkit", executor="runpod", gpu="NVIDIA A40")), 0)
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="runpod", backend="ai-toolkit", executor="runpod", gpu=["NVIDIA A40"])), 0)
                 run_id = stdout.getvalue().strip()
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))

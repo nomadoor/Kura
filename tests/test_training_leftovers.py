@@ -114,11 +114,33 @@ class TrainingLeftoverTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(directory)
             try:
-                code = cmd_run_new(argparse.Namespace(experiment="e", slug="s", backend="musubi-tuner", executor="docker", gpu="NVIDIA A40", source=None))
+                code = cmd_run_new(argparse.Namespace(experiment="e", slug="s", backend="musubi-tuner", executor="docker", gpu=["NVIDIA A40"], source=None))
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
         self.assertIn("--gpu: compute.gpu chooses a RunPod GPU; a local run uses the local GPU", stderr.getvalue())
+
+
+    def test_run_new_writes_each_repeated_gpu_into_the_list_in_order(self) -> None:
+        import yaml
+
+        from kura.cli import build_parser, cmd_run_new
+
+        args = build_parser().parse_args(["run", "new", "--experiment", "e", "--slug", "s", "--backend", "musubi-tuner",
+                                          "--executor", "runpod", "--gpu", "NVIDIA RTX A5000", "--gpu", "NVIDIA A40"])
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path.cwd()
+            os.chdir(directory)
+            try:
+                Path("workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cmd_run_new(args), 0)
+                [run_yaml] = Path("runs").glob("*/run.yaml")
+                run = yaml.safe_load(run_yaml.read_text(encoding="utf-8"))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(run["compute"]["gpu"], ["NVIDIA RTX A5000", "NVIDIA A40"])
+        self.assertIn("compute.gpu", build_parser()._subparsers._group_actions[0].choices["run"]._subparsers._group_actions[0].choices["new"].format_help())
 
 
 if __name__ == "__main__":
