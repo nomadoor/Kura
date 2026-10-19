@@ -911,32 +911,27 @@ class TrainingStateArtifactTests(unittest.TestCase):
             _materialize_stdout_progress(run_dir, status, state="running")
             self.assertEqual(status["last_step"], 110)
 
-    def test_completed_resume_materializes_all_requested_additional_steps(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "runs" / "derived"
-            (run_dir / "resolved").mkdir(parents=True)
-            (run_dir / "logs").mkdir()
-            (run_dir / "resolved" / "training-state-source.lock.json").write_text(
-                json.dumps(
-                    {
-                        "source_step": 2,
-                        "target_step": 3,
-                        "additional_steps": 1,
-                        "native_progress": "logical",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (run_dir / "logs" / "stdout.log").write_text(
-                "derived: 67%|###### | 2/3 [00:16<?, ?it/s, lr: 1.0e-06 loss: 5.2e-02]\n",
-                encoding="utf-8",
-            )
-            status: dict[str, object] = {}
+    def test_completed_resume_counts_the_logged_step_and_else_its_target(self) -> None:
+        for label, stdout, expected_step, expected_current in (
+            ("log reached the target", "derived: 100%|##########| 3/3 [00:16<00:00, 1.0it/s, lr: 1.0e-06 loss: 5.2e-02]\n", 3, 1),
+            ("log stopped short", "derived: 67%|###### | 2/3 [00:16<?, ?it/s, lr: 1.0e-06 loss: 5.2e-02]\n", 2, 0),
+            ("log silent", "", 3, 1),
+        ):
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                run_dir = Path(directory) / "runs" / "derived"
+                (run_dir / "resolved").mkdir(parents=True)
+                (run_dir / "logs").mkdir()
+                (run_dir / "resolved" / "training-state-source.lock.json").write_text(
+                    json.dumps({"source_step": 2, "target_step": 3, "additional_steps": 1, "native_progress": "logical"}),
+                    encoding="utf-8",
+                )
+                (run_dir / "logs" / "stdout.log").write_text(stdout, encoding="utf-8")
+                status: dict[str, object] = {}
 
-            _materialize_stdout_progress(run_dir, status, state="completed")
+                _materialize_stdout_progress(run_dir, status, state="completed")
 
-            self.assertEqual((status["last_step"], status["total_steps"]), (3, 3))
-            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (1, 1))
+                self.assertEqual((status["last_step"], status["total_steps"]), (expected_step, 3))
+                self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (expected_current, 1))
 
     def test_container_verifier_accepts_locked_payload_and_rejects_digest_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

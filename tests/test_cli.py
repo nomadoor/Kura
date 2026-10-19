@@ -6326,7 +6326,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             (run_dir / "logs" / "stdout.log").write_text(
-                "\rexample:  99%|█████████▉| 99/100 [04:07<00:02, 2.49s/it, lr: 1.0e-04 loss: 3.478e-01]\n",
+                "\rexample: 100%|██████████| 100/100 [04:07<00:00, 2.49s/it, lr: 1.0e-04 loss: 3.478e-01]\n",
                 encoding="utf-8",
             )
             result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')

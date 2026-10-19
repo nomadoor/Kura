@@ -645,8 +645,11 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                         }
                         for item in published_states
                     ]
-                # The same step rule as Docker: the trainer's log, else the frozen recipe.
-                _apply_stdout_progress(run_dir, status, state="completed" if exit_code == 0 else "failed")
+                # The same step rule as Docker: the trainer's log, else the frozen recipe. The
+                # snapshot holds the Pod's whole log; the copy here may have stopped mirroring early.
+                snapshot_log = downloaded_run / "logs" / "stdout.log"
+                _apply_stdout_progress(run_dir, status, state="completed" if exit_code == 0 else "failed",
+                                       log=snapshot_log if snapshot_log.is_file() else None)
                 if blocked:
                     status.update({"state": "recovery_required", "publication_state": "blocked",
                                    "publication_error": "; ".join(blocked)})

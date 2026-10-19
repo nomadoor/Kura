@@ -38,6 +38,36 @@ class ProgressParityTests(unittest.TestCase):
                 _apply_stdout_progress(run_dir, status, state="completed")
                 self.assertEqual((status.get("last_step"), status.get("total_steps")), (10, 10))
 
+    def test_a_completed_run_whose_log_stopped_short_keeps_the_logged_step(self) -> None:
+        # The recipe is what was asked for; the log is what the trainer did. A run that ended
+        # early is never recorded, or written to progress.jsonl, as having reached its total.
+        from kura.executors.common import _apply_stdout_progress
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _run(directory, "steps:  50%|#####     | 5/10 [00:05<00:05, 1.0it/s, avr_loss=0.5]\n")
+            (run_dir / "realizations").mkdir()
+            status = {"state": "completed", "last_realization": "realizations/r1.json"}
+            _apply_stdout_progress(run_dir, status, state="completed")
+            self.assertEqual((status.get("last_step"), status.get("total_steps")), (5, 10))
+            progress = (run_dir / "realizations" / "r1.progress.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(json.loads(progress[-1])["last_step"], 5)
+
+    def test_runpod_collection_counts_from_the_snapshot_log_when_the_local_copy_stopped_mirroring(self) -> None:
+        # The local log on RunPod is only a mirror kept while the Pod trains; the snapshot has it all.
+        from tests.test_run_end import _download, _runpod_run
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _runpod_run(root, exit_code=0)
+            (run_dir / "logs").mkdir()
+            (run_dir / "logs" / "stdout.log").write_text("steps:  40%|####      | 40/100 [00:40<01:00, 1.0it/s, avr_loss=0.5]\n", encoding="utf-8")
+            (run_dir / "downloads" / "source" / "logs").mkdir()
+            (run_dir / "downloads" / "source" / "logs" / "stdout.log").write_text(
+                "steps:  40%|####      | 40/100 [00:40<01:00, 1.0it/s, avr_loss=0.5]\n"
+                "steps: 100%|##########| 100/100 [01:40<00:00, 1.0it/s, avr_loss=0.4]\n", encoding="utf-8")
+            _download(root)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((status.get("last_step"), status.get("total_steps")), (100, 100))
 
     def test_speed_comes_only_from_training_progress_lines(self) -> None:
         # Model downloads and latent caching print their own it/s; they are not training speed.
