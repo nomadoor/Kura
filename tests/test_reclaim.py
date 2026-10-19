@@ -150,9 +150,25 @@ class ReclaimInventoryTests(unittest.TestCase):
                 self.assertTrue(json.loads(out)["dry_run"])
                 self.assertTrue((outside / "hub" / "models--org--one").is_dir())
                 self.assertEqual(_cleanup(["--models", "org/one", "--yes"])[0], 0)
+                # No record here names what another workspace sharing the cache uses: "unreferenced" is refused.
+                code, _, err = _cleanup(["--models", "unreferenced", "--yes"])
+                self.assertEqual(code, 1)
+                self.assertIn("outside this workspace", err)
+                self.assertIn("org/two", err)
             self.assertFalse((outside / "hub" / "models--org--one").exists())
             self.assertTrue((outside / "hub" / "models--org--two").is_dir())
             self.assertTrue((outside / "ai-toolkit-models" / "vae" / "vae.safetensors").is_file())
+
+    @posix_only(POSIX_PATHS)
+    def test_a_cache_directory_linked_out_of_the_workspace_counts_as_outside(self) -> None:
+        with tempfile.TemporaryDirectory() as elsewhere:
+            shared = Path(elsewhere).resolve() / "hf"
+            _write(shared / "hub" / "models--org--other" / "blobs" / "a", b"1" * 10)
+            with _workspace() as root:
+                (root / "cache").mkdir()
+                (root / "cache" / "huggingface").symlink_to(shared, target_is_directory=True)
+                self.assertEqual(_cleanup(["--models", "unreferenced", "--yes"])[0], 1)
+            self.assertTrue((shared / "hub" / "models--org--other").is_dir())
 
     def test_ai_toolkit_model_files_are_referenced_by_the_runs_whose_record_lists_them(self) -> None:
         with _workspace() as root:

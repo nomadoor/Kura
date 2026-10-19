@@ -506,6 +506,13 @@ def select_reclaim(
         problems.append("--models unreferenced waits until no run is unfinished (a running trainer may be downloading models "
                         f"no record names yet): {', '.join(inventory['unfinished_runs'])}; run it after they finish, or name models by id")
 
+    if "unreferenced" in models and not inventory["hf_cache_inside_workspace"]:
+        # Only this workspace's records are read, so a model another workspace sharing the cache uses looks unreferenced.
+        unnamed = [item["id"] for item in items if item["kind"] in MODEL_KINDS and not item["referenced_by"]]
+        problems.append(f"--models unreferenced is refused: the Hugging Face cache {inventory['hf_cache']} is outside this workspace, "
+                        "and a model another workspace using it needs is not named by any record here; name the models to remove "
+                        f"by id, after checking no other workspace uses them: {', '.join(unnamed) or 'none is unreferenced here'}")
+
     def find(kinds: tuple[str, ...], item_id: str) -> dict[str, Any] | None:
         return next((item for item in items if item["kind"] in kinds and item["id"] == item_id), None)
 

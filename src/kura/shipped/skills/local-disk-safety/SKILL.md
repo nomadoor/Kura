@@ -97,7 +97,10 @@ The classes:
   removed; a run whose status or records cannot be read counts as using
   everything, and while one exists no model or image is removed.
   `--models unreferenced` waits until no run is unfinished: a running
-  AI-Toolkit trainer records the files it downloaded only when it ends.
+  AI-Toolkit trainer records the files it downloaded only when it ends. It
+  is refused for a cache outside the workspace (another workspace's runs
+  are not read); there, name each model by id after the user confirms no
+  other workspace uses it.
 - **resume data**: the training states of a finished run, in its `outputs/`
   (the `*-state` folders) and in `artifacts/training-state/`. Removing it means
   that run can no longer be resumed; every LoRA and checkpoint stays. States a
@@ -122,7 +125,7 @@ Then:
    ```sh
    kura cleanup --yes                                  # the free class
    kura cleanup --models <id>... --yes                 # these models
-   kura cleanup --models unreferenced --yes            # models no run record names
+   kura cleanup --models unreferenced --yes            # models no run record names (cache inside the workspace only)
    kura cleanup --images old --yes                     # old Kura images
    kura cleanup --resume-data <run>... --yes           # these runs' resume data
    kura cleanup --resume-data finished --yes           # every finished run's resume data
