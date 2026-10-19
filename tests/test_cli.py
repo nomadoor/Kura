@@ -4269,7 +4269,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertFalse(process["model"]["quantize"])
         self.assertFalse(process["model"]["quantize_te"])
         self.assertFalse(process["model"]["low_vram"])
-        self.assertEqual(command["cwd"], "/opt/ai-toolkit")
+        self.assertEqual(command["cwd"], "/app/ai-toolkit")
         self.assertEqual(command["argv"][:2], ["python", "-c"])
         self.assertIn("hook_before_train_loop", command["argv"][2])
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
@@ -4279,13 +4279,13 @@ class AiToolkitBackendTests(unittest.TestCase):
             "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
         })
 
-    def test_runpod_command_uses_runpod_working_directory(self) -> None:
-        run = self._run()
-        run["compute"] = {"executor": "runpod"}
-
-        command = command_ai_toolkit(run)
-
-        self.assertEqual(command["cwd"], "/app/ai-toolkit")
+    def test_every_executor_runs_ai_toolkit_from_its_one_install_directory(self) -> None:
+        # The image installs AI-Toolkit at /app/ai-toolkit (/opt/ai-toolkit is a link to it).
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor):
+                run = self._run()
+                run["compute"] = {"executor": executor}
+                self.assertEqual(command_ai_toolkit(run)["cwd"], "/app/ai-toolkit")
 
     def test_compile_has_no_directory_inference_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

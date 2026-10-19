@@ -25,7 +25,7 @@ from kura.media_types import frozen_suffixes
 from kura.paths import AI_TOOLKIT_MODELS_PATH
 from kura.provenance import artifact_pinning
 from kura.training_artifacts import require_constant_scheduler_for_resume, resume_steps, training_state_managed, training_state_payload
-from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
+from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
 
 
 AI_TOOLKIT_DATASET_FIELD_SPECS = {
@@ -1601,7 +1601,8 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
         }
         output_contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
-        cwd = "/app/ai-toolkit" if run_executor(run) == "runpod" else "/opt/ai-toolkit"
+        # The one install directory on every executor; /opt/ai-toolkit is a link to it in the image.
+        cwd = "/app/ai-toolkit"
         config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"
         dataset_config = override.get("dataset_config")
         audio_preflight = (

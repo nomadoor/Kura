@@ -1038,7 +1038,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             "gradient_accumulation_steps": 1, "gradient_checkpointing": True,
             "mixed_precision": "bf16", "optimizer_type": "adamw8bit", "low_vram": True,
         }
-        for executor, expected_cwd in (("docker", "/opt/ai-toolkit"), ("runpod", "/app/ai-toolkit")):
+        for executor, expected_cwd in (("docker", "/app/ai-toolkit"), ("runpod", "/app/ai-toolkit")):
             with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
                 run_id = f"evidence-sdxl-{executor}"
                 run = {
