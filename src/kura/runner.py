@@ -1091,16 +1091,24 @@ def _delete_unstarted_pod(run_dir: Path, request: Path, details: dict[str, Any])
 def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any], code: int | None) -> int:
     """A finished run ends the follower; repeated failures to collect hand the run to a person.
 
-    `code` None is a retry-safe step that failed (nothing on the Pod can be lost):
-    the runner retries it with its backoff, and it never counts as a failed collection.
+    Counted: a launch that failed before it recorded a Pod, and a failed
+    collection of a job whose exit is recorded. Retried uncounted with the
+    runner's backoff: `code` None (a retry-safe step that failed), anything
+    while this request's Pod exists and its job's exit is not recorded (the API
+    or SSH unreachable while training continues), and a finished run whose Pod
+    delete failed (the next follower deletes it).
     """
     from kura.executors.common import end_run
 
     status = _status(run_dir)
-    if run_finished(status) and not _pod_left_running(status):
+    if run_finished(status):
         # The RunPod controller already notified completion with the request's channels.
-        return 0
+        return 1 if _pod_left_running(status) else 0
     if code is None:
+        return 1
+    realization = _realization(run_dir, status.get("last_realization"))
+    launched = realization is not None and (realization.get("controlled_by") or {}).get("request") == request.name
+    if launched and not isinstance(status.get("remote_exit_code"), int):
         return 1
     failures_path = _sibling(request, ".failures.json")
     failures = int(_read_json(failures_path).get("count", 0)) + 1
