@@ -46,6 +46,9 @@ why, so it is not raised again.
 
 
 - 2026-10-19 | cleanup | An image another workspace's `images.<name>` override names (a locally built tag in a `nomadoor/kura-*` repository) is listed as an old image here, and removing it costs a rebuild, not a download; `--models unreferenced` also refuses the workspace's own legacy AI-Toolkit directory and `hub/blobs` with a shared cache (they can still be named) | review of the shared-cache refusal | P7
+
+
+- 2026-10-19 | cleanup | Anima natives kept in `cache/sd-scripts/native-output` after a run cut short are listed in no class, so `kura cleanup plan` never shows the space they hold; list them under outputs, or add a note | review of the kept trainer output | P7
 - 2026-10-19 | tests | The moved-lease-during-retry test stubs `kura_pod_self_delete`, so the real `kura_lease_moved` check never runs in a test, and it runs under bash, not sh; drive the real self-delete against the 503 sandbox with a stubbed sleep that moves the deadline | review of the self-delete retry | P6
 - 2026-10-19 | RunPod lease | A delete attempt already in flight when `kura run lease` moves the deadline can still delete the Pod (a window of one attempt, at most about 60 s) | review of the self-delete retry | P6
 - 2026-10-19 | render cost | `kura render launch` has no way to shorten the RunPod lease, so the cost ceiling of a render that takes minutes is computed over the 12 h default lease (about $7 on an A40) | ComfyUI v0.41.3 upgrade | -

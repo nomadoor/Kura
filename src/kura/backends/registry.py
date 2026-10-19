@@ -14,7 +14,7 @@ from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tun
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import MODEL_VERSIONS, MUSUBI_BUNDLES, musubi_model_download_specs, musubi_model_facts
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
-from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache, training_state_contract_sd_scripts, validate_sd_scripts_authored
+from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, ENTRYPOINTS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, SD_SCRIPTS_NATIVE_OUTPUT, sd_scripts_disk_cache, training_state_contract_sd_scripts, validate_sd_scripts_authored
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs, sd_scripts_model_facts
 from kura.images import BUILD_SOURCES, PINNED_IMAGES
@@ -143,6 +143,9 @@ class BackendAdapter:
     # given an architecture selector value, only that architecture's.
     model_facts: Callable[[str | None], dict[str, Any]] | None = None
     default_ports: tuple[str, ...] = ("22/tcp",)
+    # Directories, relative to the run, inside its `cache/` where the trainer writes weights before Kura
+    # publishes them to outputs/; a run cut short can leave the only copy there, so reclaim never frees them.
+    cache_outputs: tuple[str, ...] = ()
 
 
 def _compile_ai(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
@@ -449,6 +452,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         training_state=training_state_contract_sd_scripts,
         disk_cache=sd_scripts_disk_cache,
         model_facts=sd_scripts_model_facts,
+        cache_outputs=(SD_SCRIPTS_NATIVE_OUTPUT,),
     ),
 }
 

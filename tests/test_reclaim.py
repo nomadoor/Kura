@@ -704,6 +704,24 @@ class RootOwnedRemovalTests(unittest.TestCase):
 
 
 
+class RunScratchTests(unittest.TestCase):
+    def test_a_trainer_output_inside_the_run_cache_is_never_free(self) -> None:
+        # Anima LoRA trains into cache/sd-scripts/native-output and converts into outputs/; a run cut short
+        # before conversion keeps the only copy of its weights there.
+        with _workspace() as root:
+            run_dir = _run(root, "anima", state="interrupted", ended="2026-10-01T00:00:00+00:00")
+            native = _write(run_dir / "cache" / "sd-scripts" / "native-output" / "anima-step00000010.safetensors", b"w" * 50)
+            staging = _write(run_dir / "cache" / "sd-scripts" / "converted-output" / "x.safetensors")
+            latents = _write(run_dir / "cache" / "latents" / "a.npz")
+            scratch = _write(run_dir / "tmp" / "x")
+            item = next(item for item in _items(root) if item["kind"] == "run-scratch")
+            self.assertNotIn(str(native.parent), item["paths"])
+            self.assertFalse(any(Path(path) in native.parents or Path(path) == native for path in item["paths"]))
+            self.assertEqual(_cleanup(["--yes"])[0], 0)
+            self.assertTrue(native.is_file())
+            self.assertFalse(staging.exists() or latents.exists() or scratch.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
 
