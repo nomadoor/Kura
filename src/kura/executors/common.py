@@ -869,20 +869,127 @@ def _record_progress(run_dir: Path, status: dict[str, Any]) -> None:
         print(f"warning: could not record training progress: {exc}", file=sys.stderr)
 
 
-def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
-    _apply_stdout_progress(run_dir, status, state=state)
-    if state == "completed" and status.get("publication_state") != "completed":
-        outputs_dir = run_dir / "outputs"
-        if outputs_dir.is_dir():
-            outputs = [
-                str(path.relative_to(run_dir))
-                for path in sorted(outputs_dir.rglob("*"))
-                if path.is_file()
-                and not path.is_symlink()
-                and not is_training_state_output(path.relative_to(outputs_dir), run_dir.name)
+def settle_finished_training(
+    run_dir: Path,
+    realization_id: str,
+    *,
+    state: str,
+    states_root: Path | None = None,
+    output_candidates: list[str] | None = None,
+    output_baseline: dict[str, dict[str, int]] | None = None,
+    log: Path | None = None,
+    collection_errors: tuple[str, ...] = (),
+) -> Callable[[dict[str, Any]], None]:
+    """Settle a finished training run the same way on every executor, once its executor has
+    brought the run's files local: publish its training states and outputs, write the records
+    that say so, and return the change to make to its status.
+
+    `state` is how the trainer ended (completed, failed, interrupted, unknown). `states_root`
+    holds the trainer's state directories when they are not in the run's outputs (a RunPod
+    snapshot); `output_candidates` are the output paths the executor brought home, else every
+    file in outputs/ (`output_baseline` excludes files that were there before the launch);
+    `log` is the trainer's whole log when the run's own is a mirror; `collection_errors` are
+    reasons the executor could not bring every file home.
+
+    Every reason the publication could not complete is recorded in one publication-attempt
+    record; a completed trainer whose publication is blocked needs a person
+    (`recovery_required`), any other run keeps its state with publication `blocked`. Status
+    lists only outputs that were published; the step counts come from the log for every state.
+    """
+    from kura.artifact_publication import (
+        existing_publication, output_contract, publish_outputs, record_publication_failure, record_unverified_publication,
+    )
+    from kura.training_artifacts import (
+        MISSING_STATE_PUBLICATION_ERROR, missing_training_state_error, publish_completed_training_states,
+        realization_training_states, training_state_capture_required,
+    )
+
+    workspace = run_dir.parent.parent
+    completed = state == "completed"
+    realization_ref = realization_reference(realization_id)
+    state_error: str | None = None
+    published: list[dict[str, Any]] = []
+    try:
+        capture_required = training_state_capture_required(run_dir)
+    except (OSError, ValueError) as exc:
+        # A run with no compiled manifest keeps no state; one whose manifest cannot be read is
+        # held to keeping it, and the error says why it could not.
+        capture_required = (run_dir / "resolved" / "manifest.lock.yaml").is_file()
+        state_error = _redact_secret_text(str(exc)) if capture_required else None
+    if capture_required and state_error is None:
+        try:
+            published = publish_completed_training_states(workspace, run_dir, outputs_root=states_root, allow_final_state=completed)
+        except (OSError, ValueError) as exc:
+            state_error = _redact_secret_text(str(exc))
+    if capture_required and not published and state_error is None:
+        published = realization_training_states(workspace, run_dir.name, realization_ref)
+    missing_state = None if state_error else missing_training_state_error(capture_required and not published, trainer_completed=completed)
+    errors = [*collection_errors, *([state_error] if state_error else []), *([MISSING_STATE_PUBLICATION_ERROR] if missing_state else [])]
+    contract: dict[str, Any] | None = None
+    publication_manifest: str | None = None
+    outputs: list[str] = []
+    if completed:
+        try:
+            contract = output_contract(run_dir)
+            if contract is not None:
+                reused = existing_publication(run_dir, realization_id)
+                publication_manifest, outputs = reused if reused is not None else publish_outputs(
+                    run_dir, realization_id, contract, baseline=output_baseline, candidate_paths=output_candidates,
+                )
+        except (OSError, ValueError) as exc:
+            errors.append(_redact_secret_text(str(exc)))
+            publication_manifest, outputs = None, []
+    blocked = bool(errors)
+    if completed and contract is None and not blocked:
+        outputs = output_candidates if output_candidates is not None else _local_outputs(run_dir)
+        record_unverified_publication(run_dir, realization_id, outputs)
+    attempt = record_publication_failure(run_dir, realization_id, "; ".join(errors)) if blocked else None
+
+    def apply(status: dict[str, Any]) -> None:
+        if attempt:
+            status["last_publication_attempt"] = attempt
+        if published:
+            status["recoverable_training_states"] = [
+                {
+                    "artifact_id": item["id"],
+                    "manifest_sha256": item["manifest_sha256"],
+                    "observed_step": item["observed_step"],
+                    "restoration_level": item["restoration_contract"]["level"],
+                }
+                for item in published
             ]
-            if outputs:
-                status["outputs"] = outputs
+        if state_error or missing_state:
+            status["training_state_sync_error"] = state_error or missing_state
+        else:
+            # A collection that obtained (or never needed) state supersedes an earlier sync's error.
+            status.pop("training_state_sync_error", None)
+        if blocked:
+            status["publication_error"] = "; ".join(errors)
+        else:
+            status.pop("publication_error", None)
+        if publication_manifest:
+            status["publication_manifest"] = publication_manifest
+        status["outputs"] = outputs if publication_manifest or (completed and not blocked) else []
+        if completed:
+            status["state"] = "recovery_required" if blocked else "completed"
+            status["publication_state"] = "blocked" if blocked else "completed" if contract else "legacy-unverified"
+        else:
+            status["publication_state"] = "blocked" if blocked else "not-required"
+        _apply_stdout_progress(run_dir, status, state=state, log=log)
+
+    return apply
+
+
+def _local_outputs(run_dir: Path) -> list[str]:
+    """The run's output files on local disk, outside its training-state directories."""
+    outputs_dir = run_dir / "outputs"
+    if not outputs_dir.is_dir():
+        return []
+    return [
+        path.relative_to(run_dir).as_posix()
+        for path in sorted(outputs_dir.rglob("*"))
+        if path.is_file() and not path.is_symlink() and not is_training_state_output(path.relative_to(outputs_dir), run_dir.name)
+    ]
 
 
 def _configured_final_step(run_dir: Path) -> tuple[int | None, int | None]:

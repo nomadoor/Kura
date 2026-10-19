@@ -31,8 +31,8 @@ from kura.executors.runpod import bring_home_ai_toolkit_models, project_runpod_d
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
-from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication, recorded_output_paths
-from kura.executors import _materialize_stdout_progress, _redact_secret_text
+from kura.artifact_publication import recorded_output_paths
+from kura.executors import _apply_stdout_progress, _redact_secret_text
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell, format_cost_ceiling, pod_cost_ceiling
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
@@ -40,10 +40,10 @@ from kura.yamlio import load_yaml_mapping as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import training_state_policy
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, kura_env_exports, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, kura_env_exports, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, settle_finished_training
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import local_reserve_gib
-from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, state_logical_step, compiled_training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_training_state_candidate, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state
 from kura.runtime_io import validated_write_roots
 
 
@@ -528,83 +528,32 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             exit_code = remote_exit.get("exit_code")
             if not isinstance(exit_code, int):
                 return False, []
+            realization_id = _status_realization_id(json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
             output_dir = downloaded_run / "outputs"
-            # The same rule the Docker executor applies (training_artifacts); an unreadable
-            # run is held to it as Docker holds it.
-            try:
-                state_capture_required = training_state_capture_required(run_dir)
-            except (OSError, ValueError):
-                state_capture_required = (run_dir / "resolved" / "manifest.lock.yaml").is_file()
-            # A state that fails verification is recorded for a person, as on Docker; collecting
-            # again cannot change a snapshot that is already complete.
-            state_error: str | None = None
-            try:
-                published_states = (
-                    publish_completed_training_states(run_dir.parent.parent, run_dir, outputs_root=output_dir, allow_final_state=exit_code == 0)
-                    if state_capture_required and output_dir.is_dir() and any(output_dir.glob("*-state"))
-                    else []
-                )
-            except (OSError, ValueError) as exc:
-                published_states, state_error = [], _safe_error(exc)
-            if state_capture_required and not published_states:
-                # Docker keeps every state the trainer wrote on local disk; on RunPod the states
-                # mirrored during training were published then, and stand in the same way.
-                try:
-                    published_states = [select_training_state(run_dir.parent.parent, run_id)]
-                except ValueError:
-                    published_states = []
-            # Reasons a completed run's outputs cannot count as published. The snapshot holds
-            # everything the Pod had, so collecting again cannot change them: the run is
-            # recorded as needing a person, as on Docker, and the Pod is not kept for it.
-            blocked: list[str] = []
-            # As on Docker: a state error blocks a completed run's publication; a failed run stays
-            # failed with its publication blocked; a missing state matters only for a completed run.
-            missing_state = None if state_error else missing_training_state_error(
-                state_capture_required and not published_states, trainer_completed=exit_code == 0)
-            state_sync_error = state_error or missing_state
-            if state_error and exit_code == 0:
-                blocked.append(state_error)
-            elif missing_state:
-                blocked.append(MISSING_STATE_PUBLICATION_ERROR)
+            # This executor's part: bring the snapshot's files home. Settling the run from them is
+            # the one rule every executor applies (settle_finished_training).
+            collection_errors: tuple[str, ...] = ()
             try:
                 outputs = materialize_primary_outputs(output_dir)
             except ValueError as exc:
                 # A collision in the snapshot is in its content; collecting again repeats it.
-                outputs = []
-                blocked.append(_safe_error(exc))
-            publication_manifest: str | None = None
-            contract: dict[str, Any] | None = None
-            realization_id: str | None = None
-            if exit_code == 0:
-                current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-                realization_ref = current_status.get("last_realization")
-                realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else None
-                try:
-                    contract = output_contract(run_dir)
-                    if contract is not None:
-                        if realization_id is None:
-                            raise ValueError("cannot publish downloaded outputs without a realization")
-                        # A run collected again keeps the publication it has, as on Docker.
-                        reused = existing_publication(run_dir, realization_id)
-                        publication_manifest, outputs = reused if reused is not None else publish_outputs(
-                            run_dir, realization_id, contract, candidate_paths=outputs
-                        )
-                except (OSError, ValueError) as exc:
-                    blocked.append(_safe_error(exc))
-            attempt = record_publication_failure(run_dir, realization_id, "; ".join(blocked)) if blocked and realization_id else None
+                outputs, collection_errors = [], (_safe_error(exc),)
+            snapshot_log = downloaded_run / "logs" / "stdout.log"
+            settle = settle_finished_training(
+                run_dir, realization_id, state="completed" if exit_code == 0 else "failed",
+                states_root=output_dir, output_candidates=outputs,
+                log=snapshot_log if snapshot_log.is_file() else None, collection_errors=collection_errors,
+            )
             recovery_root = downloaded_run / "recovery"
             recovery_artifacts = [
                 str(path.relative_to(run_dir))
                 for path in sorted(recovery_root.rglob("*"))
                 if path.is_file()
             ] if recovery_root.is_dir() else []
-            realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
-            if isinstance(realization_ref, str):
-                bring_home_ai_toolkit_models(run_dir, downloaded_run, Path(realization_ref).stem)
-            input_postflight = (
-                project_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
-                if isinstance(realization_ref, str) else None
-            )
+            recorded_launch = realization_id != "unrecorded"
+            if recorded_launch:
+                bring_home_ai_toolkit_models(run_dir, downloaded_run, realization_id)
+            input_postflight = project_runpod_dataset_handoff(run_dir, downloaded_run, realization_id) if recorded_launch else None
 
             def mutate(status: dict[str, Any]) -> None:
                 # The record that the downloaded snapshot was accepted comes first; a snapshot
@@ -619,42 +568,13 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 if input_postflight is not None:
                     status["dataset_input_postflight"] = input_postflight
                 status.pop("recovery_required", None)  # a flag older Kura wrote; the state says it now
-                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp")})
+                ended_at = host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp")
+                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": ended_at,
+                               "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)),
+                               "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed",
+                               "remote_exit_code": exit_code, "remote_ended": ended_at})
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
-                if state_sync_error is not None:
-                    status["training_state_sync_error"] = state_sync_error
-                else:
-                    # A final download that obtained (or never needed) state
-                    # supersedes any error recorded by an earlier mid-run sync.
-                    status.pop("training_state_sync_error", None)
-                status["publication_state"] = (
-                    "completed" if contract else "legacy-unverified" if exit_code == 0 else "blocked" if state_error else "not-required"
-                )
-                if exit_code == 0 and not contract and realization_id is not None:
-                    record_unverified_publication(run_dir, realization_id, list(outputs or []))
-                status.pop("publication_error", None)
-                if publication_manifest:
-                    status["publication_manifest"] = publication_manifest
-                if published_states:
-                    status["recoverable_training_states"] = [
-                        {
-                            "artifact_id": item["id"],
-                            "observed_step": item["observed_step"],
-                            "manifest_sha256": item["manifest_sha256"],
-                            "restoration_level": item["restoration_contract"]["level"],
-                        }
-                        for item in published_states
-                    ]
-                # The same step rule as Docker: the trainer's log, else the frozen recipe. The
-                # snapshot holds the Pod's whole log; the copy here may have stopped mirroring early.
-                snapshot_log = downloaded_run / "logs" / "stdout.log"
-                _apply_stdout_progress(run_dir, status, state="completed" if exit_code == 0 else "failed",
-                                       log=snapshot_log if snapshot_log.is_file() else None)
-                if blocked:
-                    status.update({"state": "recovery_required", "publication_state": "blocked",
-                                   "publication_error": "; ".join(blocked)})
-                    if attempt:
-                        status["last_publication_attempt"] = attempt
+                settle(status)
 
             _mutate_run_status(run_dir, mutate)
             return True, recovery_artifacts
@@ -1619,7 +1539,7 @@ fi
     def mutate(current: dict[str, Any]) -> None:
         current.pop("remote_log_bytes", None)
         current.pop("remote_log_synced_at", None)
-        _materialize_stdout_progress(run_dir, current, state=str(current.get("state") or "running"))
+        _apply_stdout_progress(run_dir, current, state=str(current.get("state") or "running"))
 
     try:
         _mutate_run_status(run_dir, mutate)

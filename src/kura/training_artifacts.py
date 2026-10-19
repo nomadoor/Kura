@@ -500,6 +500,22 @@ def training_state_at_step(
     return max(found, key=_identity_preference) if found else None
 
 
+def realization_training_states(workspace: Path, source_run: str, source_realization: str) -> list[dict[str, Any]]:
+    """The verified states one realization of a run published, by step: those a RunPod run's
+    pulls published while its Pod trained stand in for a snapshot that holds none."""
+    found: list[dict[str, Any]] = []
+    for path in _artifact_root(workspace).glob("*/manifest.json"):
+        try:
+            candidate = _load_manifest_path(path)
+            if candidate.get("source_run") != source_run or candidate.get("source_realization") != source_realization:
+                continue
+            verify_training_state(workspace, candidate)
+        except ValueError:
+            continue
+        found.append(candidate)
+    return sorted(found, key=lambda item: (_manifest_observed_step(item), str(item.get("id"))))
+
+
 def recipe_fingerprint(run: dict[str, Any]) -> str:
     payload = {key: run.get(key) for key in ("backend", "model", "datasets", "recipe")}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

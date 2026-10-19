@@ -136,6 +136,10 @@ publication failure leaves the run in state `recovery_required` with its
 outputs downloaded. When the controller collected the run, it then deletes the
 Pod; after a manual `kura run download`, delete it with `kura run stop`. Runs compiled before this output contract remain
 `legacy-unverified` rather than acquiring retroactive verification.
+Docker and RunPod settle a finished run with the same rule: status `outputs`
+lists only the outputs the run published, so a failed or stopped run's files
+stay in `outputs/` without being listed there, and a failed run whose files
+could not all be collected stays `failed` with `publication_state: blocked`.
 Backend-native output validators remain responsible for adapter-specific tensor
 keys and compatibility; this structural publication check does not judge LoRA
 quality or prove that the model is useful.

@@ -57,8 +57,12 @@ class OneRuleTests(unittest.TestCase):
         from kura.executors import docker
         from kura.run_commands import runpod_ssh
 
-        # Both executors call the one shared function; neither keeps its own copy.
-        self.assertIs(docker.training_state_capture_required, training_state_capture_required)
+        from kura.executors import common
+
+        # Both executors settle a finished run with the one shared function, which asks this rule;
+        # RunPod's mid-run mirror asks it too. Neither keeps its own copy.
+        self.assertIs(docker.settle_finished_training, common.settle_finished_training)
+        self.assertIs(runpod_ssh.settle_finished_training, common.settle_finished_training)
         self.assertIs(runpod_ssh.training_state_capture_required, training_state_capture_required)
         self.assertFalse(hasattr(runpod_ssh, "_directory_training_state_sync_enabled"))
 
