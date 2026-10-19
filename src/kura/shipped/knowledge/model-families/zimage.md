@@ -2,8 +2,9 @@
 
 ## Training
 
-- Backend of the entries below: musubi-tuner v0.3.5, `architecture: zimage`.
-  AI-Toolkit's `zimage` has its own section below.
+- Backend of the entries below: musubi-tuner `architecture: zimage`, at v0.3.5
+  unless an entry names v0.3.6 (the pin of Kura 0.7.0). AI-Toolkit's `zimage`
+  has its own section below.
 - VRAM class: a LoRA at 768 px, rank 32 / alpha 16, learning rate 1e-4 with a
   cosine schedule, adamw8bit, `timestep_sampling: shift`,
   `discrete_flow_shift: 2.0`, `fp8_base` + `fp8_scaled` + `fp8_llm`, and
@@ -14,6 +15,18 @@
   Z-Image LoRA at fp8 without block swap running 600 steps in 40 minutes
   (3.25 s per step) on Musubi Tuner v0.3.5. The run folder was not kept.
   source: acceptance test 2026-10-17/18 (local RTX 4070 Ti 12 GB, pins of Kura 0.6.0)
+- Recorded on Musubi Tuner v0.3.6: a LoRA at 768 px, rank 32 / alpha 16,
+  learning rate 2e-4 constant, adamw8bit, `timestep_sampling: shift`,
+  `discrete_flow_shift: 2.0`, `fp8_base` + `fp8_scaled` + `fp8_llm`, gradient
+  checkpointing, batch size 1, no block swap, on an RTX 4070 Ti with 12 GB:
+  3.6 to 3.74 s per step; the 100 training steps took 6 min 10 s, and the run
+  about 10 minutes from launch to end with model loading and caching. Each
+  LoRA file (saved bf16) was 140,160,116 bytes.
+  source: acceptance test 2026-10-19, run 20261019-0750_vivi-zimage-local_887b
+- Caption style for this family's Qwen3 text encoder (tag lists or natural
+  language): not recorded yet. regrets.md flags tag captions for a model
+  prompted in natural language; no recorded Z-Image run compared the two.
+  source: acceptance test 2026-10-19 (the card had no entry)
 - Upstream's starting timestep values: Musubi's own Z-Image guide trains with
   `timestep_sampling: shift`, `weighting_scheme: none`, and
   `discrete_flow_shift: 2.0`, and says the best Z-Image settings are unclear,
