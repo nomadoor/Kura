@@ -67,6 +67,10 @@ def _write_state(directory: Path) -> Path:
     return directory
 
 
+# Compile always freezes `recovery`; a manifest without it was compiled before Kura managed state.
+COMPILED_RECOVERY = {"training_state": {"enabled": True, "keep_generations": 2}}
+
+
 def musubi_run() -> dict[str, Any]:
     return {
         "id": "derived",
@@ -74,6 +78,7 @@ def musubi_run() -> dict[str, Any]:
         "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
         "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
         "recipe": {"steps": 1000, "seed": 42},
+        "recovery": dict(COMPILED_RECOVERY),
         "backend": {"name": "musubi-tuner", "config": {
             "architecture": "flux2",
             "model_version": "klein-base-4b",
@@ -98,6 +103,7 @@ def sd_scripts_run() -> dict[str, Any]:
         "id": "derived",
         "type": "train",
         "recipe": {"steps": 1000, "seed": 42},
+        "recovery": dict(COMPILED_RECOVERY),
         "datasets": [{"id": "sample", "digest": "sha256:test"}],
         "backend": {"name": "sd-scripts", "config": {
             "architecture": "sd15",
@@ -128,6 +134,7 @@ def ai_toolkit_run() -> dict[str, Any]:
         "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
         "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
         "recipe": {"steps": 1000, "seed": 42},
+        "recovery": dict(COMPILED_RECOVERY),
     }
 
 
