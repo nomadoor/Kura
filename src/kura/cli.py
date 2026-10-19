@@ -803,6 +803,10 @@ def cmd_run_status(args: argparse.Namespace) -> int:
                 summary["runner"] = "not running; this command asked one to start, check again with `kura runner status`"
         elif not run_finished(status) and not runner_controlled:
             summary["observe_now"] = f"this run is not under the job runner; `kura run reconcile {args.run_id}` observes it now"
+        from kura.executors.runpod import format_pod_gpu_cost, pod_gpu_cost
+
+        if cost := pod_gpu_cost(latest_realization, status):
+            summary["pod_gpu_cost"] = format_pod_gpu_cost(cost)
         if len(outputs) > STATUS_SUMMARY_OUTPUTS:
             summary["outputs_shown"] = f"{STATUS_SUMMARY_OUTPUTS} of {len(outputs)}; every output is listed under outputs below"
         # The summary leads so a reader that stops early has read what matters.

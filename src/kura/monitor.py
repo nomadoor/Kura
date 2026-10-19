@@ -16,6 +16,7 @@ from kura.training_artifacts import checkpoint_files, displayed_final_step, expe
 from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
+from kura.executors.runpod import pod_gpu_cost
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
@@ -698,10 +699,8 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     pod_id = _string(status.get("pod_id") or pod_raw.get("id"))
     pod_state = _string(observation.get("desired_status") or observation.get("state") or pod_raw.get("desired_status") or pod_raw.get("state") or request.get("desiredStatus"))
     started = _parse_datetime(_first_present(observation.get("last_started_at"), pod_raw.get("last_started_at"), realization.get("launched_at")))
-    cost_per_h = _float_or_none(_first_present(observation.get("cost_per_h"), pod_raw.get("cost_per_h")))
-    cost_stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
-    cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, run_finished(status))
-    pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost_used) if pod_id or pod_state else None
+    cost = pod_gpu_cost(realization, status)
+    pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost.get("cost_per_h"), cost_used=cost.get("cost_usd")) if pod_id or pod_state else None
     pulled = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
     mirrored_steps = [_int_or_none(item.get("step")) for item in pulled if isinstance(item, dict)]
     mirrored_step = max((step for step in mirrored_steps if step is not None), default=None)
@@ -944,13 +943,6 @@ def _float_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
-
-
-def _runpod_cost_used(cost_per_h: float | None, started: datetime | None, ended: datetime | None, finished: bool) -> float | None:
-    if cost_per_h is None or started is None:
-        return None
-    stop = ended if finished and ended is not None else datetime.now().astimezone()
-    return max((stop - started).total_seconds(), 0.0) / 3600.0 * cost_per_h
 
 
 def _string(value: Any) -> str | None:
