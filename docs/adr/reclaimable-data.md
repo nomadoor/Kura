@@ -55,7 +55,8 @@ the user.** One owner decides the class.
   other repository links to it, and payloads none links to are one item.
 - **resume**: deleting it loses the ability to resume that run, and every
   LoRA stays. The training states of a finished run: the trainer's state
-  folders in `outputs/` and Kura's copies in `artifacts/training-state/`,
+  folders in `outputs/` (and a RunPod run's `downloads/<run>/outputs/`) and
+  Kura's copies in `artifacts/training-state/`,
   except the ones a continuation references. Removed only on the user's yes,
   and the yes is asked in the words "resume data".
 - **outputs**: retraining does not reproduce these. Every checkpoint and LoRA
