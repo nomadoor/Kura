@@ -155,18 +155,22 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
             "reason": "no RunPod GPU candidates are configured",
             "candidates": [],
         }
-    immediate = []
+    # A launch requests only the selected GPUs: another measured GPU with stock is an alternative the
+    # user can add to compute.gpu, never a GPU this launch can land on.
+    immediate, alternatives = [], []
     for candidate in measurement.get("candidates", []):
         if not isinstance(candidate, dict):
             continue
         for cloud in candidate.get("clouds", []):
             if isinstance(cloud, dict) and cloud.get("available"):
-                immediate.append({"gpu_type_id": candidate.get("gpu_type_id"), "cloud_type": cloud.get("cloud_type"), "price_per_hour": cloud.get("price_per_hour")})
+                choice = {"gpu_type_id": candidate.get("gpu_type_id"), "cloud_type": cloud.get("cloud_type"), "price_per_hour": cloud.get("price_per_hour")}
+                (immediate if candidate.get("gpu_type_id") in selected_gpu_type_ids else alternatives).append(choice)
     return {
         "policy": policy,
         "selected_gpu_type_ids": selected_gpu_type_ids,
         "measurement": measurement,
         "immediate_candidates": immediate,
+        "available_alternatives": alternatives,
         # `kura run execute --max-lease` sets the lease at launch; the plan shows the default's ceiling.
         "cost_ceiling": runpod_cost_ceiling(measurement, selected_gpu_type_ids, max_lease_sec=DEFAULT_MAX_LEASE_SEC),
         "provider_reservation": {
@@ -1540,7 +1544,12 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             lines.append("    - wait for the selected GPU (compute.capacity.mode is wait)")
         else:
             lines.append("    - wait for the selected GPU: set compute.capacity.mode=wait before compile")
-        if not immediate:
+        alternatives = runpod_capacity.get("available_alternatives") if isinstance(runpod_capacity.get("available_alternatives"), list) else []
+        if alternatives:
+            named = ", ".join(f"{item.get('gpu_type_id')} / {item.get('cloud_type')}" for item in alternatives if isinstance(item, dict))
+            lines.append(f"    - choose another GPU: {named} {'is' if len(alternatives) == 1 else 'are'} available now; "
+                         "add it to compute.gpu and recompile")
+        elif not immediate:
             lines.append("    - choose another GPU")
         reservation = runpod_capacity.get("provider_reservation") if isinstance(runpod_capacity.get("provider_reservation"), dict) else {}
         if not reservation.get("available"):
