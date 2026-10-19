@@ -53,7 +53,9 @@ class SecretNameParityTests(unittest.TestCase):
             owner.assert_called_once()
         with self.assertRaises(ValueError) as caught:
             shared.validated_command_env({"Z_TOKEN": "value-z", "A_SECRET": "value-a", "PLAIN": "x"}, label="X")
-        self.assertEqual(str(caught.exception), "X env must not contain secrets (A_SECRET, Z_TOKEN); use the process environment instead")
+        self.assertTrue(str(caught.exception).startswith("X env must not contain secrets (A_SECRET, Z_TOKEN): "))
+        self.assertNotIn("value-", str(caught.exception))
+        self.assertNotIn("PLAIN", str(caught.exception))
         for env in ({"A": 1}, ["A"], None):
             with self.subTest(env=env), self.assertRaisesRegex(ValueError, "env must be a mapping of names to string values"):
                 shared.validated_command_env(env, label="X")
