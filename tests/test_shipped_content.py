@@ -41,6 +41,17 @@ class ShippedContentTests(unittest.TestCase):
             for phrase in phrases:
                 self.assertIn(phrase, skill(name), name)
 
+    def test_agents_are_told_never_to_print_a_container_environment(self) -> None:
+        # Docker keeps a local run's HF_TOKEN in the container's configuration.
+        root = shipped_root()
+        agents = " ".join((root / "AGENTS.md").read_text(encoding="utf-8").split())
+        self.assertIn("Never run `docker inspect`, `docker exec`, or any other command that prints", agents)
+        mentions = [
+            path for path in root.rglob("*.md")
+            for _ in range(path.read_text(encoding="utf-8").count("docker inspect"))
+        ]
+        self.assertEqual(mentions, [root / "AGENTS.md"])
+
     def test_development_skills_stay_in_the_repository(self) -> None:
         development = sorted(path.name for path in (ROOT / "dev" / "skills").iterdir())
         self.assertEqual(development, ["backend-upgrade-audit", "kura-core", "monitor-tui", "release-check", "training-backends"])
