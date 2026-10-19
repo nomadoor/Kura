@@ -2053,10 +2053,11 @@ if os.environ.get("KURA_REMOTE_NOTIFY_NTFY") == "1" and os.environ.get("KURA_NTF
         title = f"Kura remote finished: {{run_id}}"
         body = f"Remote training finished with exit code {{exit_code}}. Pod may still be billing until the controller downloads outputs and stops it."
         headers = {{"Title": title, "Tags": "warning" if exit_code else "white_check_mark", "Priority": os.environ.get("KURA_NTFY_PRIORITY", "4")}}
+        request = urllib.request.Request(f"{{server}}/{{topic}}", data=body.encode("utf-8"), method="POST", headers=headers)
         token = os.environ.get("KURA_NTFY_TOKEN")
         if token:
-            headers["Authorization"] = f"Bearer {{token}}"
-        request = urllib.request.Request(f"{{server}}/{{topic}}", data=body.encode("utf-8"), method="POST", headers=headers)
+            # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).
+            request.add_unredirected_header("Authorization", f"Bearer {{token}}")
         with urllib.request.urlopen(request, timeout=20) as response:
             response.read()
     except Exception:
