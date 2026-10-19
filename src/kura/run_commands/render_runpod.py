@@ -25,7 +25,7 @@ from kura.images import image_cuda_version, launch_image, runpod_min_cuda_versio
 from kura.run_commands.common import _safe_error, runpod_launch_settings
 from kura.run_commands.render_completion import recorded_state
 from kura.run_commands.runpod_ssh import record_pod_lease_deadline
-from kura.run_commands.runpod_ssh import _free_local_port, _runpod_ssh_details, install_pod_secrets, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
+from kura.run_commands.runpod_ssh import _free_local_port, _runpod_ssh_details, install_pod_secrets, _scp_to_runpod, _ssh_base, _sync_runpod_remote_stdout, _wait_http_ready
 
 
 def _format_duration(seconds: int) -> str:
@@ -290,9 +290,7 @@ def launch_render_runpod(
         ssh_details = details
         remote_workspace = runpod_config.get("workspace_path", "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
-        # The Pod armed its lease when it started; this second guard never moves that deadline
-        # and stays for Pods whose start script predates it.
-        _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name, max_lease_sec=max_lease_sec)
+        # The Pod armed its lease from its start command; the run records the deadline it holds.
         record_pod_lease_deadline(run_dir, details)
         check_stop()
         workspace_ready = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp /opt/ComfyUI/input/Kura_tmp"], check=False, timeout=600)

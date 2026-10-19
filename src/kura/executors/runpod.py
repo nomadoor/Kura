@@ -791,8 +791,8 @@ def _runpod_training_env(
     return {**spec_env, **kura_container_env(workspace_path=workspace_path, run_id=run_id, realization_id=realization_id)}
 
 
-def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC) -> dict[str, str]:
-    return {**kura_container_env(workspace_path=workspace_path, run_id=run_id), "KURA_MAX_LEASE_SEC": str(max_lease_sec)}
+def _runpod_session_env(*, workspace_path: str, run_id: str) -> dict[str, str]:
+    return kura_container_env(workspace_path=workspace_path, run_id=run_id)
 
 
 def _local_reserve_bytes(run_dir: Path, config: dict[str, Any]) -> int:
@@ -1536,8 +1536,8 @@ kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
 def _pod_start_script(script: str, *, max_lease_sec: int, log_path: str) -> str:
     """Every start command Kura writes arms the maximum lease before anything else.
 
-    A Pod whose controller never reaches it is then still bounded, and a later
-    guard started over SSH keeps the deadline set here.
+    A Pod whose controller never reaches it is then still bounded; this is the
+    only guard Kura arms.
     """
     guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
     return "\n".join((POD_SELF_DELETE_FUNCTION, guard, script))
@@ -1562,7 +1562,7 @@ def launch_runpod_session(
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
-    runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name, max_lease_sec=max_lease_sec)
+    runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name)
     log_path = runtime_env["KURA_LOG_PATH"]
     ssh_script = r'''
 set -u

@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from kura.executors import runpod
 from kura.run_commands import runpod_ssh
 from kura.run_commands.runpod_ssh import change_runpod_lease, lease_shortfall, record_lease_deadline
 
@@ -109,7 +110,7 @@ class LeaseGuardShellTests(unittest.TestCase):
     def _guard(self, directory: Path, lease_sec: int) -> str:
         deadline = str(directory / "deadline")
         deleted = directory / "deleted"
-        guard = runpod_ssh._runpod_lease_guard_shell(max_lease_sec=lease_sec, pod_id="pod-1", log_path=str(directory / "stdout.log"))
+        guard = runpod._runpod_lease_guard_shell(max_lease_sec=lease_sec, pod_id="pod-1", log_path=str(directory / "stdout.log"))
         guard = guard.replace(runpod_ssh.LEASE_DEADLINE_PATH, deadline).replace("sleep 30", "sleep 0.1")
         # Stand in for the RunPod API call, after the real function is defined.
         return guard.replace("kura_lease_initial=", f"kura_pod_self_delete() {{ echo deleted > {deleted}; }}\nkura_lease_initial=", 1)
