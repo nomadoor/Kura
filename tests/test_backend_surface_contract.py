@@ -182,6 +182,31 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "model_paths must map model roles to file paths"):
             BACKENDS["musubi-tuner"].download_specs({"backend": {"name": "musubi-tuner", "config": {"architecture": "krea2", "model_paths": ["x"]}}})
 
+    def test_a_role_named_in_both_model_downloads_and_model_paths_is_refused(self) -> None:
+        # One of the two would be dropped without a word; the user keeps the one they mean.
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
+            with self.subTest(backend=backend), self.assertRaisesRegex(
+                ValueError, f"model_downloads.{role} and model_paths.{role} both name the {role} file; keep model_paths.{role}.*or model_downloads.{role}",
+            ):
+                BACKENDS[backend].download_specs(run)
+
+    def test_the_launch_preflight_names_the_doubled_role_of_a_compiled_run(self) -> None:
+        from kura.run_commands.plan import collect_run_preflight, enforce_preflight_errors
+
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                run["safety"] = {"allow_large_model_downloads": True}
+                with self.assertRaisesRegex(ValueError, f"model-downloads: .*model_downloads.{role} and model_paths.{role} both name"):
+                    enforce_preflight_errors(collect_run_preflight(run, Path(directory), config={}, executor="docker"))
+
+    def test_a_bundle_role_may_still_be_pointed_at_your_own_file(self) -> None:
+        run = {"id": "r", "type": "train", "backend": {"name": "musubi-tuner", "config": {
+            "architecture": "krea2", "model_bundle": "krea2-raw", "model_paths": {"vae": "/workspace/models/vae.safetensors"},
+        }}}
+        specs, paths = BACKENDS["musubi-tuner"].download_specs(run)
+        self.assertNotIn("vae", {item["key"] for item in specs})
+        self.assertTrue(specs)
+
     def test_an_empty_model_path_is_refused_not_skipped(self) -> None:
         for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filename": "a.safetensors"}, model_paths="").items():
             with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "model_paths must map model roles to file paths"):

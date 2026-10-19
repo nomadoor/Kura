@@ -66,6 +66,16 @@ class GpuChoiceTests(unittest.TestCase):
             self.assertEqual(prepared["remote_image"], frozen)
             self.assertEqual(older["remote_image"], "remote/comfy@sha256:" + "2" * 64)
 
+    def test_an_older_string_gpu_is_read_one_way(self) -> None:
+        from kura.run_commands.common import requested_gpu_types
+        from kura.run_envelope import legacy_gpu_name
+
+        for placeholder in ("", "true", "false", "gpu", "cpu"):
+            with self.subTest(placeholder=placeholder):
+                self.assertIsNone(legacy_gpu_name(placeholder))
+                self.assertIsNone(requested_gpu_types({"gpu": placeholder}))
+        self.assertEqual(requested_gpu_types({"gpu": "NVIDIA A40"}), ["NVIDIA A40"])
+
     def test_every_reader_takes_the_cuda_floor_from_one_place(self) -> None:
         from kura.executors import runpod
         from kura.run_commands import plan

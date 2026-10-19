@@ -219,9 +219,10 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _musubi_download_entries(run: dict[str, Any]) -> list[dict[str, Any]]:
     override = _musubi_backend_override(run)
     # One place decides every downloaded file: the named bundle or model_downloads, never both.
-    downloads = _known_musubi_bundle(run) or override.get("model_downloads")
+    bundle = _known_musubi_bundle(run)
     return model_downloads(
-        downloads, label="Musubi Tuner", explicit=_musubi_explicit_model_paths(override), cache_path=_musubi_model_cache_path,
+        bundle or override.get("model_downloads"), label="Musubi Tuner", explicit=_musubi_explicit_model_paths(override),
+        cache_path=_musubi_model_cache_path, bundle=bool(bundle),
     )
 
 

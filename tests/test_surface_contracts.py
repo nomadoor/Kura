@@ -122,6 +122,34 @@ class SurfaceContractTests(unittest.TestCase):
                     validate_workspace_config(config)
                 self.assertIn(expected, str(caught.exception))
 
+    def test_runpod_settings_no_pod_can_use_are_refused_at_workspace_load(self) -> None:
+        from kura.executors.runpod import _runpod_settings
+
+        refused = (
+            ({"runpod": {"gpu_type_ids": ["A"], "interruptible": True}}, "runpod.interruptible: true"),
+            ({"comfyui": {"runpod": {"interruptible": True}}}, "comfyui.runpod.interruptible: true"),
+            ({"runpod": {"gpu_type_ids": ["A", "B"], "gpu_type_priority": "availability"}}, "runpod.gpu_type_priority: availability"),
+            ({"runpod": {"gpu_type_ids": ["A"], "data_center_ids": ["D1", "D2"], "data_center_priority": "availability"}}, "runpod.data_center_priority: availability"),
+            # A render lays comfyui.runpod over runpod, so the combination is what a render Pod would use.
+            ({"runpod": {"gpu_type_priority": "availability", "gpu_type_ids": ["A"]}, "comfyui": {"runpod": {"gpu_type_ids": ["A", "B"]}}}, "comfyui.runpod.gpu_type_priority: availability"),
+        )
+        for config, expected in refused:
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    validate_workspace_config(config)
+                self.assertIn(expected, str(caught.exception))
+        # The launch refuses with the same rule (a runner request carries settings confirmed earlier).
+        with self.assertRaisesRegex(ValueError, "runpod.interruptible: true"):
+            _runpod_settings({"gpu_type_ids": ["A"], "interruptible": True})
+        with self.assertRaisesRegex(ValueError, "runpod.gpu_type_priority: availability"):
+            _runpod_settings({"gpu_type_ids": ["A", "B"], "gpu_type_priority": "availability"})
+        for config in (
+            {"runpod": {"gpu_type_ids": ["A"], "interruptible": False, "gpu_type_priority": "availability"}},
+            {"runpod": {"gpu_type_ids": ["A", "B"], "gpu_type_priority": "custom", "data_center_ids": ["D1"], "data_center_priority": "availability"}},
+        ):
+            with self.subTest(config=config):
+                validate_workspace_config(config)
+
     def test_workspace_does_not_advertise_run_only_or_unused_render_overrides(self) -> None:
         for config, rejected in (
             ({"safety": {"allow_many_checkpoints": True}}, "safety"),

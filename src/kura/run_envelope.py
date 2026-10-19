@@ -142,8 +142,8 @@ def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
     # An older Kura wrote compute.gpu as one string, or a placeholder such as "gpu" on a Docker run.
     compute = copied.get("compute") if isinstance(copied.get("compute"), dict) else {}
     if isinstance(compute.get("gpu"), (str, bool)) or compute.get("gpu") is None:
-        gpu = compute.pop("gpu", None)
-        if run_executor(copied) == "runpod" and isinstance(gpu, str) and gpu not in {"", "true", "false", "gpu", "cpu"}:
+        gpu = legacy_gpu_name(compute.pop("gpu", None))
+        if run_executor(copied) == "runpod" and gpu is not None:
             compute["gpu"] = [gpu]
     return copied
 
@@ -160,6 +160,12 @@ def backend_name(run: dict[str, Any]) -> str | None:
     backend = run.get("backend")
     name = backend.get("name") if isinstance(backend, dict) else None
     return name if isinstance(name, str) and name else None
+
+
+def legacy_gpu_name(gpu: Any) -> str | None:
+    """The one GPU type an older Kura's string `compute.gpu` names; None for its placeholders ("gpu", "cpu", ...)."""
+
+    return gpu if isinstance(gpu, str) and gpu not in {"", "true", "false", "gpu", "cpu"} else None
 
 
 def run_executor(run: dict[str, Any]) -> str:

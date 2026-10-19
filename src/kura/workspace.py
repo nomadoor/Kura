@@ -273,6 +273,23 @@ def workspace_schema_description(schema: dict[str, Any] | None = None) -> Any:
     return described
 
 
+def runpod_settings_problem(settings: dict[str, Any], *, path: str = "runpod") -> str | None:
+    """Why no Pod Kura creates can use these RunPod settings; None when one can.
+
+    Workspace load and the launch both ask here, so the refusal comes before any confirmation.
+    """
+    if settings.get("interruptible") is True:
+        return (f"{path}.interruptible: true is not supported: Kura creates on-demand Pods only, "
+                "since an interrupted Pod would end a run before its outputs are collected; remove it or set it to false")
+    for ids_key, priority_key, what in (("gpu_type_ids", "gpu_type_priority", "GPU type"), ("data_center_ids", "data_center_priority", "data center")):
+        ids = settings.get(ids_key)
+        if settings.get(priority_key) == "availability" and isinstance(ids, list) and len(ids) > 1:
+            return (f"{path}.{priority_key}: availability works with one {what} only, because Kura tries each candidate "
+                    f"in turn and cannot keep RunPod's availability order; set it to custom (the listed order) "
+                    f"or list one {what} in {path}.{ids_key}")
+    return None
+
+
 def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") -> None:
     """Reject workspace values Kura would silently ignore.
 
@@ -288,6 +305,12 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     except ValueError as exc:
         raise ValueError(f"{source} comfyui.model_registry: {exc}") from None
     _validate_workspace_value(config, WORKSPACE_SCHEMA, source=source, path="")
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    # A render lays comfyui.runpod over runpod, so the combination is what its Pod uses.
+    for path, settings in (("runpod", runpod), ("comfyui.runpod", {**runpod, **comfyui["runpod"]} if isinstance(comfyui.get("runpod"), dict) else None)):
+        problem = runpod_settings_problem(settings, path=path) if settings is not None else None
+        if problem:
+            raise ValueError(f"{source} {problem}")
     runner = config.get("runner") if isinstance(config.get("runner"), dict) else {}
     if "local_slots" in runner and runner["local_slots"] < 1:
         raise ValueError(f"{source} runner.local_slots must be at least 1, not {runner['local_slots']!r}")
