@@ -63,14 +63,21 @@ def notify(channels: Any, *, subject: str, body: str, priority: str | None = Non
             print(f"warning: notification failed ({channel}): {safe_error(exc)}", file=sys.stderr)
 
 
+def ntfy_server() -> str:
+    """The ntfy server every notification goes to, from here or from a Pod: KURA_NTFY_SERVER,
+    else ntfy.sh, and only an absolute http:// or https:// URL."""
+    server = (os.environ.get("KURA_NTFY_SERVER") or "https://ntfy.sh").rstrip("/")
+    parsed = urllib.parse.urlparse(server)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("KURA_NTFY_SERVER must be an absolute http:// or https:// URL")
+    return server
+
+
 def send_ntfy_notification(subject: str, body: str, priority: str | None = None) -> None:
     topic = os.environ.get("KURA_NTFY_TOPIC")
     if not topic:
         raise ValueError("ntfy notification requires KURA_NTFY_TOPIC")
-    server = os.environ.get("KURA_NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-    parsed = urllib.parse.urlparse(server)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("KURA_NTFY_SERVER must be an absolute http:// or https:// URL")
+    server = ntfy_server()
     token = os.environ.get("KURA_NTFY_TOKEN")
     priority = priority or os.environ.get("KURA_NTFY_PRIORITY", "4")
     url = f"{server}/{topic.lstrip('/')}"

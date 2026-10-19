@@ -1752,11 +1752,18 @@ def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     lines: list[str] = []
     lines.extend(f"export {name}={shlex.quote(value)}" for name, value in sorted(container_secret_env().items()))
     if remote_notify and os.environ.get("KURA_NTFY_TOPIC"):
-        lines.append("export KURA_REMOTE_NOTIFY_NTFY=1")
-        for key in ("KURA_NTFY_TOPIC", "KURA_NTFY_SERVER", "KURA_NTFY_TOKEN", "KURA_NTFY_PRIORITY"):
-            value = os.environ.get(key)
-            if value:
-                lines.append(f"export {key}={shlex.quote(value)}")
+        from kura.notifications import ntfy_server
+
+        try:
+            server = ntfy_server()
+        except ValueError as exc:  # a notification never stops a launch
+            print(f"warning: the Pod will not send its own notification: {exc}", file=sys.stderr)
+        else:
+            lines.extend(["export KURA_REMOTE_NOTIFY_NTFY=1", f"export KURA_NTFY_SERVER={shlex.quote(server)}"])
+            for key in ("KURA_NTFY_TOPIC", "KURA_NTFY_TOKEN", "KURA_NTFY_PRIORITY"):
+                value = os.environ.get(key)
+                if value:
+                    lines.append(f"export {key}={shlex.quote(value)}")
     if not lines:
         return None
     return "\n".join([*lines, ""])
@@ -2073,7 +2080,8 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write("\\n")
 if os.environ.get("KURA_REMOTE_NOTIFY_NTFY") == "1" and os.environ.get("KURA_NTFY_TOPIC"):
     try:
-        server = os.environ.get("KURA_NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+        # Checked and defaulted by kura.notifications.ntfy_server before the Pod got it.
+        server = os.environ["KURA_NTFY_SERVER"]
         topic = os.environ["KURA_NTFY_TOPIC"].lstrip("/")
         title = f"Kura remote finished: {{run_id}}"
         body = f"Remote training finished with exit code {{exit_code}}. Pod may still be billing until the controller downloads outputs and stops it."
