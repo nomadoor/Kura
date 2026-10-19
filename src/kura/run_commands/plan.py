@@ -436,16 +436,16 @@ def _model_download_preflight_report(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    invalid = download_estimate.get("invalid")
+    if isinstance(invalid, str) and invalid:
+        records.append(_preflight_record("model-downloads", "error", invalid, "run.yaml"))
+        return records
     trainer_downloads = _trainer_downloads(requirements, executor=executor, local_cache=local_cache)
     if trainer_downloads:
         # A warning, not a refusal: locally the disk watch covers it.
         records.append(_preflight_record("model-acquisition", "warning", trainer_downloads, "run.yaml"))
         if not any(item.get("acquisition") == "kura" for item in requirements):
             return records
-    invalid = download_estimate.get("invalid")
-    if isinstance(invalid, str) and invalid:
-        records.append(_preflight_record("model-downloads", "error", invalid, "run.yaml"))
-        return records
     probe_failures = download_estimate.get("probe_failures")
     if isinstance(probe_failures, list) and probe_failures:
         first = probe_failures[0]
