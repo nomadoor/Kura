@@ -8709,21 +8709,24 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
+                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)), \
+                        patch("kura.executors.runpod._runpod_pods", return_value=[]):
                     status = reconcile_runpod(run_dir)
             observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
         self.assertEqual(status["state"], "interrupted")
         self.assertIn("pod_missing_at", status)
         self.assertTrue(observation["pod_missing"])
 
-    def test_automatic_reconcile_never_marks_a_pod_missing(self) -> None:
+    def test_reconcile_never_marks_a_pod_missing_on_one_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
-                    with self.assertRaises(RunPodAPIError):
+                # The account's Pod list still holds it, so the not-found is not believed.
+                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)), \
+                        patch("kura.executors.runpod._runpod_pods", return_value=[{"id": "pod-1"}]):
+                    with self.assertRaisesRegex(ValueError, "still lists it"):
                         reconcile_runpod(run_dir, source="automatic")
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
 

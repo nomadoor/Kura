@@ -592,7 +592,8 @@ def unstopped_recovered_pod(run_dir: Path) -> str | None:
     return pod_id if isinstance(realization, dict) and realization.get("recovered_from_intent") else None
 
 
-def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+def _runpod_pods(api_key: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+    """Every Pod the account holds."""
     query = """
     query myPods {
       myself {
@@ -609,7 +610,30 @@ def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> lis
     pods = myself.get("pods") if isinstance(myself.get("pods"), list) else None
     if pods is None:
         raise ValueError("RunPod did not return the account's Pods")
-    return [pod for pod in pods if isinstance(pod, dict) and pod.get("name") == name and isinstance(pod.get("id"), str)]
+    return [pod for pod in pods if isinstance(pod, dict) and isinstance(pod.get("id"), str)]
+
+
+def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+    return [pod for pod in _runpod_pods(api_key, timeout=timeout) if pod.get("name") == name]
+
+
+def _runpod_pod_or_none(api_key: str, pod_id: str, *, timeout: float = 30.0) -> dict[str, Any] | None:
+    """The Pod, or None when RunPod confirms it no longer exists.
+
+    The one rule for "the Pod is gone": its lookup says not found, and the
+    account's Pod list, a different query of the same API (read whole: Kura
+    assumes it is not paginated), does not hold it either. One not-found alone
+    can be transient, and recording it would end a run whose Pod may still be
+    training and billing, or stop retrying a delete that did not happen.
+    """
+    try:
+        return _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
+    except RunPodAPIError as exc:
+        if exc.status_code != 404:
+            raise
+        if any(pod["id"] == pod_id for pod in _runpod_pods(api_key, timeout=timeout)):
+            raise ValueError(f"RunPod answered not found for Pod {pod_id} but still lists it; observe it again later") from exc
+        return None
 
 
 def _discover_pods(api_key: str, name: str, *, settle_sec: float = 5.0) -> list[dict[str, Any]]:
@@ -1683,17 +1707,9 @@ def reconcile_runpod(
         pod_id = realization.get("pod", {}).get("id")
         if not isinstance(pod_id, str):
             raise ValueError("latest realization has no RunPod pod ID")
-        try:
-            pod: dict[str, Any] | None = _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
-        except RunPodAPIError as exc:
-            # The Pod no longer exists: it deleted itself (unattended wait or
-            # maximum lease) or was deleted elsewhere. Only an explicit
-            # reconcile records that as terminal; an automatic observation
-            # (the monitor) must not turn one flaky "not found" into a run that
-            # looks safe to relaunch while its Pod may still be billing.
-            if exc.status_code != 404 or source != "explicit":
-                raise
-            pod = None
+        # None: the Pod no longer exists (it deleted itself after its wait or
+        # lease, or was deleted elsewhere), confirmed by two sources.
+        pod = _runpod_pod_or_none(api_key, pod_id, timeout=timeout)
         observed_at = _now()
         if pod is None:
             state, exit_code = "interrupted", None
@@ -1783,8 +1799,12 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
             _runpod_request("DELETE", f"/pods/{target}", api_key)
             targets.append({"pod_id": target, "result": "deleted"})
         except ValueError as exc:
-            message = str(exc).lower()
-            if "404" not in message and "pod not found" not in message:
+            # A failed delete counts as done only when RunPod confirms the Pod is gone (the one rule).
+            try:
+                gone = _runpod_pod_or_none(api_key, target) is None
+            except ValueError:
+                gone = False
+            if not gone:
                 write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets + [{"pod_id": target, "result": "failed"}],
                                   requested_at=requested_at, stopped_at=None, outcome="failed", error=_redact_secret_text(str(exc)))
                 raise

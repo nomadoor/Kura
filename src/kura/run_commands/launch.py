@@ -14,7 +14,6 @@ from typing import Any
 
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.yamlio import YAMLError
-from kura.executors.runpod import RunPodAPIError
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
@@ -247,18 +246,14 @@ def _running_remote_job(run_id: str) -> bool:
     if status.get("state") != "running" or not isinstance(status.get("pod_id"), str) or status.get("pod_stopped_at"):
         return False
     try:
-        # An automatic observation never records a missing Pod: one 404 can be
-        # transient, and recording it would let a later execute launch anew.
         status = reconcile_runpod(run_dir, source="automatic")
     except _OperationBusy as exc:
         raise ValueError(f"cannot check the Pod of {run_id} right now ({exc}); try again") from exc
-    except RunPodAPIError as exc:
-        if exc.status_code != 404:
-            raise
+    if status.get("pod_missing_at"):
         raise ValueError(
-            f"RunPod reports no Pod for {run_id}: if it deleted itself after its wait or lease, its uncollected outputs are gone. "
-            f"Confirm with `kura run reconcile {run_id}`, which records it, before starting a new run from it"
-        ) from exc
+            f"RunPod has no Pod for {run_id} any more, so the run is recorded as interrupted: if it deleted itself after its "
+            f"wait or lease, its uncollected outputs are gone. Start a new run with `kura run new --from {run_id} --slug <words>`"
+        )
     if status.get("state") != "running":
         return False
     realization_ref = status.get("last_realization")

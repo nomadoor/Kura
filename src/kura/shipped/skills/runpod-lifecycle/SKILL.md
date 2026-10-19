@@ -51,11 +51,11 @@ stop Pod
   (from remote job start, including model download). Collecting the outputs marks the
   Pod so the timer leaves it to the controller;
   a download in progress marks it too, so the timer waits for it.
-- An explicit `kura run reconcile` records a Pod that no longer exists (it
-  deleted itself or was deleted elsewhere) as `interrupted` with
-  `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
-  does. Before starting a new run from such a run, confirm in the RunPod console that the
-  Pod is really gone.
+- Kura records a Pod that no longer exists (it deleted itself or was deleted
+  elsewhere) as `interrupted` with `pod_missing_at` only when RunPod confirms
+  it twice: the Pod's lookup says not found and the account's Pod list does
+  not hold it. Whatever the Pod held is gone. One not-found alone is never
+  recorded; Kura or the user looks again later.
 - `pod_stopped_at` in `kura run status` is when Kura's stop confirmed the Pod is gone (and any
   duplicate a recovered launch recorded): RunPod accepted the delete or said
   the Pod was already gone. The Pod is not paused; it and its container disk
@@ -64,7 +64,7 @@ stop Pod
   on `kura run stop`; the delete is recorded in
   `runs/<run-id>/realizations/*.stop-*.json`. A Pod that deleted itself (its
   lease or unattended wait) shows `pod_missing_at` instead, once
-  `kura run reconcile` has looked.
+  Kura has looked (`kura run reconcile`, `kura run execute`, or the runner).
 - Kura records its intent before creating a Pod. If a launch dies, or RunPod
   does not confirm a create, Kura never creates again on its own: launch and
   stop refuse until `kura run reconcile` has looked for the Pod by name. A Pod
