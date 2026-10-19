@@ -2325,8 +2325,87 @@ def _warn_if_lease_short(run_dir: Path, realization_id: str, run_id: str, notify
         print(f"[kura] notification failed: {exc}", file=sys.stderr)
 
 
+class RemoteJobGone(ValueError):
+    """The remote job is no longer running and left no exit record (its container restarted, or it was killed)."""
+
+
+class PodGone(ValueError):
+    """RunPod confirms the run's Pod no longer runs, so there is nothing left to follow."""
+
+
+# Exit checks in a row that cannot reach the Pod before the follower asks RunPod whether it still exists.
+UNREACHABLE_CHECKS_BEFORE_RECONCILE = 30
+
+
+def _read_remote_job_state(details: dict[str, Any], *, workspace: str, run_id: str, job: dict[str, Any] | None, timeout_sec: int = 30) -> dict[str, Any] | str | None:
+    """The job's exit record; else "running" or "gone" from its pid when the job's record names it; None when the Pod cannot be asked."""
+    remote_dir = f"{workspace.rstrip('/')}/runs/{run_id}/realizations"
+    pid_path, job_path = (job or {}).get("pid_path"), (job or {}).get("job_path")
+    liveness = ""
+    if isinstance(pid_path, str) and pid_path and isinstance(job_path, str) and job_path:
+        # The pid must still be the job's own shell; a reused pid runs something else.
+        liveness = f"""
+pid=$(cat {shlex.quote(pid_path)} 2>/dev/null || true)
+if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -qF {shlex.quote(job_path)}; then
+  echo __KURA_JOB_RUNNING__
+else
+  echo __KURA_JOB_GONE__
+fi"""
+    script = f"""
+set -u
+dir={shlex.quote(remote_dir)}
+latest=$(ls -1 "$dir"/remote-exit-*.json 2>/dev/null | sort | tail -n 1 || true)
+if [ -n "$latest" ]; then
+  cat "$latest"
+  exit 0
+fi{liveness}
+""".strip()
+    try:
+        result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=timeout_sec)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    output = result.stdout.strip()
+    if output.endswith("__KURA_JOB_RUNNING__"):
+        return "running"
+    if output.endswith("__KURA_JOB_GONE__"):
+        return "gone"
+    if not output:
+        return "running"  # no exit record and no pid to ask: keep following, as before
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _raise_if_pod_gone(run_dir: Path) -> None:
+    """Ask RunPod, by its one rule for a missing Pod, whether the unreachable Pod still runs."""
+    from kura.executors.runpod import reconcile_runpod
+
+    try:
+        status = reconcile_runpod(run_dir, source="explicit")
+    except (OSError, ValueError):
+        return  # RunPod cannot say either; the Pod's own lease still bounds it
+    if status.get("pod_missing_at"):
+        raise PodGone("RunPod has no Pod for this run any more; outputs not collected before it went are gone")
+    if status.get("state") != "running":
+        raise PodGone(f"RunPod reports the Pod is no longer running (the run is now {status.get('state')})")
+
+
 def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, realization_id: str, job_timeout_sec: int | None, notify_channels: Any = None) -> int:
-    """Follow a started remote job until its exit record appears; return its exit code."""
+    """Follow a started remote job until its exit record appears; return its exit code.
+
+    Raises RemoteJobGone when the job stopped running without an exit record
+    (seen twice, so an exit written between two looks is not missed), and
+    PodGone when the Pod stays unreachable and RunPod confirms it no longer runs.
+    """
+    from kura.executors.common import remote_job_record
+
+    job = remote_job_record(run_dir, realization_id)
+    unreachable = 0
+    gone = 0
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None
     # The Pod bills until the controller notices the job ended, so the cheap
     # remote-exit check runs every few seconds; the heavier log and
@@ -2346,7 +2425,17 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
             _warn_if_lease_short(run_dir, realization_id, run_id, notify_channels)
             next_sync = now + sync_interval_sec
         if now >= next_exit_check:
-            exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
+            state = _read_remote_job_state(details, workspace=workspace, run_id=run_id, job=job, timeout_sec=30)
+            unreachable = unreachable + 1 if state is None else 0
+            gone = gone + 1 if state == "gone" else 0
+            if unreachable >= UNREACHABLE_CHECKS_BEFORE_RECONCILE:
+                unreachable = 0
+                _raise_if_pod_gone(run_dir)
+            if gone >= 2:
+                _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
+                _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
+                raise RemoteJobGone("the remote job stopped running without an exit record (its container restarted, or it was killed)")
+            exit_record = state if isinstance(state, dict) else None
             if exit_record is not None:
                 record_launch_phase(run_dir, realization_id, "remote_exit_observed", remote_timestamp=exit_record.get("timestamp"))
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)

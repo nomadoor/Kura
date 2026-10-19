@@ -8471,8 +8471,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                 command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
                 return subprocess.CompletedProcess(args[0], 0, "1234\n" if "nohup sh" in command_text else "", "")
 
-            def read_exit(*_args: object, **_kwargs: object) -> dict[str, Any] | None:
-                return {"event": "remote_exit", "exit_code": 0} if clock["now"] >= exit_at else None
+            def read_exit(*_args: object, **_kwargs: object) -> dict[str, Any] | str:
+                return {"event": "remote_exit", "exit_code": 0} if clock["now"] >= exit_at else "running"
 
             def sleep(seconds: float) -> None:
                 clock["now"] += seconds
@@ -8480,7 +8480,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}), \
                  patch("kura.run_commands.runpod_ssh._try_sync_runpod_checkpoints", return_value=True), \
                  patch("kura.run_commands.runpod_ssh._sync_runpod_remote_stdout", side_effect=lambda *a, **k: syncs.append(clock["now"]) or True), \
-                 patch("kura.run_commands.runpod_ssh._read_runpod_remote_exit", side_effect=read_exit), \
+                 patch("kura.run_commands.runpod_ssh._read_remote_job_state", side_effect=read_exit), \
                  patch("kura.run_commands.runpod_ssh.time.monotonic", side_effect=lambda: clock["now"]), \
                  patch("kura.run_commands.runpod_ssh.time.sleep", side_effect=sleep), \
                  patch("kura.cli.subprocess.run", side_effect=fake_run):

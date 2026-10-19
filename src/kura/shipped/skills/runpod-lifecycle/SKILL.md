@@ -181,7 +181,11 @@ execute` only confirms billing and follows. When the command ended, run
 `kura run execute <run-id>` again to follow; it never launches a second Pod.
 The runner deletes a Pod whose job never started (nothing can be collected
 there); when RunPod refuses that delete, it notifies once and keeps retrying
-until the Pod is gone. After three failed collections it marks the run
+until the Pod is gone. A job that stops running without an exit record (its
+container restarted, or it was killed) ends the run `unknown`: the checkpoints
+copied while it trained are kept and the Pod is deleted. A Pod that stays
+unreachable is checked with RunPod; once RunPod confirms it gone, the run ends
+`interrupted`. After three failed collections it marks the run
 `recovery_required` and notifies; then collect and stop by hand with the
 commands below. A job started before the runner existed is still followed
 in-process by `kura run execute`.

@@ -14,7 +14,7 @@ from typing import Any
 
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.yamlio import YAMLError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, end_run, record_launch_phase, remote_job_started, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -31,7 +31,7 @@ from kura.run_commands.render_completion import format_render_completion
 from kura.paths import local_docker_mounts
 from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, max_lease_seconds, stage_run
 from kura.run_commands.render_runpod import launch_render_runpod
-from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
+from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON, PodGone, RemoteJobGone
 from kura.dataset_transfer import TransferRefused
 from kura.run_envelope import capacity_policy, render_executor, run_executor
 
@@ -189,6 +189,19 @@ def _run_remote_locked(
         state_word = "completed" if exit_code == 0 else "failed"
         _notify(notify_channels, subject=f"Kura run {state_word}: {run_id}", body=f"Run {run_id} {state_word} with exit code {exit_code}. The Pod will be stopped now.")
         return exit_code
+    except RemoteJobGone as exc:
+        # The job is gone and nothing will write its outcome; what the Pod held was copied while
+        # following it, so the Pod goes now (run-records ADR: a record states only what was observed).
+        safe_to_stop = True
+        end_run(run_dir, "unknown", reason=_safe_error(exc))
+        print(f"cannot follow the remote job: {_safe_error(exc)}; the run ended unknown and its Pod is being deleted", file=sys.stderr)
+        _notify(notify_channels, subject=f"Kura run ended unknown: {run_id}",
+                body=f"Run {run_id}: {_safe_error(exc)}. Checkpoints copied while it trained are kept; the Pod is being deleted.")
+        return 1
+    except PodGone as exc:
+        print(f"cannot follow the remote job: {_safe_error(exc)}", file=sys.stderr)
+        _notify(notify_channels, subject=f"Kura run interrupted: {run_id}", body=f"Run {run_id}: {_safe_error(exc)}.")
+        return 1
     except TransferRefused as exc:
         # Refused before any upload: nothing ran remotely, so stop at once;
         # there is nothing to review.
