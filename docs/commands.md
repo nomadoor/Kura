@@ -266,11 +266,10 @@ completing starts again, as a new run from its settings:
 | --- | --- |
 | `uv run kura render new --slug <slug>` | Create a ComfyUI render run |
 | `uv run kura render compile <run-id>` | Freeze the workflow and the render case queue (`inputs.cases`); a new `inputs.promptset` is refused |
-| `uv run kura render launch <run-id>` | Generate images through ComfyUI |
-| `uv run kura render launch <run-id> --executor runpod` | Generate images through a disposable RunPod ComfyUI Pod |
+| `uv run kura render launch <run-id>` | Generate images through ComfyUI, on the `executor.name` the render was compiled for: the local endpoint, or a disposable RunPod ComfyUI Pod with the image frozen at compile. `--executor` is optional and refused unless it matches |
 
 Before approving a RunPod render, use
-`uv run kura render launch <run-id> --executor runpod --dry-run` to show the
+`uv run kura render launch <run-id> --dry-run` to show the
 GPU candidates, current hourly prices, maximum lease, and cost ceiling. After the user gives
 the single explicit approval, a non-interactive agent launches with `--yes`;
 that flag carries the approval through the launch gate and does not ask the

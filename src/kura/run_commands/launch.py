@@ -34,7 +34,7 @@ from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
 from kura.dataset_transfer import TransferRefused
-from kura.run_envelope import capacity_policy, run_executor
+from kura.run_envelope import capacity_policy, render_executor, run_executor
 
 
 def _latest_realization_id(run_dir: Path) -> str | None:
@@ -302,8 +302,7 @@ def execute_run(
     executor = run_executor(locked)
     if locked.get("type") == "render":
         # A render names its executor in `executor.name`, not in `compute`.
-        render_executor = (locked.get("executor") or {}).get("name") if isinstance(locked.get("executor"), dict) else None
-        if render_executor == "runpod":
+        if render_executor(locked) == "runpod":
             return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels, runpod={"image": image, "yes": yes, "max_lease": max_lease})
         return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels)
     if executor == "runpod" and locked.get("type", "train") != "render" and not _runs_outside_the_runner(run_id):
@@ -774,15 +773,24 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
 def cmd_render_launch(args: argparse.Namespace) -> int:
     """Start a compiled render run; `kura run execute` starts a training run."""
     try:
-        run_type = _load_yaml(_run_path(args.run_id) / "resolved" / "manifest.lock.yaml").get("type", "train")
+        frozen = _load_yaml(_run_path(args.run_id) / "resolved" / "manifest.lock.yaml")
     except (OSError, ValueError, YAMLError) as exc:
         print(f"cannot launch render: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
-    if run_type != "render":
+    if frozen.get("type", "train") != "render":
         print(f"cannot launch render: {args.run_id} is a training run; start it with `kura run execute {args.run_id}`", file=sys.stderr)
         return 1
+    executor = render_executor(frozen)
+    asked = getattr(args, "executor", None)
+    if asked is not None and asked != executor:
+        print(
+            f"cannot launch render: it was compiled for executor.name={executor}; launch it without --executor, "
+            f"or set executor.name={asked} in run.yaml and run `kura render compile {args.run_id}` again",
+            file=sys.stderr,
+        )
+        return 1
     if args.dry_run:
-        return launch_run(args.run_id, executor=args.executor, dry_run=True, image=getattr(args, "image", None),
+        return launch_run(args.run_id, executor=executor, dry_run=True, image=getattr(args, "image", None),
                           notify_channels=getattr(args, "notify", None))
-    runpod = {"image": getattr(args, "image", None), "yes": bool(getattr(args, "yes", False)), "max_lease": None} if args.executor == "runpod" else None
+    runpod = {"image": getattr(args, "image", None), "yes": bool(getattr(args, "yes", False)), "max_lease": None} if executor == "runpod" else None
     return _launch_render_through_runner(args.run_id, follow=True, notify_channels=getattr(args, "notify", None), runpod=runpod)

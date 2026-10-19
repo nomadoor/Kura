@@ -6,21 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kura.images import effective_image
 from kura.executors.common import _redact_secret_text
 from kura.backends import get_backend
 from kura.training_artifacts import training_state_managed
 from kura.workspace import require_workspace as _require_workspace
-from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import run_datasets as _run_datasets
 
 
 def _safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
-
-
-def _effective_image(name: str) -> dict[str, str]:
-    return effective_image(_workspace_config(), name)
 
 
 def requested_gpu_types(compute: Any) -> list[str] | None:

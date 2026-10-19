@@ -1873,7 +1873,7 @@ def build_parser() -> argparse.ArgumentParser:
     render_compile.set_defaults(func=cmd_run_compile)
     render_launch = render_sub.add_parser("launch", help="Generate images through ComfyUI")
     render_launch.add_argument("run_id")
-    render_launch.add_argument("--executor", default="local", choices=("local", "runpod"))
+    render_launch.add_argument("--executor", choices=("local", "runpod"), help="Optional: the render runs on the executor.name it was compiled for, and any other value is refused")
     render_launch.add_argument("--dry-run", action="store_true")
     render_launch.add_argument("--image", help="Override the runtime image for this render only")
     render_launch.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")

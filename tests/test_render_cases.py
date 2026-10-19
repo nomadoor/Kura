@@ -769,6 +769,20 @@ class RenderCasesLaunchTests(unittest.TestCase):
             self.assertEqual(record["patch_inputs"]["control_image"], frozen_name)
             self.assertEqual(record["applied_values"]["control_image"], remote_name)
 
+    def test_runpod_compile_freezes_the_comfyui_image_as_a_training_compile_does(self) -> None:
+        from kura.images import PINNED_IMAGES
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("plain", step=None, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[row], patches={key: value for key, value in PATCHES.items() if key != "lora"})
+            run_config = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run_config["executor"] = {"name": "runpod"}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run_config, sort_keys=False), encoding="utf-8")
+            compile_render(root, run_dir)
+            env_lock = yaml.safe_load((run_dir / "resolved" / "env.lock").read_text(encoding="utf-8"))
+            self.assertEqual((env_lock["selected_image"], env_lock["image_origin"]), (PINNED_IMAGES["comfyui"], "pinned"))
+
     def test_runpod_compile_refuses_a_model_patch_binding_before_any_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

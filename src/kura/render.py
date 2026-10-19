@@ -23,7 +23,8 @@ from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_m
 from kura.fsio import atomic_write_json
 from kura.records import realization_reference, record as as_record
 from kura.fsio import atomic_write_yaml as dump_yaml
-from kura.run_envelope import gpu_choice_problem
+from kura.images import effective_image
+from kura.run_envelope import gpu_choice_problem, render_executor
 from kura.workspace import plain_relative_folder, validate_workspace_config
 
 
@@ -1376,9 +1377,8 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     requires_checkpoint = any(name in patches for name in ASSET_PATCH_NAMES)
     _reconcile_case_values(cases, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed, has_checkpoint_consumer=has_checkpoint_consumer, requires_checkpoint=requires_checkpoint)
     _freeze_case_checkpoints(workspace, cases)
-    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
-    is_runpod = executor.get("name") == "runpod"
-    _refuse_runpod_model_patch(executor.get("name", "local"), patches)
+    is_runpod = render_executor(run) == "runpod"
+    _refuse_runpod_model_patch(render_executor(run), patches)
     if is_runpod and any(case.get("checkpoint") for case in cases) and not lora_insert and "lora" not in patches:
         raise ValueError(
             "RunPod case checkpoints currently require a lora workflow binding or sidecar lora_insert; "
@@ -1449,7 +1449,12 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     if "comfyui_model_registry" in frozen:
         atomic_write_json(resolved / "comfyui_model_registry.json", frozen["comfyui_model_registry"])
     (resolved / "cases.jsonl").write_text("".join(json.dumps(case, ensure_ascii=False) + "\n" for case in indexed_cases), encoding="utf-8")
-    dump_yaml(resolved / "env.lock", {**kura_provenance(), "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
+    env = {**kura_provenance(), "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()}
+    if is_runpod:
+        # The image a RunPod render launches, frozen as a training compile freezes its own (`launch_image` reads it).
+        image = effective_image(workspace_config or {}, "comfyui")
+        env.update({"selected_image": image["reference"], "image_origin": image["origin"]})
+    dump_yaml(resolved / "env.lock", env)
     status(run_dir, state="compiled", last_step=0, total_steps=len(indexed_cases), current_case_id=None)
 
 
@@ -1472,7 +1477,7 @@ def launch_render(
     if not manifest_path.is_file() or not workflow_used_path.is_file():
         raise ValueError("render is not compiled; run kura render compile first")
     frozen = load_yaml_mapping(manifest_path)
-    resolved_executor = executor_name or frozen.get("executor", {}).get("name")
+    resolved_executor = executor_name or render_executor(frozen)
     if frozen.get("generator", {}).get("name") != "comfyui" or resolved_executor not in ("local", "runpod"):
         raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
     _refuse_runpod_model_patch(resolved_executor, frozen.get("workflow_patches", {}))
