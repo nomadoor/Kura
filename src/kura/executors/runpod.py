@@ -40,11 +40,23 @@ POD_SELF_DELETE_FUNCTION = script_source("pod_self_delete.sh")
 
 
 class RunPodAPIError(ValueError):
-    """A RunPod HTTP error with its status preserved for retry policy."""
+    """A RunPod HTTP error with its status preserved for retry policy.
 
-    def __init__(self, message: str, *, status_code: int):
+    A GraphQL reply that carries `errors` arrives with HTTP 200: it keeps that
+    status and the errors' `extensions.code` values, because the reply alone
+    does not say whether a mutation took effect.
+    """
+
+    def __init__(self, message: str, *, status_code: int, graphql_codes: tuple[str, ...] = ()):
         super().__init__(message)
         self.status_code = status_code
+        self.graphql_codes = graphql_codes
+
+
+# GraphQL error codes that say the request was rejected before it ran. BAD_USER_INPUT and
+# FORBIDDEN can also come from a resolver; for the single create mutation Kura sends, Kura
+# assumes RunPod raises them before creating anything.
+GRAPHQL_REJECTED_CODES = frozenset({"GRAPHQL_PARSE_FAILED", "GRAPHQL_VALIDATION_FAILED", "BAD_USER_INPUT", "UNAUTHENTICATED", "FORBIDDEN"})
 
 
 def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, timeout: float = 30.0) -> dict[str, Any]:
@@ -80,9 +92,14 @@ def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, time
     errors = value.get("errors")
     if isinstance(errors, list) and errors:
         messages = [str(item.get("message")) for item in errors if isinstance(item, dict) and item.get("message")]
+        # One entry per error, "" for an error without a code.
+        codes = tuple(
+            str(item["extensions"].get("code") or "") if isinstance(item, dict) and isinstance(item.get("extensions"), dict) else ""
+            for item in errors
+        )
         raise RunPodAPIError(
             "RunPod GraphQL failed: " + _redact_secret_text("; ".join(messages) or str(errors)),
-            status_code=400,
+            status_code=200, graphql_codes=codes,
         )
     data = value.get("data")
     if not isinstance(data, dict):
@@ -564,11 +581,21 @@ def _is_runpod_transient_error(exc: ValueError) -> bool:
 def _create_outcome_uncertain(exc: ValueError) -> bool:
     """Whether a failed create may still have created a Pod.
 
-    A refusal (capacity, validation, rate limit) means nothing was created. A
-    server error or a lost connection after the request was sent does not say.
+    Only a known refusal means nothing was created: no capacity, an HTTP 4xx
+    other than a timeout, or a GraphQL error whose code says the request was
+    rejected before it ran. Any other GraphQL error, a server error, or a lost
+    connection after the request was sent does not say, so the Pod is looked
+    up by name before anything is created again.
     """
     if isinstance(exc, RunPodAPIError):
-        return exc.status_code >= 500
+        if exc.status_code >= 500 or exc.status_code == 408:
+            return True
+        if _is_runpod_capacity_error(exc):
+            return False
+        if exc.status_code == 200:
+            # Refused only when every error is a rejection before execution.
+            return not (exc.graphql_codes and set(exc.graphql_codes) <= GRAPHQL_REJECTED_CODES)
+        return False
     text = str(exc).lower()
     # A reply that arrived but cannot be read says nothing about the create either.
     return any(marker in text for marker in ("runpod api is unreachable", "invalid json", "unexpected response", "did not contain"))

@@ -15,6 +15,8 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-19 | RunPod create | An HTTP 4xx other than 408 is trusted as a create refusal without parsing its GraphQL body; if RunPod ever answers an execution error with HTTP 400 plus `errors`, apply the GraphQL-code rule to it too | review of the create-refusal change | P6
+- 2026-10-19 | tests | Only the render session's create loop has an end-to-end test for an unknown GraphQL error on create; run the same input through `launch_runpod` (also inside a capacity wait) | review of the create-refusal change | P6
 - 2026-10-19 | render executor | `_validate_render_run_fields` passes `runpod=executor.get("name") == "runpod"` to `gpu_choice_problem` inline, and the monitor's `_executor` reads a render's `executor.name` inline (None when absent, where `render_executor` says local); both should ask `render_executor` | review of the render image and executor freeze | -
 - 2026-10-19 | render image | The RunPod render dry run shows the frozen image but not `launch_image_warnings` (the workspace now selects another image; a mutable tag), which the training plan prints | review of the render image and executor freeze | -
 - 2026-10-19 | tests | No test shows the render's billing confirmation and CUDA floor receive the frozen image (true by construction today) | review of the render image and executor freeze | -
