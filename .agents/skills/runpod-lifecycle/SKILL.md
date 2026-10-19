@@ -96,6 +96,9 @@ stop Pod
   add a CUDA setting. An image Kura does not know gets only hosts with the
   newest CUDA Kura has seen; the plan warns, and fewer GPUs is the expected
   effect.
+- `compute.gpu` is a list in priority order, also for one GPU:
+  `gpu: [NVIDIA RTX A5000]`. `kura run new --gpu <id>` writes it; repeat
+  `--gpu` for fallbacks.
 - If a run explicitly sets `compute.gpu`, treat it as part of the user's run
   intent and use it before workspace-level candidates.
 - Run `kura run plan` once while the RunPod run is still a draft so current

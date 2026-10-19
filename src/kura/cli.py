@@ -267,7 +267,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     elif not args.experiment:
         print("--experiment is required unless --from names a run to start from", file=sys.stderr)
         return 1
-    elif getattr(args, "gpu", None) is not None and (problem := gpu_choice_problem([args.gpu], runpod=getattr(args, "executor", None) == "runpod")):
+    elif getattr(args, "gpu", None) is not None and (problem := gpu_choice_problem(args.gpu, runpod=getattr(args, "executor", None) == "runpod")):
         # The draft would hold a compute.gpu that compile refuses.
         print(f"--gpu: {problem}", file=sys.stderr)
         return 1
@@ -289,7 +289,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
             "model": {"base": ""},
             "datasets": [{"id": ""}],
             "recipe": {"steps": None, "seed": None},
-            "compute": {"executor": executor, **({"gpu": [args.gpu]} if args.gpu else {})},
+            "compute": {"executor": executor, **({"gpu": list(args.gpu)} if args.gpu else {})},
             "sampling": {"cadence_steps": None},
         }
     _dump_yaml(run_dir / "run.yaml", run)
@@ -386,7 +386,7 @@ def _create_resume_derived_run(
             compute.pop("capacity", None)
             compute.pop("gpu", None)
     if args.gpu is not None:
-        compute["gpu"] = [args.gpu]
+        compute["gpu"] = list(args.gpu)
     derived["compute"] = compute
     if "gpu" in compute and (problem := gpu_choice_problem(compute["gpu"], runpod=run_executor(derived) == "runpod")):
         print(f"cannot resume: {problem}", file=sys.stderr)
@@ -1788,7 +1788,7 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--slug", required=True, help="A few words for this run; the run ID becomes <date>-<time>_<slug>_<4 hex>")
     new.add_argument("--backend", choices=backend_names(), help="Trainer (default ai-toolkit); `kura run capabilities <backend>` lists its settings")
     new.add_argument("--executor", choices=("docker", "runpod"), help="Where it trains: local Docker (default) or RunPod")
-    new.add_argument("--gpu", help="RunPod GPU type ID to request (e.g. \"NVIDIA GeForce RTX 4090\"); `kura run plan` shows its stock and price. Only for --executor runpod")
+    new.add_argument("--gpu", action="append", metavar="GPU", help="RunPod GPU type ID to request (e.g. \"NVIDIA GeForce RTX 4090\"); repeat it for fallbacks in priority order. It is written as the list compute.gpu: [GPU, ...]; `kura run plan` shows each one's stock and price. Only for --executor runpod")
     new.set_defaults(func=cmd_run_new)
     resume = run_sub.add_parser("resume", help="Create a derived run from durable training state")
     resume.add_argument("source_run")
@@ -1798,7 +1798,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--artifact", help="Use an older explicit training-state artifact ID")
     resume.add_argument("--slug", default="resume")
     resume.add_argument("--executor", choices=("docker", "runpod"), help="Change only the execution location for the derived run")
-    resume.add_argument("--gpu", help="Select a compatible GPU for the new execution environment")
+    resume.add_argument("--gpu", action="append", metavar="GPU", help="RunPod GPU type ID for the new execution environment; repeat it for fallbacks in priority order. It is written as the list compute.gpu: [GPU, ...]")
     resume.set_defaults(func=cmd_run_resume)
     capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface, its pinned trainer, and the model facts Kura owns")
     capabilities.add_argument("backend", choices=backend_names())
