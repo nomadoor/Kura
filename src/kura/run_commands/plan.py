@@ -447,7 +447,7 @@ def _model_download_preflight_report(
         records.append(_preflight_record("model-acquisition", "warning", trainer_downloads, "run.yaml"))
         if not any(item.get("acquisition") == "kura" for item in requirements):
             return records
-    if not requirements:
+    if not requirements and not any(download_estimate.get(key) for key in ("items", "unknown", "probe_failures", "bytes")):
         # Nothing is named yet (a draft before compile): a 0 B estimate would read as "nothing to download".
         return [_preflight_record("model-downloads", "info", "model downloads: unknown until the run names its model files "
                                   "(compile names a missing one); nothing is counted for them yet", "run.yaml")]
