@@ -17,7 +17,7 @@ from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.runpod import pod_gpu_cost
-from kura.executors.common import QUIET_RUN_NOTICE_SEC, latest_launch_id, run_finished, run_quiet_since
+from kura.executors.common import QUIET_RUN_NOTICE_SEC, _EARLIEST, latest_launch_id, record_time, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
 
@@ -355,12 +355,14 @@ def _latest_observation(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]
         data = _read_mapping(run_dir / ref)
         if data:
             return data
-    observations = sorted((run_dir / "realizations").glob("*.observed-*.json"))
-    for path in reversed(observations):
-        data = _read_mapping(path)
-        if data:
-            return data
-    return {}
+    # The newest launch's newest observation, by the times their records state.
+    directory = run_dir / "realizations"
+    rid = latest_launch_id(directory) if directory.is_dir() else None
+    observations = [(path, _read_mapping(path)) for path in directory.glob(f"{rid}.observed-*.json")] if rid is not None else []
+    observations = [(path, data) for path, data in observations if data]
+    if not observations:
+        return {}
+    return max(observations, key=lambda item: (record_time(item[1].get("observed_at")) or _EARLIEST, item[0].name))[1]
 
 
 def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> dict[str, Any]:

@@ -34,6 +34,44 @@ class NewestByRecordedTimeTests(unittest.TestCase):
             (realizations / "20261101-014500-000000.json").write_text(json.dumps({"id": "earlier", "launched_at": "2026-11-01T01:45:00-04:00"}), encoding="utf-8")
             self.assertEqual(_latest_realization(run_dir, {})["id"], "later")
 
+    def test_the_monitor_shows_no_realization_while_the_newest_launch_has_none_yet(self) -> None:
+        from kura.monitor import _latest_realization
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            realizations = run_dir / "realizations"
+            realizations.mkdir(parents=True)
+            (realizations / "20261101-010000-000000.json").write_text(json.dumps({"id": "old", "launched_at": "2026-11-01T01:00:00-04:00"}), encoding="utf-8")
+            (realizations / "20261101-020000-000000.create-intent.json").write_text(json.dumps({"requested_at": "2026-11-01T02:00:00-05:00"}), encoding="utf-8")
+            self.assertEqual(_latest_realization(run_dir, {}), {})
+
+    def test_the_monitor_falls_back_to_the_newest_launchs_newest_observation(self) -> None:
+        from kura.monitor import _latest_observation
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            realizations = run_dir / "realizations"
+            realizations.mkdir(parents=True)
+            (realizations / "20261101-013000-000000.json").write_text(json.dumps({"launched_at": "2026-11-01T01:30:00-05:00"}), encoding="utf-8")
+            (realizations / "20261101-014500-000000.json").write_text(json.dumps({"launched_at": "2026-11-01T01:45:00-04:00"}), encoding="utf-8")
+            (realizations / "20261101-014500-000000.observed-20261101-015000-000000.json").write_text(json.dumps({"id": "older launch", "observed_at": "2026-11-01T01:50:00-04:00"}), encoding="utf-8")
+            (realizations / "20261101-013000-000000.observed-20261101-013100-000000.json").write_text(json.dumps({"id": "first", "observed_at": "2026-11-01T01:31:00-05:00"}), encoding="utf-8")
+            (realizations / "20261101-013000-000000.observed-20261101-013000-500000.json").write_text(json.dumps({"id": "second", "observed_at": "2026-11-01T01:40:00-05:00"}), encoding="utf-8")
+            self.assertEqual(_latest_observation(run_dir, {})["id"], "second")
+
+    def test_the_runner_takes_pending_requests_in_the_order_they_were_written(self) -> None:
+        from kura import runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            requests = []
+            for run_id, name, written in (("a", "20261101-014500-000000-aaaa", "2026-11-01T01:45:00-04:00"),
+                                          ("b", "20261101-013000-000000-bbbb", "2026-11-01T01:30:00-05:00")):
+                folder = runner.requests_dir(Path(directory) / "runs" / run_id)
+                folder.mkdir(parents=True)
+                (folder / f"{name}.launch.json").write_text(json.dumps({"written_at": written}), encoding="utf-8")
+                requests.append(folder / f"{name}.launch.json")
+            self.assertEqual(sorted(reversed(requests), key=runner._written_order), requests)
+
 
 if __name__ == "__main__":
     unittest.main()
