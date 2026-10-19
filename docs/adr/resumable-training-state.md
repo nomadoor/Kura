@@ -85,7 +85,13 @@ Retention counts distinct logical steps, not artifact IDs. When more than one
 complete save reaches one logical step, the first complete one is kept: the
 unsuffixed final state that sd-scripts and Musubi Tuner write at the end is not
 published when a verified state of the run at its step already exists (it is
-the last step state again, with a different RNG file). A save at a step already
+the last step state again, with a different RNG file), and a RunPod state pulled
+while the Pod trained is not published again when the final snapshot brings it
+home. Every path publishes a state in the local run's context (its launch
+record, executor, and image), so one save has one artifact ID. Kura before 0.7.0
+published a RunPod snapshot's states a second time without that identity; those
+records stay, and a reader that finds two states of one run at one step takes
+the one that carries the run's executor. A save at a step already
 kept cannot evict the previous-step fallback. An unsuffixed final state is eligible only when a
 backend-owned embedded marker proves its logical step; the configured target is
 not a substitute for observation.

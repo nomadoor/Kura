@@ -540,7 +540,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             state_error: str | None = None
             try:
                 published_states = (
-                    publish_completed_training_states(run_dir.parent.parent, downloaded_run, allow_final_state=exit_code == 0)
+                    publish_completed_training_states(run_dir.parent.parent, run_dir, outputs_root=output_dir, allow_final_state=exit_code == 0)
                     if state_capture_required and output_dir.is_dir() and any(output_dir.glob("*-state"))
                     else []
                 )
