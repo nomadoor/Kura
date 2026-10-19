@@ -77,6 +77,7 @@ why, so it is not raised again.
 - 2026-10-19 | ComfyUI endpoint | An endpoint with no scheme (`user:pw@host:8188`) passes `comfyui_endpoint_problem` (urlsplit finds no netloc) and is printed by `kura doctor comfyui` and `kura init`; have the owner require http:// or https://, which also replaces the doctor's own scheme check | review of the endpoint credential refusal | P10
 - 2026-10-19 | plan | A gated file whose repository moved answers the size probe with a same-host redirect, which now arrives without the token, so the plan reports auth_error and tells the user to accept the license and set HF_TOKEN although it is set; say the repository may have moved and to use its new repo_id | review of the bearer token redirect fix | -
 - 2026-10-19 | tests | tests/test_pod_secrets.py proves one owner of a Pod's secret file by counting a source string; patch `install_pod_secrets` in a `_runpod_run_over_ssh` test and assert it is called with `remote_notify` | review of the Pod secret plumbing | P10
+- 2026-10-19 | run records | `container_secrets` also appears in launch_failed realizations (RunPod, and Docker through the spread draft), where no container got anything; the RunPod capacity-wait-cancelled launch_failed and the RunPod render realizations lack it although a render Pod gets the secrets | review of the container_secrets record | P9
 
 ## Rejected
 

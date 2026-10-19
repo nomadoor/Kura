@@ -26,7 +26,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
-from kura.secrets import MissingSecret, bearer_request, declared_secret, undeclared_secret_refusal
+from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
 from kura.container_scripts import script_source
@@ -1442,7 +1442,7 @@ sleep infinity
             "logs_path": log_path,
             "workspace_contract": workspace_contract,
             "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
-            "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"},
+            **container_secrets_record(),
             **kura_provenance(),
         }
         _write_json(realization_path, as_record("realization", realization))
@@ -1472,7 +1472,7 @@ sleep infinity
         "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
         "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer,
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
-        "secrets": {"HF_TOKEN": "present" if declared_secret("HF_TOKEN") else "absent"}, **kura_provenance(),
+        **container_secrets_record(), **kura_provenance(),
     }
     _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
