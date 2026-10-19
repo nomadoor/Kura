@@ -545,13 +545,18 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             def mutate(status: dict[str, Any]) -> None:
                 # The record that the downloaded snapshot was accepted comes first; a snapshot
                 # refused below stays on disk but never counts as the run's end.
+                # Written once: collecting the same run again accepts nothing new (a forced
+                # re-download adds its own terminal-download record). The end state is read from
+                # the snapshot, never from this record, which only says the first acceptance happened.
                 accepted_id = _status_realization_id(status)
-                (run_dir / "realizations").mkdir(parents=True, exist_ok=True)
-                atomic_write_json(run_dir / "realizations" / f"{accepted_id}.snapshot-accepted.json", record("snapshot_accepted", {
-                    "realization_id": accepted_id, "at": datetime.now().astimezone().isoformat(),
-                    "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)),
-                    "exit_code": exit_code,
-                }))
+                accepted = run_dir / "realizations" / f"{accepted_id}.snapshot-accepted.json"
+                if not accepted.exists():
+                    accepted.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write_json(accepted, record("snapshot_accepted", {
+                        "realization_id": accepted_id, "at": datetime.now().astimezone().isoformat(),
+                        "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)),
+                        "exit_code": exit_code,
+                    }))
                 if input_postflight is not None:
                     status["dataset_input_postflight"] = input_postflight
                 status.pop("recovery_required", None)  # a flag older Kura wrote; the state says it now

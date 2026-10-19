@@ -48,6 +48,20 @@ def _download(root: Path) -> int:
         os.chdir(previous)
 
 
+class SnapshotAcceptedTests(unittest.TestCase):
+    def test_the_snapshot_acceptance_is_recorded_once_and_never_rewritten(self) -> None:
+        # A record is a fact written once; collecting the same snapshot again adds nothing.
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _runpod_run(Path(directory), exit_code=0)
+            _download(Path(directory))
+            accepted = run_dir / "realizations" / "launch.snapshot-accepted.json"
+            first = accepted.read_bytes()
+            os.utime(accepted, ns=(10**9, 10**9))  # whole seconds, which every file system keeps
+            _download(Path(directory))
+            self.assertEqual(accepted.read_bytes(), first)
+            self.assertEqual(accepted.stat().st_mtime_ns, 10**9)
+
+
 class NeedsAPersonTests(unittest.TestCase):
     def test_only_the_state_says_a_run_needs_a_person(self) -> None:
         # RunPod used to set a status flag when the remote job exited, meaning "download pending".
