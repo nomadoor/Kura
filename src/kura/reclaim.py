@@ -242,8 +242,9 @@ def run_containers(run_dir: Path, containers: list[dict[str, Any]]) -> list[str]
 
 
 def _scratch_paths(run_dir: Path) -> list[Path]:
-    """A finished run's `cache/`, `tmp/`, and `.cache/`, less the directories where a trainer writes weights
-    before Kura publishes them (each adapter's `cache_outputs`): those, and the directories above them, stay."""
+    """A finished run's `cache/`, `tmp/`, `.cache/`, and `transfer/` (its RunPod upload archive), less the
+    directories where a trainer writes weights before Kura publishes them (each adapter's `cache_outputs`):
+    those, and the directories above them, stay."""
     # Every adapter's directories, whichever backend the run used: the names are the trainers' own, so another
     # backend's run never has them, and reading the run's backend would add a way to fail for nothing.
     kept = {run_dir / relative for adapter in BACKENDS.values() for relative in adapter.cache_outputs
@@ -256,7 +257,7 @@ def _scratch_paths(run_dir: Path) -> list[Path]:
             return [found for child in sorted(path.iterdir()) for found in free(child)]
         return [path]
 
-    return [found for name in ("cache", "tmp", ".cache") if (run_dir / name).exists() or (run_dir / name).is_symlink()
+    return [found for name in ("cache", "tmp", ".cache", "transfer") if (run_dir / name).exists() or (run_dir / name).is_symlink()
             for found in free(run_dir / name)]
 
 
