@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-19 | RunPod follower | `_try_sync_runpod_checkpoints` answers True when another checkpoint pull holds its lock, so the follower ending a job that died without an exit record can delete the Pod during a `kura run pull`; keep the Pod (plain error) when that lock is busy | review of the follower-gone change | P7
 - 2026-10-19 | RunPod follower | Only the job shell's pid is checked: if that shell is killed while its trainer child keeps running, the run ends `unknown` and the Pod is deleted while the trainer may still save; start the job under `setsid` and check its process group | review of the follower-gone change | P7
 - 2026-10-19 | RunPod follower | After a container restart RunPod may give the Pod a new IP or port; the follower keeps its old SSH details, sees the Pod unreachable, and RunPod says it runs, so it polls until the lease; refresh the SSH details when the Pod is unreachable | review of the follower-gone change | P6
 - 2026-10-19 | RunPod follower | When RunPod confirms the Pod gone (`PodGone`), the controller still prints "leaving RunPod pod running because remote completion/download was not confirmed"; skip that line when `pod_missing_at` is set | review of the follower-gone change | -
