@@ -6,6 +6,7 @@ import argparse
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -51,16 +52,47 @@ def _clock():
 
 
 class FollowerGoneTests(unittest.TestCase):
+    @unittest.skipUnless(Path("/proc/self/cmdline").exists() and shutil.which("sh"), "a Pod runs the check under Linux sh with /proc")
+    def test_the_generated_state_check_runs_under_sh_against_a_live_job(self) -> None:
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as directory:
+            job_path = Path(directory) / "example.sh"
+            job_path.write_text("sleep 30\n", encoding="utf-8")
+            job = subprocess.Popen(["sh", str(job_path)])
+            real_run = subprocess.run
+            try:
+                def state(pid: int) -> str:
+                    captured: dict[str, str] = {}
+
+                    def run(command, **kwargs):
+                        captured["script"] = command[-1]
+                        return real_run(["sh", "-c", command[-1]], **kwargs)
+
+                    with patch.object(runpod_ssh, "_ssh_base", return_value=["ssh"]), patch.object(runpod_ssh.subprocess, "run", side_effect=run):
+                        answer = runpod_ssh._read_remote_job_state(DETAILS, workspace=directory, run_id="example",
+                                                                    job={"pid": str(pid), "job_path": str(job_path)})
+                    self.assertNotIn("\x00", captured["script"])
+                    return answer
+
+                self.assertEqual(state(job.pid), "running")
+                self.assertEqual(state(os.getpid()), "gone")  # a live pid that is not the job's shell
+            finally:
+                job.kill()
+                job.wait()
+            self.assertEqual(state(job.pid), "gone")
+
+
     def test_the_state_check_reads_the_exit_record_then_the_jobs_own_pid(self) -> None:
         import subprocess
 
-        job = {"pid_path": "/tmp/kura-jobs/example.r1.pid", "job_path": "/tmp/kura-jobs/example.sh"}
+        job = {"pid": "42", "job_path": "/tmp/kura-jobs/example.sh"}
         for stdout, code, expected in (('{"exit_code": 3}', 0, {"exit_code": 3}), ("__KURA_JOB_RUNNING__\n", 0, "running"),
                                        ("__KURA_JOB_GONE__\n", 0, "gone"), ("", 255, None)):
             with self.subTest(stdout=stdout), patch.object(runpod_ssh.subprocess, "run", return_value=subprocess.CompletedProcess(["ssh"], code, stdout, "")) as run:
                 self.assertEqual(runpod_ssh._read_remote_job_state(DETAILS, workspace="/workspace", run_id="example", job=job), expected)
             script = run.call_args.args[0][-1]
-            self.assertIn("/proc/$pid/cmdline", script)
+            self.assertIn('"/proc/$pid/cmdline"', script)
             self.assertIn("/tmp/kura-jobs/example.sh", script)
 
 
@@ -70,6 +102,14 @@ class FollowerGoneTests(unittest.TestCase):
             with self.assertRaises(runpod_ssh.RemoteJobGone):
                 _follow(run_dir)
             checkpoints.assert_called()  # what the Pod still holds is copied before the follow ends
+
+    def test_a_job_whose_last_checkpoints_cannot_be_copied_keeps_its_pod(self) -> None:
+        with _run() as (run_dir, checkpoints), _clock(), \
+                patch.object(runpod_ssh, "_read_remote_job_state", side_effect=["gone", "gone"]):
+            checkpoints.return_value = False
+            with self.assertRaises(ValueError) as raised:
+                _follow(run_dir)
+            self.assertNotIsInstance(raised.exception, runpod_ssh.RemoteJobGone)
 
     def test_one_gone_answer_is_checked_again(self) -> None:
         # The job may write its exit record just after the check looked for it.

@@ -2338,18 +2338,22 @@ UNREACHABLE_CHECKS_BEFORE_RECONCILE = 30
 
 
 def _read_remote_job_state(details: dict[str, Any], *, workspace: str, run_id: str, job: dict[str, Any] | None, timeout_sec: int = 30) -> dict[str, Any] | str | None:
-    """The job's exit record; else "running" or "gone" from its pid when the job's record names it; None when the Pod cannot be asked."""
+    """The job's exit record; else "running" or "gone" from its pid when the job's record names it and its job path; None when the Pod cannot be asked."""
     remote_dir = f"{workspace.rstrip('/')}/runs/{run_id}/realizations"
-    pid_path, job_path = (job or {}).get("pid_path"), (job or {}).get("job_path")
+    pid, job_path = (job or {}).get("pid"), (job or {}).get("job_path")
     liveness = ""
-    if isinstance(pid_path, str) and pid_path and isinstance(job_path, str) and job_path:
-        # The pid must still be the job's own shell; a reused pid runs something else.
+    if isinstance(pid, (str, int)) and str(pid).isdigit() and isinstance(job_path, str) and job_path:
+        # The pid the start command printed. "gone" only when that process no longer exists, or its
+        # command line is readable and is not the job's shell (the pid was reused); anything unreadable
+        # counts as running, so a Pod that cannot be inspected is never deleted for it.
         liveness = f"""
-pid=$(cat {shlex.quote(pid_path)} 2>/dev/null || true)
-if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -qF {shlex.quote(job_path)}; then
-  echo __KURA_JOB_RUNNING__
-else
+pid={int(pid)}
+if [ ! -d "/proc/$pid" ]; then
   echo __KURA_JOB_GONE__
+elif [ -r "/proc/$pid/cmdline" ] && ! grep -qF {shlex.quote(job_path)} "/proc/$pid/cmdline" 2>/dev/null; then
+  echo __KURA_JOB_GONE__
+else
+  echo __KURA_JOB_RUNNING__
 fi"""
     script = f"""
 set -u
@@ -2433,7 +2437,9 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
                 _raise_if_pod_gone(run_dir)
             if gone >= 2:
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
-                _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
+                if not _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id):
+                    # The Pod may hold checkpoints not yet copied: keep it, and let the follower try again.
+                    raise ValueError("the remote job stopped running without an exit record, and its last checkpoints could not be copied yet")
                 raise RemoteJobGone("the remote job stopped running without an exit record (its container restarted, or it was killed)")
             exit_record = state if isinstance(state, dict) else None
             if exit_record is not None:

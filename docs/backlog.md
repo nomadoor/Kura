@@ -15,6 +15,9 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-19 | RunPod follower | Only the job shell's pid is checked: if that shell is killed while its trainer child keeps running, the run ends `unknown` and the Pod is deleted while the trainer may still save; start the job under `setsid` and check its process group | review of the follower-gone change | P7
+- 2026-10-19 | RunPod follower | After a container restart RunPod may give the Pod a new IP or port; the follower keeps its old SSH details, sees the Pod unreachable, and RunPod says it runs, so it polls until the lease; refresh the SSH details when the Pod is unreachable | review of the follower-gone change | P6
+- 2026-10-19 | RunPod follower | When RunPod confirms the Pod gone (`PodGone`), the controller still prints "leaving RunPod pod running because remote completion/download was not confirmed"; skip that line when `pod_missing_at` is set | review of the follower-gone change | -
 - 2026-10-19 | render executor | `_validate_render_run_fields` passes `runpod=executor.get("name") == "runpod"` to `gpu_choice_problem` inline, and the monitor's `_executor` reads a render's `executor.name` inline (None when absent, where `render_executor` says local); both should ask `render_executor` | review of the render image and executor freeze | -
 - 2026-10-19 | render image | The RunPod render dry run shows the frozen image but not `launch_image_warnings` (the workspace now selects another image; a mutable tag), which the training plan prints | review of the render image and executor freeze | -
 - 2026-10-19 | tests | No test shows the render's billing confirmation and CUDA floor receive the frozen image (true by construction today) | review of the render image and executor freeze | -

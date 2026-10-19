@@ -184,8 +184,8 @@ there); when RunPod refuses that delete, it notifies once and keeps retrying
 until the Pod is gone. A job that stops running without an exit record (its
 container restarted, or it was killed) ends the run `unknown`: the checkpoints
 copied while it trained are kept and the Pod is deleted. A Pod that stays
-unreachable is checked with RunPod; once RunPod confirms it gone, the run ends
-`interrupted`. After three failed collections it marks the run
+unreachable is checked with RunPod: once RunPod confirms it gone, the run ends
+`interrupted`; a Pod RunPod reports stopped ends the run `unknown`. After three failed collections it marks the run
 `recovery_required` and notifies; then collect and stop by hand with the
 commands below. A job started before the runner existed is still followed
 in-process by `kura run execute`.
