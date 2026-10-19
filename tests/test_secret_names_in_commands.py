@@ -30,6 +30,36 @@ class SecretNameParityTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "must not contain secrets"):
                 _backend_env("Musubi Tuner", {"env": {name: "x"}})
 
+    def test_every_command_env_is_checked_by_one_owner(self) -> None:
+        from unittest.mock import patch
+
+        from kura.backends import shared
+        from kura.backends.ai_toolkit import command_ai_toolkit
+        from kura.backends.musubi_command import _backend_env, command_musubi_tuner
+        from kura.backends.sd_scripts import _validate_native_env, command_sd_scripts
+
+        modules = {"ai-toolkit": "kura.backends.ai_toolkit", "musubi-tuner": "kura.backends.musubi_command", "sd-scripts": "kura.backends.sd_scripts",
+                   "musubi generated": "kura.backends.musubi_command", "sd-scripts generated": "kura.backends.sd_scripts"}
+        calls = {
+            "ai-toolkit": lambda: command_ai_toolkit(_explicit("ai-toolkit", {"A": "1"})),
+            "musubi-tuner": lambda: command_musubi_tuner(_explicit("musubi-tuner", {"A": "1"})),
+            "sd-scripts": lambda: command_sd_scripts(_explicit("sd-scripts", {"A": "1"})),
+            "musubi generated": lambda: _backend_env("Musubi Tuner", {"env": {"A": "1"}}),
+            "sd-scripts generated": lambda: _validate_native_env({"env": {"A": "1"}}),
+        }
+        for name, call in calls.items():
+            with self.subTest(command=name), patch(f"{modules[name]}.validated_command_env", wraps=shared.validated_command_env) as owner:
+                call()
+            owner.assert_called_once()
+        with self.assertRaises(ValueError) as caught:
+            shared.validated_command_env({"Z_TOKEN": "value-z", "A_SECRET": "value-a", "PLAIN": "x"}, label="X")
+        self.assertTrue(str(caught.exception).startswith("X env must not contain secrets (A_SECRET, Z_TOKEN): "))
+        self.assertNotIn("value-", str(caught.exception))
+        self.assertNotIn("PLAIN", str(caught.exception))
+        for env in ({"A": 1}, ["A"], None):
+            with self.subTest(env=env), self.assertRaisesRegex(ValueError, "env must be a mapping of names to string values"):
+                shared.validated_command_env(env, label="X")
+
     def test_a_plain_name_passes_on_every_backend(self) -> None:
         from kura.backends.ai_toolkit import command_ai_toolkit
         from kura.backends.musubi_command import command_musubi_tuner
