@@ -197,7 +197,12 @@ execute` only confirms billing and follows. When the command ended, run
 The runner deletes a Pod whose job never started (nothing can be collected
 there); when RunPod refuses that delete, it notifies once and keeps retrying
 until the Pod is gone. While the job still runs, losing the RunPod API or
-SSH is retried without limit. After three failed collections of a job that
+SSH is retried without limit, without notifications: a follower that cannot
+reach the Pod for 30 checks in a row (minutes, longer on a network that drops
+packets) gives up, and the runner's next attempt asks RunPod. Once RunPod
+answers that the Pod no longer exists, the run ends `interrupted` (outputs not
+collected are gone) and the runner notifies; a Pod that still runs is
+followed again until its lease ends it. After three failed collections of a job that
 has exited, it marks the run `recovery_required` and notifies; then collect
 and stop by hand with the commands below. A job started before the runner
 existed is still followed in-process by `kura run execute`.

@@ -202,6 +202,11 @@ def _run_remote_locked(
             + f". Run `kura run execute {run_id}` again to follow the job and collect."
         )
         print(deadline_note, file=sys.stderr)
+        if controlled_by:
+            # The runner retries this attempt itself and notifies when the run needs a person or
+            # ends; a notice per retry (a Pod unreachable for hours) would only ask a person to act.
+            print("the job runner retries this follower; nothing to do unless it notifies", file=sys.stderr)
+            return 1
         _notify(
             notify_channels,
             subject=f"Kura run controller failed: {run_id}",
