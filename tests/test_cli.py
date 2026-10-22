@@ -61,7 +61,7 @@ from kura.tui import KuraMonitorApp, RunRow, _compact_path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.backend_fixtures import with_required
-from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only
+from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only, small_local_reserve
 
 
 
@@ -7561,7 +7561,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         dataset = root / "datasets" / "tiny" / "images"
         dataset.mkdir(parents=True)
         (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
-        stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config={"runpod": self._config()})
+        stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config={"runpod": self._config(), "docker": small_local_reserve()})
 
     def test_launch_runpod_non_tty_requires_yes_before_any_runpod_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

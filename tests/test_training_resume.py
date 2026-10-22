@@ -34,7 +34,7 @@ from kura.training_artifacts import compile_resume_lock, load_training_state, pu
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
-from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only
+from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only, small_local_reserve
 
 
 def _safetensors_bytes(content: bytes) -> bytes:
@@ -1032,7 +1032,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
             with patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_scp), patch(
                 "kura.run_commands.runpod_ssh._runpod_remote_training_states", return_value=[item]
-            ), patch("kura.run_commands.runpod_ssh._workspace_config", return_value={}):
+            ), patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"docker": small_local_reserve()}):
                 published = _pull_remote_training_state_items(
                     run_dir,
                     {"ip": "example", "port": 22, "key": root / "key"},
@@ -2542,7 +2542,7 @@ class ResumeRunTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
 
-            record = stage_runpod(workspace=root, run_dir=run_dir, dataset_ids=[], config={"runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}})
+            record = stage_runpod(workspace=root, run_dir=run_dir, dataset_ids=[], config={"runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}, "docker": small_local_reserve()})
             archive_path = run_dir / record["archive"]
             with tarfile.open(archive_path, "r:gz") as archive:
                 names = set(archive.getnames())

@@ -23,3 +23,11 @@ def posix_only(reason: str):
 
 DATASET_IO = "dataset inputs require no-follow directory-relative opens"
 POSIX_PATHS = "records and container paths use POSIX semantics"
+
+
+def small_local_reserve() -> dict[str, float]:
+    """A workspace's `docker` section whose local reserve (docker.min_free_gb, 20 GiB by default) is
+    about 10 MiB, for tests that pass through a RunPod stage or pull without being about the reserve,
+    so they pass on a host with little free space. Tests about the reserve set their own value and
+    fake the free space."""
+    return {"min_free_gb": 0.01}
