@@ -44,7 +44,7 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f"
+AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553"
 AI_TOOLKIT_PINNED_COMMIT = "9d408eb64d61e7b47e509e29f5da99bfab1afac0"
 
 # Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.32,

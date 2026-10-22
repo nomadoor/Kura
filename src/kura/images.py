@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any
 
 PINNED_IMAGES: dict[str, str] = {
-    "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f",
-    "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173",
-    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef",
-    "comfyui": "nomadoor/kura-comfyui@sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9",
+    "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553",
+    "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9",
+    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea",
+    "comfyui": "nomadoor/kura-comfyui@sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4",
 }
 
 # The build argument that selects each image's upstream source, and the value
@@ -47,6 +47,10 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:ecace25a51bf944ce71f6c1c1e8d7dcb328509ea4531b42c6e5a073a6a088af9": "13.0",
     "sha256:527d4812bb0c6ca376672c7524f592a240e72a7902aa5b9f586e80f83aed5173": "13.0",
     "sha256:74a0ddbe3b9c19fac41348d9c423605c1a39aefe011d499873994b96ee9a42ef": "12.8",
+    "sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553": "13.0",
+    "sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9": "13.0",
+    "sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea": "12.8",
+    "sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4": "13.0",
 }
 
 # The newest CUDA version seen on RunPod hosts (2026-10-07). A newer driver

@@ -862,7 +862,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         base_pin = "ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0"
-        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f"
+        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553"
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
         self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 

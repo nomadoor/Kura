@@ -1936,7 +1936,7 @@
  "upstream": {
   "base_arch": "flex1",
   "commit": "9d408eb64d61e7b47e509e29f5da99bfab1afac0",
-  "image": "nomadoor/kura-ai-toolkit@sha256:df2c5b4cf271cef711e7e6bb92482086ebcfb6046d107f549ffaafcd8ab7eb4f",
+  "image": "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553",
   "sources": {
    "extensions_built_in/audio_models/ui.tsx": "34bb12d8f876b9f9aca18a2e7f08e39f881ed07df27b9c300154d186250c0608",
    "extensions_built_in/diffusion_models/ui.tsx": "2f583d75f6e45fc5d79ed1000b635b4b7ccf5d05fc2db698aed843451e64acbe",
