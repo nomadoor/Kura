@@ -98,7 +98,10 @@ def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
         "gpuTypeId": gpu_type_ids[0],
         "gpuCount": payload.get("gpuCount", 1),
         "containerDiskInGb": payload.get("containerDiskInGb", DEFAULT_CONTAINER_DISK_GB),
-        "volumeInGb": payload.get("volumeInGb", 0),
+        # Every Pod is disposable: inputs arrive and outputs leave over SSH, then the Pod is
+        # deleted. A volume would hold the only copy of the outputs once the Pod stops, and
+        # Kura cannot collect from a stopped Pod, so it would only bill.
+        "volumeInGb": 0,
         "startSsh": True,
     }
     for source, target in (
@@ -106,8 +109,6 @@ def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
         ("cloudType", "cloudType"),
         ("imageName", "imageName"),
         ("supportPublicIp", "supportPublicIp"),
-        ("volumeMountPath", "volumeMountPath"),
-        ("networkVolumeId", "networkVolumeId"),
         ("minCudaVersion", "minCudaVersion"),
     ):
         if payload.get(source) is not None:
@@ -288,7 +289,7 @@ def runpod_cost_ceiling(measurement: dict[str, Any], gpu_type_ids: list[str], *,
     not covered; with no price at all the ceiling is unknown. The ceiling holds for the lease the
     Pod is created with and rises if `kura run lease` extends it (`pod_cost_ceiling`). The plan,
     a render's dry run, and the billed launch confirmation all show this. It covers GPU charges
-    only: RunPod bills container and volume disk separately, and Kura does not copy those rates.
+    only: RunPod bills the container disk separately, and Kura does not copy that rate.
     """
     if measurement.get("status") != "ok":
         reason = measurement.get("reason")
@@ -532,7 +533,6 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
         "gpu_type_ids": gpu_types,
         "gpu_count": config.get("gpu_count", 1),
         "container_disk_gb": config.get("container_disk_gb", DEFAULT_CONTAINER_DISK_GB),
-        "volume_in_gb": config.get("volume_in_gb", 0),
         "workspace_path": config.get("workspace_path", CONTAINER_WORKSPACE),
         "ports": ports,
         "cloud_types": cloud_types,
@@ -1223,7 +1223,6 @@ sleep infinity
         "name": f"kura-{run_dir.name}-{realization_id}",
         "gpuCount": settings["gpu_count"],
         "containerDiskInGb": settings["container_disk_gb"],
-        "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"], "env": runtime_env,
         "minCudaVersion": runpod_min_cuda_version(image),
         "imageName": image,
@@ -1588,7 +1587,6 @@ sleep infinity
         "name": f"kura-{run_dir.name}-{realization_id}",
         "gpuCount": settings["gpu_count"],
         "containerDiskInGb": settings["container_disk_gb"],
-        "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"],
         "env": runtime_env,
         "dockerStartCmd": ["sh", "-lc", _pod_start_script(ssh_script, max_lease_sec=max_lease_sec, log_path=log_path)],

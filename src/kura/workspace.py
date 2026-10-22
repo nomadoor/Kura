@@ -99,7 +99,6 @@ _RUNPOD_FIELDS: dict[str, Any] = {
     "gpu_type_priority": _value("string", choices=("availability", "custom")),
     "gpu_count": _INTEGER,
     "container_disk_gb": _INTEGER,
-    "volume_in_gb": _INTEGER,
     "workspace_path": _STRING,
     "ports": _STRING_LIST,
     "backend_ports": _dynamic(_STRING_LIST),
@@ -145,6 +144,7 @@ WORKSPACE_SCHEMA = _mapping({
 # delete the line rather than to look for the right spelling.
 _MIGRATE = "images are pinned by Kura and overridden with images.<name>; run `kura workspace migrate`"
 _RUNPOD_KEY = "the RunPod API key is always RUNPOD_API_KEY"
+_NO_VOLUME = "Kura cannot collect from a stopped Pod, so a volume would only bill for data Kura cannot reach; every Pod is disposable and created without one"
 _CLOUD_TYPES = "cloud_types (a list of SECURE and COMMUNITY; omitted means both) is the one setting; run `kura workspace migrate`"
 WORKSPACE_OBSOLETE_KEYS = {
     "runpod.container_cwd": "the container working directory now comes from the selected backend adapter",
@@ -161,6 +161,8 @@ WORKSPACE_OBSOLETE_KEYS = {
     "comfyui.runpod.cloud_type": _CLOUD_TYPES,
     "runpod.download_min_free_gb": "RunPod downloads and pulls keep the local reserve, docker.min_free_gb (a run raises its own with safety.max_run_disk_gb)",
     "runpod.object_store": "object staging was never enabled; RunPod runs upload their inputs over SSH (runpod.storage_mode: upload)",
+    "runpod.volume_in_gb": _NO_VOLUME,
+    "comfyui.runpod.volume_in_gb": _NO_VOLUME,
     "docker.build_cache_limit_gb": "image builds check the free space where Docker keeps its data against docker.min_free_gb, and `kura doctor disk` reports build cache that can be freed",
 }
 

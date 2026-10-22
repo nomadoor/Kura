@@ -109,6 +109,7 @@ why, so it is not raised again.
 
 ## Rejected
 
+- 2026-10-22 | stop outcome | REJECTED: Docker and RunPod settle a stop differently because only Docker already holds the outputs; one rule would record a RunPod run whose Pod was deleted before collection as completed with no outputs (was: unify the stop outcome across executors) | 0.7.0 RunPod lifecycle review | P9
 - 2026-10-22 | images | REJECTED: in the rebuilt AI-Toolkit image `importlib.metadata` reports certifi 2026.10.19, so `--ignore-installed` left no stale certifi metadata in front (was: `--ignore-installed` on certifi leaves the old dist-info, so audits read the old version) | review of the eMudhra trust-store change | -
 - 2026-10-22 | images | REJECTED: `conda list` before and after differs only in ca-certificates, certifi, openssl, pip, and (Musubi) conda; Python and torch are unchanged, and certifi and pip there were conda packages already (was: the unpinned conda-forge solve may replace other packages and clobber pip-installed certifi/pip) | review of the eMudhra trust-store change | -
 - 2026-10-19 | cleanup | REJECTED: `--images old` cannot see images frozen in another workspace's unfinished runs, but a pinned image needs no guard: the pins are digests, Docker refuses to remove an image a container uses (and `kura cleanup` now leaves other workspaces' containers), and a compiled run pulls the same digest again at launch, a download, the class it is listed in | 0.7.0 audit | P7
