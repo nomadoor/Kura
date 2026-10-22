@@ -87,14 +87,18 @@ class FailedCreateTests(unittest.TestCase):
 
     def test_a_failed_create_with_no_pod_by_that_name_tries_the_next_candidate(self) -> None:
         for label, make_run, launch in LOOPS:
-            with self.subTest(label):
-                run_dir, request, listed, realization_id = self._launch(
-                    make_run, launch, creates=[UNKNOWN, {"id": "pod-2", "name": "created", "desiredStatus": "RUNNING"}],
-                    listing=lambda *_a, **_k: [])
-                self.assertIsInstance(realization_id, str)
-                self.assertEqual(request.call_count, 2)
-                self.assertEqual(request.call_args_list[1].args[3]["gpuTypeIds"], ["NVIDIA L40S"])
-                self.assertGreaterEqual(listed.call_count, 1)
+            # Whatever the reply: a GraphQL error, a server error, or a lost connection.
+            for failure in (UNKNOWN, RunPodAPIError("RunPod GraphQL failed (503): down", status_code=503), ValueError("RunPod API is unreachable: timed out")):
+                with self.subTest(label, failure=str(failure)):
+                    run_dir, request, listed, realization_id = self._launch(
+                        make_run, launch, creates=[failure, {"id": "pod-2", "name": "created", "desiredStatus": "RUNNING"}],
+                        listing=lambda *_a, **_k: [])
+                    self.assertIsInstance(realization_id, str)
+                    self.assertEqual(request.call_count, 2)
+                    self.assertEqual(request.call_args_list[1].args[3]["gpuTypeIds"], ["NVIDIA L40S"])
+                    # Looked up under the name the create used.
+                    self.assertGreaterEqual(listed.call_count, 1)
+                    self.assertEqual({call.args[1] for call in listed.call_args_list}, {request.call_args_list[0].args[3]["name"]})
                 realization = json.loads((run_dir / "realizations" / f"{realization_id}.json").read_text(encoding="utf-8"))
                 self.assertEqual(realization["pod"]["id"], "pod-2")
 
