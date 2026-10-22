@@ -1,0 +1,44 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-22'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on every backend
+  on local Docker, after the images were rebuilt without the compromised eMudhra intermediate CAs
+  (#341). Trainer sources are unchanged; only the trust stores (and AI-Toolkit's UI Node) moved.
+backends:
+  sd-scripts:
+    model: Comfy-Org/stable-diffusion-v1-5-archive (sd15)
+    runtime_image_digest: sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea
+    adapter_source: 86deba789fe2eb0be5a64105d2ef8b9402fa24448f51ee83f62c52a1ba06e69b
+    runs: [20261022-1339_conf-sd-one-control_d5e6, 20261022-1339_conf-sd-one-control-2_8ce7, 20261022-1340_conf-sd-one-split_6cbd, 20261022-1341_conf-sd-one-resume_d589, 20261022-1341_conf-sd-multi-fresh_2891, 20261022-1342_conf-sd-multi-split_857e, 20261022-1343_conf-sd-multi-resume_5436, 20261022-1344_conf-sd-multi-accum-2_8eb6]
+  ai-toolkit:
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553
+    adapter_source: 6a3214676190e405f6652781c5332b567d20c2c084610af6445fe5f250708e0b
+    runs: [20261022-1344_conf-ai-one-control_0328, 20261022-1345_conf-ai-one-control-2_1f7c, 20261022-1346_conf-ai-one-split_c9f5, 20261022-1346_conf-ai-one-resume_0ba9, 20261022-1347_conf-ai-multi-fresh_0fbf, 20261022-1347_conf-ai-multi-split_3efd, 20261022-1348_conf-ai-multi-resume_c703, 20261022-1348_conf-ai-multi-accum-2_eeeb]
+  musubi-tuner:
+    model: Comfy-Org/Wan_2.1_ComfyUI_repackaged (wan 2.1 t2v 1.3B)
+    runtime_image_digest: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    adapter_source: d328ad9ec63e4d93bc83267e85912dc15bcea973e71f825a73e05670cbe6bff8
+    runs: [20261022-1349_conf-musubi-one-control_6572, 20261022-1351_conf-musubi-one-control-2_2ce6, 20261022-1352_conf-musubi-one-split_4881, 20261022-1353_conf-musubi-one-resume_c07e, 20261022-1354_conf-musubi-multi-fresh_96d1, 20261022-1355_conf-musubi-multi-split_54fd, 20261022-1356_conf-musubi-multi-resume_dbe7]
+results:
+  P1: pass on every backend (sd-scripts and AI-Toolkit include accumulation 2)
+  P2: pass on every backend
+  P3: pass on every backend; AI-Toolkit and Musubi Tuner controls differ, so exact learned-state equality is not checkable there
+  P4: pass on every backend
+  P6: not run (local Docker)
+  P7: pass on every backend
+  P8: pass on every backend
+comfyui_probe:
+  image: nomadoor/kura-comfyui@sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4
+  container: labeled io.kura.purpose=smoke, port 127.0.0.1:18188, removed after the probe
+  server_up_seconds: 12
+  runtime: comfyui_version 0.41.3, torch 2.11.0+cu130, cuda:0 NVIDIA GeForce RTX 4070 Ti
+  object_info_nodes: 987 (the same count as the 2026-10-18 image)
+  trust_store: certifi 2026.10.19, pip 26.2.2; urllib reaches pypi.org
+  limits: no render on this image; ComfyUI and its Python packages other than the trust stores are unchanged from the 2026-10-18 build
