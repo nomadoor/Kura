@@ -43,7 +43,7 @@ from kura.training_artifacts import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
-from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only  # noqa: E402
+from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only, small_local_reserve  # noqa: E402
 from tests.backend_fixtures import with_required  # noqa: E402
 from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes, _write_state_marker  # noqa: E402
 
@@ -348,7 +348,7 @@ class ResumeExecutorParityTests(unittest.TestCase):
 
                     with patch.object(runpod_ssh, "_run_bounded", side_effect=fake_scp), patch.object(
                         runpod_ssh, "_runpod_remote_training_states", return_value=[item],
-                    ), patch.object(runpod_ssh, "_workspace_config", return_value={}):
+                    ), patch.object(runpod_ssh, "_workspace_config", return_value={"docker": small_local_reserve()}):
                         items = _pull_remote_training_state_items(
                             run_dir, {"ip": "example", "port": 22, "key": root / "key"}, workspace="/workspace", items=[item],
                         )
@@ -756,7 +756,7 @@ class ResumeSourceVerificationTests(unittest.TestCase):
             "compile": lambda: compile_resume_lock(root, run, root / "compile-out"),
             "runpod-stage": lambda: stage_runpod(
                 workspace=root, run_dir=run_dir, dataset_ids=[],
-                config={"runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}},
+                config={"runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}, "docker": small_local_reserve()},
             ),
             "artifact-directory": lambda: resume_artifact_directory(root, run),
             "dataset-transfer": lambda: _resume_entries(root, run, verify=True),

@@ -33,6 +33,16 @@ from tests.backend_fixtures import with_required  # noqa: E402
 from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, publish_source, sd_scripts_run  # noqa: E402
 
 
+_REAL_PROBE = plan.probe_storages
+
+
+def _roomy(paths: dict[str, Path], config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The local launch's storage probe with 1 PiB free everywhere: the host's real free space must not
+    decide a test about what a run writes."""
+    return {name: replace(status, linux_free_bytes=1024**5, host_free_bytes=1024**5, effective_free_bytes=1024**5)
+            for name, status in _REAL_PROBE(paths, config).items()}
+
+
 def _resume(*, save_every: int, additional: int) -> dict[str, Any]:
     run = musubi_run()
     run["backend"]["config"]["save_every_n_steps"] = save_every
@@ -135,6 +145,7 @@ class LaunchDiskPreflightTests(unittest.TestCase):
                     patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as runpod_owner:
                 runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 50}, {"bytes": 0})
             with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                    patch.object(plan, "probe_storages", side_effect=_roomy), \
                     patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as local_owner:
                 local = plan._local_launch_disk_preflight(
                     Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
@@ -429,16 +440,9 @@ class PeakCheckpointsTests(unittest.TestCase):
         part = ("own writes at most 1.2 GiB: 51 weights-sized files of up to 24.0 MiB (rank 4 × 6 MiB, measured for "
                 "musubi-tuner architecture=flux2, model_version=klein-base-4b): 21 checkpoint files, and 6 training states "
                 "at 5 files each (3 the trainer keeps, 3 Kura copies)")
-        real_probe = plan.probe_storages
-
-        def roomy(paths, config=None):
-            # The CI machine's real free space must not decide the test: give every path 1 PiB.
-            return {name: replace(status, linux_free_bytes=1024**5, host_free_bytes=1024**5, effective_free_bytes=1024**5)
-                    for name, status in real_probe(paths, config).items()}
-
         with tempfile.TemporaryDirectory() as directory, \
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
-                patch.object(plan, "probe_storages", side_effect=roomy):
+                patch.object(plan, "probe_storages", side_effect=_roomy):
             workspace = Path(directory).resolve()
             refused = plan._local_disk_preflight_report(run, workspace, {"docker": {"min_free_gb": 10**9}}, {"bytes": 0})
             passed = plan._local_disk_preflight_report(run, workspace, {"docker": {"min_free_gb": 1}}, {"bytes": 0})
@@ -448,16 +452,10 @@ class PeakCheckpointsTests(unittest.TestCase):
         self.assertIn(part, passed[0]["fact"])
 
     def test_local_disk_refusal_and_pass_name_the_setting_behind_the_minimum(self) -> None:
-        real_probe = plan.probe_storages
-
-        def roomy(paths, config=None):
-            return {name: replace(status, linux_free_bytes=1024**5, host_free_bytes=1024**5, effective_free_bytes=1024**5)
-                    for name, status in real_probe(paths, config).items()}
-
         def report(run, docker):
             with tempfile.TemporaryDirectory() as directory, \
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
-                    patch.object(plan, "probe_storages", side_effect=roomy):
+                    patch.object(plan, "probe_storages", side_effect=_roomy):
                 return plan._local_disk_preflight_report(run, Path(directory).resolve(), {"docker": docker}, {"bytes": 0})[0]
 
         run = musubi_run()
@@ -486,7 +484,8 @@ class PeakCheckpointsTests(unittest.TestCase):
             with self.subTest(backend=name), tempfile.TemporaryDirectory() as directory:
                 with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None):
                     runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 500}, {"bytes": 0})
-                with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                        patch.object(plan, "probe_storages", side_effect=_roomy):
                     local = plan._local_launch_disk_preflight(
                         Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
                         download_estimate={"bytes": 0},

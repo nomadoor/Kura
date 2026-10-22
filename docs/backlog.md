@@ -79,7 +79,7 @@ why, so it is not raised again.
 
 
 - 2026-10-19 | RunPod stage | The plan's `local_stage_free` shows the archive bytes only, while the stage gate asks for the reserve plus the archive; and each `ensure_free_bytes` caller adds `local_reserve_bytes` itself (the stage through a lazy import from executors into run_commands); move the reserve owners into `kura.storage` and let the gate add the reserve | review of the stage reserve | P8
-- 2026-10-19 | tests | Stage and launch tests now need the 20 GiB default reserve free on the real disk (about 54 tests on a host with less); set a small `docker.min_free_gb` in their workspace configs or patch the probe; the legacy `.tar.gz` stage gate has no test | review of the stage reserve | -
+- 2026-10-19 | tests | The legacy `.tar.gz` stage gate has no test | review of the stage reserve | -
 
 
 - 2026-10-19 | cleanup | After `--resume-data`, status.json's `recoverable_training_states` still lists the removed artifact ids; and a run with both `outputs/foo` and `outputs/<run>/foo` matches one snapshot copy for both, so keeping one can remove the kept one's snapshot copy (de-duplicate `remove_files`, leave out names a kept checkpoint has); no test drives a re-download after `--resume-data` through `materialize_downloaded_status` | re-check of the RunPod downloads layout | P9

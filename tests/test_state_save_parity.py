@@ -30,6 +30,7 @@ from kura.training_artifacts import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tests.platform_support import small_local_reserve  # noqa: E402
 from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, sd_scripts_run  # noqa: E402
 from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes, _write_state_marker  # noqa: E402
 
@@ -314,7 +315,7 @@ class StatePublicationParityTests(unittest.TestCase):
 
                     with patch.object(runpod_ssh, "_run_bounded", side_effect=fake_scp), patch.object(
                         runpod_ssh, "_runpod_remote_training_states", return_value=deepcopy(listing),
-                    ), patch.object(runpod_ssh, "_workspace_config", return_value={}):
+                    ), patch.object(runpod_ssh, "_workspace_config", return_value={"docker": small_local_reserve()}):
                         items = _pull_remote_training_state_items(
                             run_dir, {"ip": "example", "port": 22, "key": root / "key"}, workspace="/workspace", items=deepcopy(listing),
                         )

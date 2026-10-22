@@ -31,7 +31,7 @@ from kura.executors.runpod import stage_runpod
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
-from tests.platform_support import DATASET_IO, posix_only
+from tests.platform_support import DATASET_IO, posix_only, small_local_reserve
 
 
 class _CompiledRunFixture:
@@ -41,7 +41,7 @@ class _CompiledRunFixture:
 
     @classmethod
     def _workspace_config(cls) -> dict:
-        return {"runpod": cls._config()}
+        return {"runpod": cls._config(), "docker": small_local_reserve()}
 
     def _compiled(self, root: Path, *, resume: bool = False, link_target: bool = False) -> tuple[Path, dict]:
         run = {
