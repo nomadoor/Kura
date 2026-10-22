@@ -964,14 +964,15 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     set_stop_check(lambda: _sibling(request, ".stop.json").exists())
     try:
         _settle_unconfirmed_creates(run_dir)
-        realization = _realization(run_dir, _status(run_dir).get("last_realization"))
-        launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
+        realization = _launched_realization(run_dir, request, _status(run_dir))
+        launched = realization is not None
         try:
-            if not launched:
+            if realization is None:
                 if _sibling(request, ".stop.json").exists():
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+                    _end_unlaunched_wait(run_dir, "interrupted", "stopped by `kura run stop` while it waited for capacity; no Pod was created")
                     return 0
-                # With no create intent no Pod exists, so a confirmed launch simply continues (run-records ADR).
+                # No Pod exists for this request (none recorded yet, or its capacity wait goes on), so the confirmed launch continues (run-records ADR).
                 code: int | None = _remote(run_dir, request, details, reattach=False)
             else:
                 code = _continue_runpod(run_dir, request, details, realization)
@@ -995,6 +996,18 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         set_stop_check(None)
 
 
+def _launched_realization(run_dir: Path, request: Path, status: dict[str, Any]) -> dict[str, Any] | None:
+    """The realization this RunPod request's launch recorded, or None while it has not launched: no
+    launch recorded yet, or the run is still in its capacity wait (`in_capacity_wait`), where no Pod
+    exists and the confirmed launch continues the wait (run-records ADR, decision 3)."""
+    from kura.executors.common import in_capacity_wait
+
+    realization = _realization(run_dir, status.get("last_realization"))
+    if realization is None or (realization.get("controlled_by") or {}).get("request") != request.name or in_capacity_wait(status):
+        return None
+    return realization
+
+
 def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: bool) -> int:
     from kura.run_commands.launch import _run_remote_locked
     from kura.run_commands.plan import max_lease_seconds
@@ -1015,31 +1028,29 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
     from kura.run_commands.runpod_ssh import remote_job_pid
 
     from kura.executors.common import end_run
+    from kura.executors.runpod import pod_may_exist
 
     status = _status(run_dir)
     realization_id = str(realization.get("id"))
     if run_finished(status):
-        if _pod_left_running(run_dir, status):
-            # Collected or never started: either way nothing on the Pod is still needed, so a
-            # failed delete is retried uncounted and never rewrites how the run ended.
-            if _delete_pod(run_dir, why="the finished run left it running"):
-                return 0
-            return _pod_delete_failed(run_dir, request, details, f"Run {run_dir.name} has finished, but its Pod")
-        return 0
-    if not isinstance(realization.get("pod"), dict) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
+        return _delete_finished_runs_pod(run_dir, request, details, status)
+    if not pod_may_exist(status):
         # The Pod is gone or was never created; nothing is left to follow.
         end_run(run_dir, "interrupted", reason="the follower found the Pod gone or never created")
         return 0
     if remote_job_started(run_dir, realization_id):
         from kura.executors.runpod import reconcile_runpod
 
-        # A Pod RunPod reports gone is recorded, so it is not followed or retried.
+        # Whether to follow is decided here, once: a Pod RunPod reports gone is recorded, so it is
+        # not followed or retried, and one RunPod no longer runs ends the run as recorded.
         current = reconcile_runpod(run_dir, source="explicit")
         if current.get("pod_missing_at"):
             end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
             _notify_text(details, f"Kura run interrupted: {run_dir.name}",
                          f"Run {run_dir.name}'s Pod no longer exists; outputs not collected before it went are gone.")
             return 0
+        if run_finished(current):
+            return _delete_finished_runs_pod(run_dir, request, details, current)
         return _remote(run_dir, request, details, reattach=True)
     intent = _read_json(run_dir / "realizations" / f"{realization_id}.remote-job-intent.json")
     if intent:
@@ -1052,6 +1063,18 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
             return _remote(run_dir, request, details, reattach=True)
     # The job never started, so nothing on the Pod can be collected (run-records ADR).
     return _delete_unstarted_pod(run_dir, request, details)
+
+
+def _delete_finished_runs_pod(run_dir: Path, request: Path, details: dict[str, Any], status: dict[str, Any]) -> int | None:
+    """Delete the Pods a finished run left; None when the delete failed and is retried uncounted.
+
+    Collected or never started: either way nothing on the Pod is still needed, so a failed
+    delete never rewrites how the run ended."""
+    if not _pod_left_running(run_dir, status):
+        return 0
+    if _delete_pod(run_dir, why="the finished run left it running"):
+        return 0
+    return _pod_delete_failed(run_dir, request, details, f"Run {run_dir.name} has finished, but its Pod")
 
 
 # Every follower reads the secrets files when it starts, so the next try uses a key set since.
@@ -1126,13 +1149,13 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     from kura.executors.common import unresolved_create_intents
 
     status = _status(run_dir)
-    realization = _realization(run_dir, status.get("last_realization"))
-    launched = realization is not None and (realization.get("controlled_by") or {}).get("request") == request.name
+    launched = _launched_realization(run_dir, request, status) is not None
     if not launched and code:
         if unresolved_create_intents(run_dir, "runpod"):
             return 1
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", exit_code=code,
                                 error=f"the launch failed before it recorded a Pod; see runs/{run_dir.name}/logs/runner.log")
+        _end_unlaunched_wait(run_dir, "launch_failed", "the continued capacity wait failed before it created a Pod")
         return 0
     if run_finished(status):
         # The RunPod controller already notified completion with the request's channels.
@@ -1140,6 +1163,15 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     if code and isinstance(status.get("remote_exit_code"), int):
         _collection_failed(run_dir, request, details)
     return 1
+
+
+def _end_unlaunched_wait(run_dir: Path, state: str, reason: str) -> None:
+    """End the capacity wait a request settled without a launch leaves behind; nothing else would, and
+    status would keep saying the run waits for a GPU no follower looks for."""
+    from kura.executors.common import end_run, in_capacity_wait
+
+    if in_capacity_wait(_status(run_dir)):
+        end_run(run_dir, state, reason=reason)
 
 
 def _stop_runpod_on_request(run_dir: Path, request: Path, details: dict[str, Any]) -> bool:

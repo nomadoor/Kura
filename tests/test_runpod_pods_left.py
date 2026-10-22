@@ -52,6 +52,23 @@ class PodsLeftTests(unittest.TestCase):
             self.assertIn(("DELETE", "/pods/pod-2"), [call.args[:2] for call in request.call_args_list])
             self.assertEqual(runpod.pods_left(run_dir, _status(run_dir)), [])
 
+    def test_every_caller_takes_the_pod_as_gone_by_the_one_test(self) -> None:
+        # A stop's record, RunPod's 404, or no Pod recorded: following, the stop guard, and the lease change all agree.
+        from kura.run_commands.plan import _uncollected_pod_work
+        from kura.run_commands.runpod_ssh import change_runpod_lease
+
+        for gone in ({"pod_stopped_at": "t"}, {"pod_missing_at": "t"}, {"pod_id": None}):
+            with self.subTest(gone=gone), _run({"state": "running", **gone}) as run_dir:
+                status = _status(run_dir)
+                self.assertFalse(runpod.pod_may_exist(status))
+                self.assertIsNone(_uncollected_pod_work(run_dir))
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details") as ssh, self.assertRaisesRegex(ValueError, "already stopped|no RunPod Pod"):
+                    change_runpod_lease(run_dir, 3600, yes=True)
+                ssh.assert_not_called()
+        with _run({"state": "running"}) as run_dir:
+            self.assertTrue(runpod.pod_may_exist(_status(run_dir)))
+            self.assertIsNotNone(_uncollected_pod_work(run_dir))
+
     def test_the_monitor_says_a_pod_is_up_only_while_one_may_bill(self) -> None:
         from kura.monitor import _executor_info
         from kura.tui import _remote_execution_phase

@@ -142,7 +142,8 @@ the runner restarts) was retried only by hand.
 - A launch that fails before it records a Pod ends `launch_failed` on its
   first failure, as a Docker launch does: no Pod exists, so nothing bills or
   is lost. One cut short after its create intent waits for the lookup by
-  name first (`run-records-and-external-effects.md`). It used to be counted
+  name first, and one cut short in a capacity wait continues the wait when
+  that lookup finds no Pod (`run-records-and-external-effects.md`). It used to be counted
   with the collection failures.
 - Records: no reader is kept for a run an older Kura held (`recovery_required`
   with nothing downloaded). No workspace holds one, and its Pod is long gone

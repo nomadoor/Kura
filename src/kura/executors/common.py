@@ -35,11 +35,16 @@ RUN_STATES = frozenset({
 })
 
 
+def in_capacity_wait(status: dict[str, Any]) -> bool:
+    """Whether the run is waiting for RunPod capacity: its confirmed launch has created no Pod and
+    goes on waiting, also after the follower that waited stopped (the runner continues the wait)."""
+    return status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict)
+
+
 def can_start(status: dict[str, Any]) -> bool:
     """Whether a launch may stage and start this run: a run starts once, from `compiled`, or
-    resumes its own capacity wait whose follower stopped (the runner resumes that wait)."""
-    state = status.get("state")
-    return state == "compiled" or (state == "queued" and isinstance(status.get("capacity_wait"), dict))
+    continues its own capacity wait (`in_capacity_wait`)."""
+    return status.get("state") == "compiled" or in_capacity_wait(status)
 
 
 def start_refusal(run_id: str, status: dict[str, Any], *, action: str) -> str:
@@ -273,9 +278,12 @@ def point_status_at_launch(latest: dict[str, Any], realization_id: str, realizat
         latest["ai_toolkit_models"] = realization["ai_toolkit_models"]
     else:
         latest.pop("ai_toolkit_models", None)
-    # The launch ended any capacity wait, and a new realization starts its own observations and
-    # progress; an earlier one's step is not its.
-    for key in ("capacity_wait", "last_observation", *PROGRESS_FIELDS):
+    # The launch ended any capacity wait, unless it recorded that the wait goes on (a create cut short
+    # in the wait that made no Pod), and a new realization starts its own observations and progress;
+    # an earlier one's step is not its.
+    if realization.get("state") != "queued":
+        latest.pop("capacity_wait", None)
+    for key in ("last_observation", *PROGRESS_FIELDS):
         latest.pop(key, None)
 
 

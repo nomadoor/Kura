@@ -10171,7 +10171,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.stop-*.json")]
             self.assertEqual((stop["outcome"], stop["stopped_at"], stop["targets"]), ("failed", None, [{"pod_id": "pod-1", "result": "failed"}]))
 
-    def test_stop_runpod_explains_how_to_cancel_capacity_wait(self) -> None:
+    def test_stop_runpod_explains_that_the_runner_ends_a_capacity_wait(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             (run_dir / "status.json").write_text(
@@ -10179,7 +10179,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch("kura.executors.runpod._runpod_request") as request:
-                with self.assertRaisesRegex(ValueError, "no Pod exists.*Ctrl\\+C.*doctor runpod.*run execute example"):
+                with self.assertRaisesRegex(ValueError, "no Pod exists.*stop stays requested.*kura runner start"):
                     stop_runpod(run_dir)
             request.assert_not_called()
 
