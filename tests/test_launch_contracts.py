@@ -348,7 +348,8 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         self.assertEqual(session_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(session_env["KURA_WORKSPACE"], "/workspace")
         self.assertEqual(session_env["KURA_RUN_ID"], "contract-run")
-        self.assertIn("KURA_MAX_LEASE_SEC", session_env)
+        # The lease lives in the Pod's start command and deadline file; no process reads a lease variable.
+        self.assertNotIn("KURA_MAX_LEASE_SEC", session_env)
         self.assertTrue(required_env_names([COMFYUI_PREPARE_PATH]) <= set(session_env))
 
     @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "a Pod runs these scripts under Linux bash")

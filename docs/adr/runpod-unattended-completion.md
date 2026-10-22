@@ -46,8 +46,9 @@ loses little, while losing a 24-hour run is severe.
   start when Kura first reached the Pod over SSH, so a Pod whose controller or
   job runner stopped before that contact had no timer; amended 2026-10-07: a
   Pod that failed before its job started used to have no timer at all). The
-  guard Kura starts again over SSH never moves a deadline already set, and the
-  run records the deadline the Pod holds.
+  start command's guard is the only one (amended 2026-10-19: a second guard
+  Kura also started over SSH ran only on Pods this same Kura had just created,
+  which already had the first), and the run records the deadline the Pod holds.
   The wait therefore never outlasts the lease time remaining when training
   ends: the lease can end the Pod before the wait finishes, so a run expected
   to take longer than the lease needs a lease covering training plus the wait.
@@ -83,8 +84,7 @@ deadline on its own: a longer lease is a billing decision.
 A render session Pod keeps its deadline in the same file (2026-10-08), so the
 same command changes it. Its lease starts when the Pod starts, as a training
 Pod's does (2026-10-10): the Pod sets the deadline itself from the same start
-command guard, and a second guard started over SSH never moves a deadline
-already set.
+command guard, the only one it runs.
 
 While it follows a job, Kura estimates the time left from the training
 progress. When training plus collection looks unlikely to finish before the

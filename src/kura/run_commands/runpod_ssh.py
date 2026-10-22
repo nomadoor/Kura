@@ -33,7 +33,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import recorded_output_paths
 from kura.executors import _apply_stdout_progress, _redact_secret_text
-from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell, format_cost_ceiling, pod_cost_ceiling
+from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, format_cost_ceiling, pod_cost_ceiling
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -1414,27 +1414,6 @@ def _wait_http_ready(endpoint: str, *, timeout_sec: int = 180) -> None:
     raise ValueError(f"ComfyUI endpoint did not become ready before timeout: {last_error}")
 
 
-def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC) -> None:
-    """Start the Pod-side lease fuse over SSH; it never moves a deadline the Pod already set."""
-
-    pod_id = details.get("pod_id")
-    pod_id_value = pod_id if isinstance(pod_id, str) else ""
-    log_path = f"{workspace.rstrip('/')}/runs/{run_id}/logs/stdout.log"
-    script = "\n".join([
-        "set -euo pipefail",
-        f"mkdir -p {shlex.quote(str(PurePosixPath(log_path).parent))}",
-        f"touch {shlex.quote(log_path)}",
-        _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id=pod_id_value, log_path=log_path),
-    ])
-    try:
-        result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=60)
-    except subprocess.TimeoutExpired as exc:
-        raise ValueError(f"remote lease guard setup timed out after {exc.timeout} seconds") from exc
-    if result.returncode:
-        detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "lease guard setup failed")
-        raise ValueError(f"remote lease guard setup failed with exit code {result.returncode}: {detail}")
-
-
 def _sync_runpod_remote_stdout(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> bool:
     """Mirror remote stdout progress into local run artifacts."""
 
@@ -1735,14 +1714,24 @@ def record_lease_deadline(run_dir: Path, deadline_epoch: int, *, reason: str, pr
 
 
 def record_pod_lease_deadline(run_dir: Path, details: dict[str, Any]) -> None:
-    """Record the deadline the Pod holds, so `kura run status` and `kura run lease` see it; best effort."""
+    """Record the deadline the Pod holds, so `kura run status` and `kura run lease` see it.
+
+    The Pod's start command arms the only lease guard. A Pod that holds no
+    deadline did not run that start command (an image whose entrypoint ignores
+    it), so it has no lease at all: the launch fails here, before anything
+    starts, and the Pod is deleted.
+    """
     try:
-        result = subprocess.run([*_ssh_base(details), f"cat {shlex.quote(LEASE_DEADLINE_PATH)}"], text=True, capture_output=True, check=False, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return
+        result = subprocess.run([*_ssh_base(details), f"cat {shlex.quote(LEASE_DEADLINE_PATH)} 2>/dev/null || true"], text=True, capture_output=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"could not read the Pod's lease deadline: {exc}") from exc
     value = result.stdout.strip()
-    if result.returncode == 0 and value.isdigit():
-        record_lease_deadline(run_dir, int(value), reason="armed")
+    if result.returncode or not value.isdigit():
+        raise ValueError(
+            "the Pod holds no lease deadline, so it did not run Kura's start command and nothing would delete it; "
+            "use an image that runs the command it is given (no entrypoint that ignores it)"
+        )
+    record_lease_deadline(run_dir, int(value), reason="armed")
 
 
 def latest_lease_deadline(run_dir: Path, realization_id: str) -> int | None:
@@ -2098,12 +2087,12 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     command_env = prepared_upload["command_env"]
     realization_id = str(realization.get("id") or Path(realization_ref).stem)
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
-    # The Pod armed its lease when it started; this second guard never moves that deadline
-    # and stays for Pods whose start command predates it.
-    lease_pod_id = status.get("pod_id")
-    _start_runpod_session_lease_guard({**details, "pod_id": lease_pod_id if isinstance(lease_pod_id, str) else ""},
-                                      workspace=workspace, run_id=run_id, max_lease_sec=max_lease_sec)
-    record_pod_lease_deadline(run_dir, details)
+    # The Pod armed its lease from its start command; the run records the deadline it holds.
+    # A Pod without one has no lease, and nothing has started on it yet: refusing here deletes it.
+    try:
+        record_pod_lease_deadline(run_dir, details)
+    except ValueError as exc:
+        raise TransferRefused(str(exc)) from exc
     record_launch_phase(run_dir, realization_id, "ssh_ready", container_started_at=details.get("container_started_at"))
     _start_ssh_master(details)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
