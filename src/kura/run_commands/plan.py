@@ -1886,10 +1886,10 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
         if runner.pending_requests(run_dir) and runner.cancel_pending(workspace, run_dir):
             print("the launch request had not started; it is recorded as not launched", file=sys.stderr)
             return 0
-        if runner.run_unfinished(run_dir) and not runner.runner_alive(workspace):
-            print("no runner is following this run; run `kura runner start`, which records a render cut short "
-                  "as interrupted and resumes following the rest, then stop it again if needed", file=sys.stderr)
-            return 1
+        if runner.run_unfinished(run_dir):
+            # With no runner the CLI stops the run itself (below); the request keeps the stop in effect for
+            # the runner that later settles what the CLI cannot reach: a launch not recorded yet, a render cut short.
+            runner.write_stop_request(run_dir)
         return None
     path = runner.write_stop_request(run_dir)
     if path is None:
@@ -1946,7 +1946,8 @@ def stop_run(run_id: str, *, yes: bool = False) -> int:
             )
         realization_ref = status.get("last_realization")
         if not isinstance(realization_ref, str):
-            raise ValueError("run has no realization to stop")
+            raise ValueError("run has no launch recorded to stop; if a runner was following it, `kura runner start` records the stop "
+                             "(a launch that never began as not launched, a local render cut short as interrupted)")
         realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
         if realization.get("executor") == "runpod":
             print(json.dumps(stop_runpod(run_dir), indent=2))
