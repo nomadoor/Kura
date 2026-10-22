@@ -78,7 +78,7 @@ class OneLaunchWriterTests(unittest.TestCase):
         for pods in ([], [{"id": "pod-a", "name": "example", "runtime": {"uptimeInSeconds": 90}}]):
             with self.subTest(found=bool(pods)), _crashed_launch(previous_pod="pod-old") as run_dir:
                 with patch("kura.executors.runpod._runpod_pods_named", return_value=pods):
-                    resolve_runpod_create_intents(run_dir, CONFIG)
+                    resolve_runpod_create_intents(run_dir)
                 status = _status(run_dir)
                 self.assertEqual(shadow_differences(run_dir, status), {})
                 self.assertEqual(status.get("pod_id"), "pod-a" if pods else None)
