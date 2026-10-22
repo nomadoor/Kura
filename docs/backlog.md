@@ -107,6 +107,7 @@ why, so it is not raised again.
 - 2026-10-22 | images | The conda images gate their `ca-certificates` at `>=2026.10.19` by the release date; no changelog line was read that names it as the conda-forge build dropping the eMudhra intermediates (the in-image probe shows conda Python refusing both test hosts) | review of the eMudhra trust-store change | -
 - 2026-10-22 | images | The AI-Toolkit Node 24 build check loads only the UI's `sqlite3` addon, not Next's SWC binary or Prisma's engine; the official UI did start and answer HTTP 200 on 8675 in the rebuilt image | review of the eMudhra trust-store change | -
 - 2026-10-22 | CI | `setup-uv` pins uv exactly at 0.13.4, so a later fixed uv needs a manual bump; `>=0.13.4` would float | review of the eMudhra trust-store change | -
+- 2026-10-22 | tests | Unit tests in test_cli, test_agent_independent_cli, test_smoke_harness, test_training_state_rule and others reach the real `docker info` (doctor, plan disk preflight, data-location probes) instead of stubbing it; stub docker_daemon_problem/docker_data_location in those tests | dbus-daemon leak investigation | -
 
 ## Rejected
 
