@@ -1,0 +1,44 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-23'
+executor: docker and runpod
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes; then --runpod --backend musubi-tuner --yes
+hardware:
+  local_gpu: NVIDIA GeForce RTX 4070 Ti (12282 MiB)
+  runpod_gpus: RTX A5000 (5 Pods), RTX 4000 Ada (2 Pods)
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on main at f2f137f
+  after the RunPod lifecycle simplification (#342 #288 #326 #293 #328 #331 #346 #347 #348 #349
+  #350 #351 #352 #353 #354 #355 #356): every backend on local Docker, and Musubi Tuner on RunPod.
+  Images and adapter sources are those of 2026-10-22 (smoke-evidence/2026-10-22-emudhra-images-conformance.yaml).
+backends:
+  sd-scripts:
+    executor: docker
+    runtime_image_digest: sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea
+    adapter_source: 86deba789fe2eb0be5a64105d2ef8b9402fa24448f51ee83f62c52a1ba06e69b
+    runs: [20261023-0506_conf-sd-one-control_26f9, 20261023-0507_conf-sd-one-control-2_c1fe, 20261023-0508_conf-sd-one-split_8448, 20261023-0508_conf-sd-one-resume_3c39, 20261023-0509_conf-sd-multi-fresh_14c7, 20261023-0510_conf-sd-multi-split_8726, 20261023-0510_conf-sd-multi-resume_b2a3, 20261023-0511_conf-sd-multi-accum-2_4408]
+  ai-toolkit:
+    executor: docker
+    runtime_image_digest: sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553
+    adapter_source: 6a3214676190e405f6652781c5332b567d20c2c084610af6445fe5f250708e0b
+    runs: [20261023-0512_conf-ai-one-control_236e, 20261023-0512_conf-ai-one-control-2_2fda, 20261023-0513_conf-ai-one-split_2d2e, 20261023-0513_conf-ai-one-resume_1045, 20261023-0514_conf-ai-multi-fresh_2d0f, 20261023-0514_conf-ai-multi-split_6f05, 20261023-0515_conf-ai-multi-resume_3870, 20261023-0515_conf-ai-multi-accum-2_c888]
+  musubi-tuner:
+    executor: docker
+    runtime_image_digest: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    adapter_source: d328ad9ec63e4d93bc83267e85912dc15bcea973e71f825a73e05670cbe6bff8
+    runs: [20261023-0516_conf-musubi-one-control_b022, 20261023-0517_conf-musubi-one-control-2_2370, 20261023-0518_conf-musubi-one-split_e3b2, 20261023-0519_conf-musubi-one-resume_5621, 20261023-0520_conf-musubi-multi-fresh_81f0, 20261023-0521_conf-musubi-multi-split_6832, 20261023-0522_conf-musubi-multi-resume_2ded]
+  musubi-tuner-runpod:
+    executor: runpod
+    runtime_image_digest: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    adapter_source: d328ad9ec63e4d93bc83267e85912dc15bcea973e71f825a73e05670cbe6bff8
+    runs: [20261023-0523_conf-musubi-one-control_c331, 20261023-0528_conf-musubi-one-control-2_162f, 20261023-0535_conf-musubi-one-split_ab6e, 20261023-0540_conf-musubi-one-resume_9645, 20261023-0544_conf-musubi-multi-fresh_da89, 20261023-0549_conf-musubi-multi-split_0f8c, 20261023-0555_conf-musubi-multi-resume_77e2]
+    pod_minutes: about 35 across 7 Pods (4 to 6.5 minutes each, $0.16 to $0.28/h), about $0.13 GPU by kura run status
+    pods_left: none (kura doctor runpod lists no Pods and no network volumes)
+results:
+  P1: pass on every backend and on RunPod (sd-scripts and AI-Toolkit include accumulation 2)
+  P2: pass
+  P3: pass; AI-Toolkit and Musubi Tuner controls differ, so exact learned-state equality is not checkable there
+  P4: pass
+  P6: pass on RunPod (every Pod deleted after collection); not run on local Docker
+  P7: pass
+  P8: pass on local Docker; not run on RunPod
