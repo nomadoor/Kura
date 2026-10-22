@@ -61,7 +61,12 @@ loses little, while losing a 24-hour run is severe.
 - The billing confirmation shows the wait and the lease before launch, and the
   user can change both (`--unattended-wait`, `--max-lease`).
 - A controller that starts collecting marks the Pod, so the timer waits for an
-  in-progress download instead of deleting the Pod under it.
+  in-progress download instead of deleting the Pod under it. The download
+  re-touches the mark every minute while it works, and the timer honours only a
+  mark touched within the last ten minutes (amended 2026-10-22): a downloader
+  that dies mid-way (the PC sleeps, the runner is killed) leaves a stale mark,
+  which counts as no collection, so the timer still deletes the Pod instead of
+  leaving it to the lease.
 
 **Optional relay storage: not adopted (2026-10-08)**
 
@@ -117,8 +122,8 @@ the runner restarts) was retried only by hand.
   --force` to collect by hand; one helper notifies once for this and for a
   failed Pod delete. The lease is the bound that always holds: the unattended
   wait usually ends the Pod earlier, but it waits for, and gives way to, a
-  collection that has marked the Pod, so retried collections can leave only
-  the lease to end it. When RunPod
+  collection that keeps its mark on the Pod fresh, so retried collections can
+  leave only the lease to end it. When RunPod
   answers that the Pod is gone, the run ends `interrupted`: outputs not
   collected before it went are gone.
 - A failed collection never makes a run `recovery_required`. The state keeps one meaning:

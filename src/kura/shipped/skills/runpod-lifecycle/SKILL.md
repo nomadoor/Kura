@@ -50,7 +50,9 @@ stop Pod
   the Pod deletes itself after the longer of 2 hours and the job time
   (from remote job start, including model download). Collecting the outputs marks the
   Pod so the timer leaves it to the controller;
-  a download in progress marks it too, so the timer waits for it.
+  a download in progress marks it too and keeps the mark fresh, so the timer waits
+  for it; a download that died (PC asleep, process killed) stops refreshing the
+  mark, and ten minutes later the timer no longer waits for it.
 - When RunPod answers that a Pod does not exist (it deleted itself or was
   deleted elsewhere), Kura records the run as `interrupted` with
   `pod_missing_at`, whoever looked (`kura run reconcile`, `kura run execute`,
