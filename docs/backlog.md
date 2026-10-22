@@ -15,6 +15,8 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-23 | notifications | A RunPod run collected but whose Pod is still listed is notified "finished as completed" before the follower deletes the Pod, so a delete that then fails sends its own notice while the Pod bills; notify after the delete | re-check of the one notification owner change | P6
+- 2026-10-23 | notifications | `_notify_finished` swallows a failed send and still writes its marker, so that notice is lost for good (as before the change); write the marker only after a send that succeeded | re-check of the one notification owner change | P11
 - 2026-10-23 | run start | A RunPod run an older Kura left `running` with no runner request is refused by `kura run execute` with "run must be compiled before launching"; point to `kura run reconcile <id>` | review of the one notification owner change | P11
 - 2026-10-23 | notifications | With no channels on the request, the runner's defaults come from the environment it was started with (`KURA_NOTIFY`, `KURA_NTFY_TOPIC`), not the launching shell's; say so in the shipped skill. Docker finish notices (run names, disk-watch stop reasons with paths) now reach ntfy by default, as the README says | review of the one notification owner change | -
 - 2026-10-23 | notifications | The lease warning (`runpod_ssh._warn_if_lease_short`) passes the controller's `notify_channels` instead of asking `runner._notify_channels`; the values agree today | review of the one notification owner change | -
