@@ -85,6 +85,12 @@ creates nothing, so only decisions 3 to 7 apply to it.
   tried; a listing that fails or finds more than one hands the run to the user.
   Only a capacity refusal skips the lookup, because a capacity wait repeats it
   every round.
+- A lookup can miss a Pod that a create whose reply was lost makes only
+  afterwards. So deleting a run's Pods (`stop_runpod`, the one deleter the
+  runner and every command use) also lists Pods by every name the run's create
+  intents used and deletes each one carrying such a name exactly, recording it
+  in the stop record with `found_by: name` (2026-10-22). A listing that fails
+  fails the stop after the recorded Pods are deleted, so it is tried again.
 - RunPod has no idempotency key for creation, so the Pod-side maximum lease
   remains the backstop.
 

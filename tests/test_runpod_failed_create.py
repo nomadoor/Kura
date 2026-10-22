@@ -126,5 +126,91 @@ class FailedCreateTests(unittest.TestCase):
                 listed.assert_not_called()
 
 
+RID = "20261022-101010-000001"
+POD_NAME = f"kura-train-{RID}"
+
+
+def _stopped_run(root: Path) -> Path:
+    """A finished run whose recorded Pod is pod-1, created under POD_NAME."""
+    run_dir = root / "runs" / "train"
+    (run_dir / "realizations").mkdir(parents=True)
+    (run_dir / "realizations" / f"{RID}.create-intent.json").write_text(json.dumps(
+        {"kind": "pod_create_intent", "schema_version": 1, "realization_id": RID, "executor": "runpod", "pod_name": POD_NAME}), encoding="utf-8")
+    (run_dir / "realizations" / f"{RID}.json").write_text(json.dumps(
+        {"id": RID, "executor": "runpod", "state": "completed", "pod": {"id": "pod-1", "name": POD_NAME}}), encoding="utf-8")
+    (run_dir / "status.json").write_text(json.dumps(
+        {"state": "completed", "host": "runpod", "pod_id": "pod-1", "last_realization": f"realizations/{RID}.json"}), encoding="utf-8")
+    return run_dir
+
+
+def _stop(run_dir: Path) -> bool:
+    runpod.stop_runpod(run_dir)
+    return True
+
+
+def _runner_delete(run_dir: Path) -> bool:
+    from kura import runner
+
+    return runner._delete_pod(run_dir, why="the finished run left it running")
+
+
+DELETERS = (("kura run stop", _stop), ("runner", _runner_delete))
+
+
+class DeleteByNameTests(unittest.TestCase):
+    """A Pod a create made after its reply was lost carries the run's Pod name; every deleter removes it."""
+
+    def _delete(self, deleter, *, listing):
+        stack = ExitStack()
+        root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.addCleanup(stack.close)
+        run_dir = _stopped_run(root)
+        stack.enter_context(patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False))
+        stack.enter_context(patch("kura.executors.runpod.time.sleep"))
+        request = stack.enter_context(patch("kura.executors.runpod._runpod_request", return_value={}))
+        # The account's Pods, read through the real exact-name filter.
+        stack.enter_context(patch("kura.executors.runpod._runpod_graphql", side_effect=listing))
+        try:
+            outcome: object = deleter(run_dir)
+        except ValueError as exc:
+            outcome = exc
+        deleted = [call.args[1].removeprefix("/pods/") for call in request.call_args_list if call.args[0] == "DELETE"]
+        return run_dir, deleted, outcome
+
+    @staticmethod
+    def _stop_records(run_dir: Path) -> list[dict]:
+        return [json.loads(path.read_text(encoding="utf-8")) for path in sorted((run_dir / "realizations").glob("*.stop-*.json"))]
+
+    def test_a_late_pod_with_the_runs_pod_name_is_deleted_and_recorded(self) -> None:
+        pods = [{"id": "pod-1", "name": POD_NAME}, {"id": "pod-late", "name": POD_NAME},
+                # Another run's Pods, including one whose name only starts like this run's.
+                {"id": "pod-other", "name": "kura-other-20261022-101010-000002"}, {"id": "pod-prefix", "name": POD_NAME + "-x"}]
+        for label, deleter in DELETERS:
+            with self.subTest(label):
+                run_dir, deleted, outcome = self._delete(deleter, listing=lambda *_a, **_k: {"myself": {"pods": pods}})
+                self.assertIs(outcome, True)
+                self.assertEqual(deleted, ["pod-1", "pod-late"])
+                [record] = self._stop_records(run_dir)
+                self.assertEqual(record["outcome"], "stopped")
+                self.assertEqual(record["targets"], [{"pod_id": "pod-1", "result": "deleted"},
+                                                     {"pod_id": "pod-late", "result": "deleted", "found_by": "name", "pod_name": POD_NAME}])
+                self.assertTrue(json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("pod_stopped_at"))
+
+    def test_a_failed_listing_fails_the_stop_after_deleting_the_recorded_pod(self) -> None:
+        for label, deleter in DELETERS:
+            with self.subTest(label):
+                run_dir, deleted, outcome = self._delete(deleter, listing=ValueError("RunPod API is unreachable: down"))
+                if label == "runner":
+                    self.assertIs(outcome, False)  # the next follower tries again
+                else:
+                    self.assertIsInstance(outcome, ValueError)
+                self.assertEqual(deleted, ["pod-1"])
+                [record] = self._stop_records(run_dir)
+                self.assertEqual(record["outcome"], "failed")
+                self.assertEqual(record["targets"], [{"pod_id": "pod-1", "result": "deleted"}])
+                # Not recorded as stopped, so the stop is tried again and looks again.
+                self.assertNotIn("pod_stopped_at", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
+
+
 if __name__ == "__main__":
     unittest.main()

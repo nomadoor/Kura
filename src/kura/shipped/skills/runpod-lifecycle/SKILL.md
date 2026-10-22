@@ -57,7 +57,9 @@ stop Pod
   or the runner); whatever the Pod held is gone. Any other failure to look is
   not recorded; Kura or the user looks again later.
 - `pod_stopped_at` in `kura run status` is when Kura's stop confirmed the Pod is gone (and any
-  duplicate a recovered launch recorded): RunPod accepted the delete, or the
+  duplicate a recovered launch recorded, and any other Pod carrying one of the
+  run's Pod names, such as one a create made after its reply was lost; the
+  stop record marks those `found_by: name`): RunPod accepted the delete, or the
   delete failed and RunPod then answered that the Pod does not exist. The Pod is not paused; it and its container disk
   no longer exist, and billing for it has ended. Kura deletes it after the
   outputs are collected, when a render ends, when its job never started, and
