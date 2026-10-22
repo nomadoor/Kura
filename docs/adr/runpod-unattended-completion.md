@@ -42,7 +42,9 @@ loses little, while losing a 24-hour run is severe.
   input transfer and model download.
 - The maximum lease starts when the Pod starts: the start command Kura gives
   every training Pod sets the deadline and starts the guard before anything
-  else, and the lease still ends everything (amended 2026-10-10: it used to
+  else, and the lease still ends everything. The start command runs when the
+  Pod's container starts, so the time RunPod spends downloading the image
+  before that bills outside the lease and the cost ceiling (amended 2026-10-10: it used to
   start when Kura first reached the Pod over SSH, so a Pod whose controller or
   job runner stopped before that contact had no timer; amended 2026-10-07: a
   Pod that failed before its job started used to have no timer at all). The
