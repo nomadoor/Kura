@@ -2231,14 +2231,6 @@ echo $!
         max_lease_sec=max_lease_sec,
         unattended_wait="auto" if unattended_wait_sec is None else unattended_wait_sec,
     )
-    try:
-        def mutate(status: dict[str, Any]) -> None:
-            status["remote_pid"] = remote_pid
-            status["remote_job_started_at"] = remote_job_started_at
-
-        _mutate_run_status(run_dir, mutate)
-    except (OSError, json.JSONDecodeError):
-        pass
     return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_id, realization_id=realization_id, job_timeout_sec=job_timeout_sec, notify_channels=notify_channels)
 
 
@@ -2392,9 +2384,6 @@ def change_runpod_lease(run_dir: Path, duration_sec: int, *, yes: bool, input_st
         raise ValueError("this run has no RunPod Pod to change the lease of")
     if status.get("pod_stopped_at") or status.get("pod_missing_at"):
         raise ValueError("this run's Pod is already stopped")
-    if realization.get("purpose") == "comfyui-render" and realization.get("lease_guard") != "deadline_file":
-        # A render Pod from before this also carries a fixed timer set when it was created, which this cannot move.
-        raise ValueError("this render Pod's lease cannot be changed; it was created before Kura kept the deadline in a file")
     details = _runpod_ssh_details(run_dir, timeout_sec=120, interval_sec=5)
     path = shlex.quote(LEASE_DEADLINE_PATH)
     # The Pod's clock decides when the guard fires, so deadlines are computed there.

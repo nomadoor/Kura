@@ -676,7 +676,7 @@ if __name__ == "__main__":
 
 def _runpod_request(run_dir: Path, **extra) -> Path:
     return runner.write_launch_request(run_dir, executor="runpod", extra={
-        "options": {"max_lease": "3h", "hold_for": "0"}, "runpod_config": {"gpu_type_ids": ["NVIDIA A40"]},
+        "options": {"max_lease": "3h"}, "runpod_config": {"gpu_type_ids": ["NVIDIA A40"]},
         "billing_confirmed_at": "2026-10-07T00:00:00+00:00", **extra,
     })
 
@@ -1439,17 +1439,15 @@ class RunPodSessionLeaseTests(unittest.TestCase):
                 self.assertEqual(checked.returncode, 0, checked.stderr)
             self.assertNotIn('sleep "$KURA_MAX_LEASE_SEC"', script)
             realization = json.loads(next(p for p in (run_dir / "realizations").glob("*.json") if "." not in p.stem).read_text(encoding="utf-8"))
-            self.assertEqual((realization["lease_guard"], realization["controlled_by"]), ("deadline_file", {"request": "r.launch.json"}))
+            self.assertEqual(realization["controlled_by"], {"request": "r.launch.json"})
 
-    def test_only_a_render_pod_with_a_deadline_file_takes_a_lease_change(self) -> None:
+    def test_a_render_pod_takes_a_lease_change(self) -> None:
         from kura.run_commands.runpod_ssh import change_runpod_lease
 
         with _workspace() as (root, run_dir):
+            # Older render realizations also say `lease_guard: deadline_file`; neither form is refused.
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "purpose": "comfyui-render", "pod": {"id": "pod-1"}}), encoding="utf-8")
             _status(run_dir, last_realization="realizations/r1.json", pod_id="pod-1", state="running")
-            with self.assertRaisesRegex(ValueError, "before Kura kept the deadline"):
-                change_runpod_lease(run_dir, 3600, yes=True)
-            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "purpose": "comfyui-render", "lease_guard": "deadline_file", "pod": {"id": "pod-1"}}), encoding="utf-8")
             with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", side_effect=ValueError("reached the Pod")):
                 with self.assertRaisesRegex(ValueError, "reached the Pod"):
                     change_runpod_lease(run_dir, 3600, yes=True)

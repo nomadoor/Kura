@@ -27,9 +27,6 @@ CONTAINER_WORKSPACE = "/workspace"
 LOW_AVAILABLE_MEMORY_BYTES = 4 * 1024**3
 
 
-RUNPOD_API_ROOT = "https://rest.runpod.io/v1"
-
-
 # Every state a run's status can hold; each set below is a decision over these.
 RUN_STATES = frozenset({
     "draft", "compiled", "queued", "staged", "launching", "running", "publishing",
