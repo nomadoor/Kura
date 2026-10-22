@@ -8755,7 +8755,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "EXITED"}) as request:
-                    status = reconcile_runpod(run_dir, self._config())
+                    status = reconcile_runpod(run_dir)
             self.assertEqual(status["state"], "unknown")
             self.assertIsNone(status["exit_code"])
             request.assert_called_once_with("GET", "/pods/pod-1", "api-secret", timeout=30.0)
@@ -8767,7 +8767,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
-                    status = reconcile_runpod(run_dir, self._config())
+                    status = reconcile_runpod(run_dir)
             observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
         self.assertEqual(status["state"], "interrupted")
         self.assertIn("pod_missing_at", status)
@@ -8781,7 +8781,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
                     with self.assertRaises(RunPodAPIError):
-                        reconcile_runpod(run_dir, self._config(), source="automatic")
+                        reconcile_runpod(run_dir, source="automatic")
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
 
     def test_reconcile_runpod_still_raises_other_api_errors(self) -> None:
@@ -8792,7 +8792,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (500)", status_code=500)):
                     with self.assertRaises(RunPodAPIError):
-                        reconcile_runpod(run_dir, self._config())
+                        reconcile_runpod(run_dir)
 
     def test_reconcile_runpod_preserves_confirmed_terminal_outcome(self) -> None:
         for terminal_state, exit_code in (("completed", 0), ("failed", 7), ("stopped", None), ("interrupted", None), ("unknown", None), ("launch_failed", None)):
@@ -8806,7 +8806,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 )
                 with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                     with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
-                        status = reconcile_runpod(run_dir, self._config())
+                        status = reconcile_runpod(run_dir)
 
                 self.assertEqual(status["state"], terminal_state)
                 self.assertEqual(status["exit_code"], exit_code)
@@ -8833,7 +8833,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 return {"id": "pod-1", "desiredStatus": "RUNNING"}
 
             def reconcile() -> None:
-                result.append(reconcile_runpod(run_dir, self._config()))
+                result.append(reconcile_runpod(run_dir))
 
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=observe):
@@ -8868,7 +8868,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=observe):
-                    thread = threading.Thread(target=lambda: result.append(reconcile_runpod(run_dir, self._config())))
+                    thread = threading.Thread(target=lambda: result.append(reconcile_runpod(run_dir)))
                     thread.start()
                     self.assertTrue(request_started.wait(2))
                     _mutate_run_status(
@@ -10031,23 +10031,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", return_value={}) as request:
-                    status = stop_runpod(run_dir, self._config())
+                    status = stop_runpod(run_dir)
             self.assertEqual(status["state"], "interrupted")
             self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(events[-1]["event"], "runpod_pod_stopped")
-
-    def test_stop_runpod_still_stops_a_pod_whose_recorded_settings_name_a_removed_storage_mode(self) -> None:
-        # A runner request written before container_disk was removed carries it, and its Pod may be billing.
-        for mode in ("container_disk", "object_staging"):
-            with self.subTest(mode), tempfile.TemporaryDirectory() as directory:
-                run_dir = self._run_dir(Path(directory))
-                (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
-                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                    with patch("kura.executors.runpod._runpod_request", return_value={}) as request:
-                        status = stop_runpod(run_dir, {**self._config(), "storage_mode": mode})
-                self.assertEqual(status["state"], "interrupted")
-                self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
 
     def test_stop_runpod_records_pod_stopped_phase(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -10055,7 +10043,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "completed", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", return_value={}):
-                    stop_runpod(run_dir, self._config())
+                    stop_runpod(run_dir)
             self.assertEqual([item["phase"] for item in launch_phases(run_dir, "r1")], ["pod_stop_requested", "pod_stopped"])
             stops = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.stop-*.json")]
             self.assertEqual(len(stops), 1)
@@ -10067,7 +10055,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API failed (500)")), self.assertRaises(ValueError):
-                    stop_runpod(run_dir, self._config())
+                    stop_runpod(run_dir)
             [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.stop-*.json")]
             self.assertEqual((stop["outcome"], stop["stopped_at"], stop["targets"]), ("failed", None, [{"pod_id": "pod-1", "result": "failed"}]))
 
@@ -10080,7 +10068,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             )
             with patch("kura.executors.runpod._runpod_request") as request:
                 with self.assertRaisesRegex(ValueError, "no Pod exists.*Ctrl\\+C.*doctor runpod.*run execute example"):
-                    stop_runpod(run_dir, self._config())
+                    stop_runpod(run_dir)
             request.assert_not_called()
 
     def test_stop_runpod_preserves_completed_status_after_download(self) -> None:
@@ -10089,7 +10077,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0, "pod_id": "pod-1"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", return_value={}):
-                    status = stop_runpod(run_dir, self._config())
+                    status = stop_runpod(run_dir)
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["exit_code"], 0)
             self.assertIn("pod_stopped_at", status)
@@ -10105,8 +10093,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             )
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=[{"id": "pod-1", "desiredStatus": "RUNNING"}, {}]):
-                    reconciled = reconcile_runpod(run_dir, self._config())
-                    stopped = stop_runpod(run_dir, self._config())
+                    reconciled = reconcile_runpod(run_dir)
+                    stopped = stop_runpod(run_dir)
 
             self.assertEqual(reconciled["state"], "completed")
             self.assertEqual(stopped["state"], "completed")
@@ -10127,7 +10115,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 return {}
 
             def stop() -> None:
-                result.append(stop_runpod(run_dir, self._config()))
+                result.append(stop_runpod(run_dir))
 
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=delete):
@@ -10162,7 +10150,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=delete):
-                    thread = threading.Thread(target=lambda: result.append(stop_runpod(run_dir, self._config())))
+                    thread = threading.Thread(target=lambda: result.append(stop_runpod(run_dir)))
                     thread.start()
                     self.assertTrue(request_started.wait(2))
                     _mutate_run_status(run_dir, lambda status: status.update({"state": "running", "pod_id": "pod-2"}))

@@ -391,7 +391,7 @@ def launch_render_runpod(
                     pass
             try:
                 # Deleted here, not through `kura run stop`, which would hand the stop to this very follower.
-                stop_runpod(run_dir, runpod_config)
+                stop_runpod(run_dir)
             except Exception as exc:
                 print(f"warning: could not stop RunPod render pod automatically: {_safe_error(exc)}", file=sys.stderr)
 

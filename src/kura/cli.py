@@ -839,7 +839,7 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
         if unresolved_create_intents(run_dir, "runpod"):
             try:
                 with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
-                    for line in resolve_runpod_create_intents(run_dir, _workspace_config().get("runpod", {})):
+                    for line in resolve_runpod_create_intents(run_dir):
                         print(line, file=sys.stderr)
             except FileLockBusy:
                 print(f"cannot reconcile run: a launch of {args.run_id} is still creating its Pod; reconcile again after it returns", file=sys.stderr)
@@ -853,7 +853,7 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
             print(json.dumps(status, indent=2))
         elif realization.get("executor") == "runpod":
             try:
-                reconcile_runpod(run_dir, _workspace_config().get("runpod", {}))
+                reconcile_runpod(run_dir)
             except MissingSecret as exc:
                 if not _try_sync_runpod_remote_stdout(run_dir):
                     raise
