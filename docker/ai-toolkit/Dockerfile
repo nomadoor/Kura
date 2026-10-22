@@ -50,6 +50,21 @@ RUN cd /app/ai-toolkit \
 
 LABEL io.kura.patch.save-step="completed-updates-v1"
 
+# The base image still trusts the eMudhra intermediate CAs whose keys were compromised on
+# 2026-10-19. Raise every trust store in the image to the first release that drops them; the
+# build fails if one stays below it. Node 23 (end of life) has no such release, so the
+# official UI moves to Node 24 from the same NodeSource repository; its sqlite3 addon is N-API
+# and loads unchanged. The new pip goes to /usr/local beside Ubuntu's, which pip cannot remove,
+# and comes first on sys.path. Remove this step once the base image ships them.
+RUN sed -i 's#/node_23.x#/node_24.x#' /etc/apt/sources.list.d/nodesource.sources \
+    && apt-get update \
+    && apt-get install -y --only-upgrade ca-certificates nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.24.04.1 \
+    && dpkg --compare-versions "$(node --version | cut -c2-)" ge 24.22.1 \
+    && python3 -m pip install --no-cache-dir --break-system-packages --ignore-installed "certifi>=2026.10.19" "pip>=26.2.2" \
+    && cd /app/ai-toolkit/ui && node -e 'require("sqlite3")'
+
 RUN ln -sfn /app/ai-toolkit /opt/ai-toolkit \
     && python - <<'PY'
 import importlib.metadata

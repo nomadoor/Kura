@@ -25,6 +25,15 @@ RUN git clone https://github.com/Comfy-Org/ComfyUI.git "$COMFYUI_ROOT" \
 
 COPY docker/comfyui/kura_comfy_prepare.py /opt/kura_comfy_prepare.py
 
+# The base image still trusts the eMudhra intermediate CAs whose keys were compromised on
+# 2026-10-19. Raise every trust store in the image to the first release that drops them; the
+# build fails if one stays below it. Remove this step once the base image ships them.
+RUN apt-get update \
+    && apt-get install -y --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.24.04.1 \
+    && pip install --no-cache-dir "certifi>=2026.10.19" "pip>=26.2.2"
+
 # Installing the trainer must not replace the base image's torch build.
 RUN python -c "import sys, torch; cuda = torch.version.cuda or ''; sys.exit(0 if cuda.startswith('${KURA_CUDA}') else 'torch ' + torch.__version__ + ' uses CUDA ' + cuda + ', expected ${KURA_CUDA}')"
 
