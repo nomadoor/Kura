@@ -615,19 +615,6 @@ def _is_runpod_transient_error(exc: ValueError) -> bool:
     return "runpod api is unreachable" in text or any(f"({code})" in text for code in (429, 500, 502, 503, 504))
 
 
-def _create_outcome_uncertain(exc: ValueError) -> bool:
-    """Whether a failed create may still have created a Pod.
-
-    A refusal (capacity, validation, rate limit) means nothing was created. A
-    server error or a lost connection after the request was sent does not say.
-    """
-    if isinstance(exc, RunPodAPIError):
-        return exc.status_code >= 500
-    text = str(exc).lower()
-    # A reply that arrived but cannot be read says nothing about the create either.
-    return any(marker in text for marker in ("runpod api is unreachable", "invalid json", "unexpected response", "did not contain"))
-
-
 def unstopped_recovered_pod(run_dir: Path) -> str | None:
     """The ids of the Pods a recovery recorded that nothing has deleted yet (`pods_left`).
 
@@ -739,16 +726,26 @@ def _hand_over_unconfirmed_create(run_dir: Path, realization_id: str, pod_name: 
     )
 
 
-def _discover_after_unconfirmed_create(run_dir: Path, realization_id: str, api_key: str, pod_name: str, exc: ValueError) -> list[dict[str, Any]]:
-    """The one Pod an unconfirmed create made, or hand the run over to the user."""
+def _pod_made_by_failed_create(run_dir: Path, realization_id: str, api_key: str, pod_name: str, exc: ValueError) -> dict[str, Any] | None:
+    """Whether a failed create made a Pod after all: the one Pod by its name, None when it made none,
+    or the run handed over to the user when the answer is not known.
+
+    A failed reply does not say whether RunPod created the Pod, so every failure
+    is looked up by name before anything is created again; only a capacity
+    refusal, the one failure a capacity wait repeats, skips the lookup. A complete
+    listing without the name means nothing was created and the next candidate
+    may be tried.
+    """
+    if _is_runpod_capacity_error(exc):
+        return None
     error = _redact_secret_text(str(exc))
     try:
         found = _discover_pods(api_key, pod_name)
     except ValueError as lookup:
         raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, f"{error}; looking it up also failed: {_redact_secret_text(str(lookup))}") from exc
-    if len(found) != 1:
-        raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, error) from exc
-    return found
+    if len(found) > 1:
+        raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, f"{error}; RunPod lists {len(found)} Pods by that name") from exc
+    return found[0] if found else None
 
 
 def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
@@ -1353,9 +1350,9 @@ sleep infinity
                     controller_phase = "probe"
                     break
                 except ValueError as exc:
-                    if _create_outcome_uncertain(exc):
-                        found = _discover_after_unconfirmed_create(run_dir, realization_id, api_key, request_body["name"], exc)
-                        pod, used_request = found[0], attempt_request
+                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, request_body["name"], exc)
+                    if pod is not None:
+                        used_request = attempt_request
                         controller_phase = "probe"
                         break
                     round_exceptions.append(exc)
@@ -1651,9 +1648,9 @@ sleep infinity
                 except KeyboardInterrupt as exc:
                     raise _hand_over_unconfirmed_create(run_dir, realization_id, request_body["name"], "interrupted during the create request") from exc
                 except ValueError as exc:
-                    if _create_outcome_uncertain(exc):
-                        found = _discover_after_unconfirmed_create(run_dir, realization_id, api_key, request_body["name"], exc)
-                        pod, used_request = found[0], attempt_request
+                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, request_body["name"], exc)
+                    if pod is not None:
+                        used_request = attempt_request
                         break
                     launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
             if pod is not None:

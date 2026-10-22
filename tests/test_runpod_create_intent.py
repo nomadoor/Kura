@@ -476,30 +476,6 @@ class UnconfirmedCreateTests(unittest.TestCase):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertEqual(_status(run_dir)["state"], "interrupted")
 
-    def test_an_unreadable_create_reply_counts_as_unconfirmed(self) -> None:
-        from kura.executors.runpod import _create_outcome_uncertain
-
-        self.assertTrue(_create_outcome_uncertain(ValueError("RunPod API returned invalid JSON")))
-        self.assertTrue(_create_outcome_uncertain(ValueError("RunPod GraphQL create response did not contain a Pod")))
-        self.assertFalse(_create_outcome_uncertain(ValueError("RunPod GraphQL failed: no capacity")))
-
-
-class SessionCreateTests(unittest.TestCase):
-    def test_a_render_session_hands_over_an_unconfirmed_create(self) -> None:
-        from kura.executors.runpod import RunPodAPIError, launch_runpod_session
-
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "runs" / "render"
-            run_dir.mkdir(parents=True)
-            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
-            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
-                    patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (502): bad gateway", status_code=502)) as request, \
-                    patch("kura.executors.runpod._runpod_pods_named", return_value=[]), patch("kura.executors.runpod.time.sleep"), _no_price_lookup():
-                with self.assertRaisesRegex(ValueError, "kura run reconcile"):
-                    launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
-            self.assertEqual(request.call_count, 1)
-            self.assertEqual(len(unresolved_create_intents(run_dir)), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,9 +78,13 @@ creates nothing, so only decisions 3 to 7 apply to it.
   waiting for a person only bills. A failed delete there is retried with the
   runner's backoff until it succeeds, notified once, and never counted toward
   the collection failures that hand a run to a person (2026-10-10).
-- A create that fails with a timeout or a transient error ends the attempt
-  loop and goes to discovery. Only an explicit refusal, such as no capacity,
-  may try the next GPU candidate.
+- A create that fails, whatever its reply says, goes to discovery before
+  anything is created again (2026-10-22); the reply's status, code, or text
+  never decides that nothing was made. One match is adopted; a complete listing
+  without the name means nothing was created, and the next GPU candidate may be
+  tried; a listing that fails or finds more than one hands the run to the user.
+  Only a capacity refusal skips the lookup, because a capacity wait repeats it
+  every round.
 - RunPod has no idempotency key for creation, so the Pod-side maximum lease
   remains the backstop.
 
