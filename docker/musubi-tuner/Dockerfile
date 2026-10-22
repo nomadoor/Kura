@@ -14,6 +14,18 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+# The base image still trusts the eMudhra intermediate CAs whose keys were compromised on
+# 2026-10-19. Raise every trust store in the image to the first release that drops them; the
+# build fails if one stays below it. It runs before anything else is fetched, and its own
+# downloads check against the Ubuntu store it has just raised. Remove this step once the
+# base image ships them.
+RUN apt-get update \
+    && apt-get install -y --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1 \
+    && CONDA_SSL_VERIFY=/etc/ssl/certs/ca-certificates.crt conda install -y -n base -c conda-forge "ca-certificates>=2026.10.19" "certifi>=2026.10.19" "pip>=26.2.2" \
+    && conda clean -afy
+
 RUN git clone https://github.com/kohya-ss/musubi-tuner.git /opt/musubi-tuner \
     && cd /opt/musubi-tuner \
     && git checkout "$MUSUBI_TUNER_REF" \
@@ -38,16 +50,6 @@ LABEL io.kura.patch.resume-step="logical-global-step-v1"
 COPY docker/musubi-tuner/patch_flux2_diffusers_vae.py /tmp/patch_flux2_diffusers_vae.py
 RUN python /tmp/patch_flux2_diffusers_vae.py \
     && rm /tmp/patch_flux2_diffusers_vae.py
-
-# The base image still trusts the eMudhra intermediate CAs whose keys were compromised on
-# 2026-10-19. Raise every trust store in the image to the first release that drops them; the
-# build fails if one stays below it. Remove this step once the base image ships them.
-RUN apt-get update \
-    && apt-get install -y --only-upgrade ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1 \
-    && conda install -y -n base -c conda-forge "ca-certificates>=2026.10.19" "certifi>=2026.10.19" "pip>=26.2.2" \
-    && conda clean -afy
 
 COPY docker/ai-toolkit/kura_runpod_object_job.py /opt/kura_runpod_object_job.py
 # Installing the trainer must not replace the base image's torch build.

@@ -62,7 +62,7 @@ RUN sed -i 's#/node_23.x#/node_24.x#' /etc/apt/sources.list.d/nodesource.sources
     && rm -rf /var/lib/apt/lists/* \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.24.04.1 \
     && dpkg --compare-versions "$(node --version | cut -c2-)" ge 24.22.1 \
-    && python3 -m pip install --no-cache-dir --break-system-packages --ignore-installed "certifi>=2026.10.19" "pip>=26.2.2" \
+    && PIP_CERT=/etc/ssl/certs/ca-certificates.crt python3 -m pip install --no-cache-dir --break-system-packages --ignore-installed "certifi>=2026.10.19" "pip>=26.2.2" \
     && cd /app/ai-toolkit/ui && node -e 'require("sqlite3")'
 
 RUN ln -sfn /app/ai-toolkit /opt/ai-toolkit \
