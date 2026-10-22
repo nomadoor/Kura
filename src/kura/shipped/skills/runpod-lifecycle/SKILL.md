@@ -210,8 +210,10 @@ answers that the Pod no longer exists, the run ends `interrupted` (outputs not
 collected are gone) and the runner notifies; a Pod that still runs is
 followed again until its lease ends it. A failed collection of a job that has
 exited is retried the same way while the Pod exists, and notified once; no Pod
-is kept for a person. The Pod's lease bounds the retries (its unattended wait
-usually ends it sooner):
+is kept for a person. When RunPod refuses `RUNPOD_API_KEY` (or it is not
+set), the runner notifies once and keeps trying: set a working key with `kura
+secrets set RUNPOD_API_KEY`, and its next try reads it and continues. The
+Pod's lease bounds the retries (its unattended wait usually ends it sooner):
 report the cause named in `logs/runner.log`, or collect by hand with
 `kura run download <run-id> --force`; a longer lease (`kura run lease`) is the
 user's billing decision. A job started before the runner

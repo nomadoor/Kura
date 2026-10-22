@@ -75,10 +75,11 @@ class LocalGpuAndRunPodKeyTests(unittest.TestCase):
             node for node in ast.walk(ast.parse(source))
             if isinstance(node, ast.Constant) and node.value == "RUNPOD_API_KEY"
         ]
-        # One read and one message, both inside runpod_api_key.
-        self.assertEqual(len(reads), 2)
-        owner = next(node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef) and node.name == "runpod_api_key")
-        self.assertTrue(all(owner.lineno <= node.lineno <= owner.end_lineno for node in reads))
+        # One read and one message inside runpod_api_key, and the name runpod_key_refused tells a missing key by.
+        self.assertEqual(len(reads), 3)
+        owners = [node for node in ast.walk(ast.parse(source))
+                  if isinstance(node, ast.FunctionDef) and node.name in {"runpod_api_key", "runpod_key_refused"}]
+        self.assertTrue(all(any(owner.lineno <= node.lineno <= owner.end_lineno for owner in owners) for node in reads))
         with unittest.mock.patch.dict("os.environ", {}, clear=True):
             unavailable = runpod.runpod_gpu_availability({"gpu_type_ids": ["NVIDIA A40"]}, ["NVIDIA A40"])
         self.assertEqual(unavailable["status"], "unavailable")

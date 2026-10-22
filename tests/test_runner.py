@@ -877,6 +877,73 @@ class RunPodFollowerTests(unittest.TestCase):
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
             notify.assert_not_called()
 
+    def test_a_refused_runpod_key_notifies_once_and_the_run_continues_once_the_key_works(self) -> None:
+        # Without a key RunPod accepts, the runner cannot learn the Pod is gone, so it would follow forever unseen.
+        from kura.executors.runpod import RunPodAPIError
+        from kura.secrets import MissingSecret
+
+        refusals = [RunPodAPIError("RunPod GraphQL failed (401): unauthorized", status_code=401),
+                    RunPodAPIError("RunPod GraphQL failed (403): forbidden", status_code=403),
+                    MissingSecret("RUNPOD_API_KEY", "needed to reconcile a RunPod run")]
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "rpa_SECRETVALUE123"}):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+            with patch("kura.notifications.notify") as notify:
+                with patch("kura.executors.runpod.reconcile_runpod", side_effect=refusals * 2), \
+                     patch("kura.run_commands.launch._run_remote_locked") as remote:
+                    codes = [runner.work(root, "example", request.name) for _ in range(6)]
+                self.assertEqual(codes, [1] * 6)
+                remote.assert_not_called()
+                self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+                self.assertTrue(runner.run_unfinished(run_dir))
+                notify.assert_called_once()
+                subject, body = notify.call_args.kwargs["subject"], notify.call_args.kwargs["body"]
+                self.assertIn("RunPod key", subject)
+                self.assertIn("kura secrets set RUNPOD_API_KEY", body)
+                self.assertIn("next try reads it", body)
+                self.assertIn("lease", body)
+                self.assertNotIn("rpa_SECRETVALUE123", subject + body)
+
+                # The key works again: the next attempt follows the job as usual.
+                with patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
+                     patch("kura.run_commands.launch._run_remote_locked", return_value=1) as remote:
+                    self.assertEqual(runner.work(root, "example", request.name), 1)
+                remote.assert_called_once()
+                self.assertTrue(remote.call_args.kwargs["reattach"])
+                notify.assert_called_once()
+
+    def test_a_refused_key_after_the_job_exited_sends_only_the_key_notice(self) -> None:
+        from kura.executors.runpod import RunPodAPIError
+
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            self._exited_job(run_dir, request)
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=RunPodAPIError("unauthorized", status_code=401)), \
+                 patch("kura.notifications.notify") as notify:
+                self.assertEqual([runner.work(root, "example", request.name) for _ in range(3)], [1] * 3)
+            notify.assert_called_once()
+            self.assertIn("RunPod key", notify.call_args.kwargs["subject"])
+
+    def test_a_runpod_failure_that_is_not_the_key_is_retried_without_the_key_notice(self) -> None:
+        from kura.executors.runpod import RunPodAPIError
+        from kura.secrets import MissingSecret
+
+        for failure in (RunPodAPIError("RunPod GraphQL failed (500): oops", status_code=500),
+                        RunPodAPIError("RunPod GraphQL failed: bad input", status_code=400),
+                        MissingSecret("HF_TOKEN", "needed elsewhere"), ValueError("RunPod API is unreachable: timeout")):
+            with self.subTest(failure=str(failure)), _workspace() as (root, run_dir):
+                request = _runpod_request(run_dir, notify=["ntfy"])
+                runner.claim_request(request, 1)
+                _runpod_launched(run_dir, request, state="running")
+                (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+                with patch("kura.executors.runpod.reconcile_runpod", side_effect=failure), \
+                     patch("kura.notifications.notify") as notify:
+                    self.assertEqual([runner.work(root, "example", request.name) for _ in range(3)], [1] * 3)
+                notify.assert_not_called()
+
     def test_a_launch_that_fails_before_recording_a_pod_fails_at_once_as_on_docker(self) -> None:
         # No Pod exists, so nothing can be lost or collected: the request ends on its first failure.
         for executor in ("runpod", "docker"):
@@ -1259,6 +1326,22 @@ class RunPodRenderTests(unittest.TestCase):
                     patch("kura.executors.runpod.stop_runpod") as stop:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             self.assertEqual(stop.call_args.args[1:], ())
+
+    def test_a_render_pod_whose_delete_fails_is_retried_and_notified_once(self) -> None:
+        # As for a training run: a refused key, or any failed delete, never loops unseen.
+        from kura.executors.runpod import RunPodAPIError
+
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)
+            _runpod_launched(run_dir, request, state="running", last_step=2, total_steps=5)
+            with patch("kura.executors.runpod.stop_runpod", side_effect=RunPodAPIError("unauthorized", status_code=401)), \
+                    patch("kura.notifications.notify") as notify:
+                self.assertEqual([runner.work(root, "example", request.name) for _ in range(3)], [1] * 3)
+            notify.assert_called_once()
+            self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
+            self.assertIn("kura secrets set RUNPOD_API_KEY", notify.call_args.kwargs["body"])
 
     def test_a_render_whose_follower_died_is_interrupted_and_its_pod_deleted_not_continued(self) -> None:
         with _workspace() as (root, run_dir):
