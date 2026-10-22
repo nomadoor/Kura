@@ -170,7 +170,6 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
                 id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
                 volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange
                 machine { id dataCenterId gpuDisplayName location }
-                runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
               }
             }
             """
@@ -1133,32 +1132,30 @@ def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realizat
     return projection
 
 
-def _runpod_state(pod: dict[str, Any]) -> tuple[str, int | None]:
+def _runpod_state(pod: dict[str, Any]) -> str:
+    """The run state a Pod's desired status implies; the Pod API has no process exit code, so none is invented."""
     desired = pod.get("desiredStatus")
     if desired == "RUNNING":
-        return "running", None
+        return "running"
     if desired == "TERMINATED":
-        return "interrupted", None
-    # EXITED lacks a process exit code in the Pod API; never invent failure.
-    return "unknown", None
+        return "interrupted"
+    return "unknown"
 
 
 def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
+    # Only fields Kura's Pod queries select. Older records also carry `last_started_at`, `public_ip`,
+    # and `port_mappings`; readers keep accepting them.
     machine = pod.get("machine") if isinstance(pod.get("machine"), dict) else {}
-    gpu = pod.get("gpu") if isinstance(pod.get("gpu"), dict) else {}
     return {
         "id": pod.get("id"),
         "name": pod.get("name"),
         "desired_status": pod.get("desiredStatus"),
-        "last_started_at": pod.get("lastStartedAt"),
         "last_status_change": pod.get("lastStatusChange"),
         "cost_per_h": pod.get("costPerHr"),
-        "public_ip": pod.get("publicIp"),
-        "port_mappings": pod.get("portMappings"),
         "machine": {
             "id": machine.get("id"),
             "data_center_id": machine.get("dataCenterId"),
-            "gpu_display_name": gpu.get("displayName") or gpu.get("id") or machine.get("gpuDisplayName"),
+            "gpu_display_name": machine.get("gpuDisplayName"),
             "memory_gb": pod.get("memoryInGb"),
             "vcpu_count": pod.get("vcpuCount"),
         },
@@ -1496,7 +1493,7 @@ sleep infinity
     pod_id = pod.get("id")
     if not isinstance(pod_id, str) or not pod_id:
         raise ValueError("RunPod create response did not include a pod ID")
-    state, _ = _runpod_state(pod)
+    state = _runpod_state(pod)
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)
     realization = {
@@ -1520,9 +1517,8 @@ sleep infinity
 LEASE_DEADLINE_PATH = "/tmp/kura-lease-deadline"
 
 
-def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
+def _runpod_lease_guard_shell(*, max_lease_sec: int, log_path: str) -> str:
     """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
-    pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
     deadline_file = shlex.quote(LEASE_DEADLINE_PATH)
     # The deadline lives in a file, so `kura run lease` can move it; an unreadable
     # file falls back to the deadline set here.
@@ -1533,7 +1529,6 @@ kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
 [ -s {deadline_file} ] || {{ echo "$kura_lease_initial" > {deadline_file}.tmp && mv {deadline_file}.tmp {deadline_file}; }}
 (
   set +e
-  {pod_export}
   kura_lease_deadline_now() {{
     kura_lease_deadline=$(cat {deadline_file} 2>/dev/null)
     # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.
@@ -1563,8 +1558,8 @@ def _pod_start_script(script: str, *, max_lease_sec: int, log_path: str) -> str:
     A Pod whose controller never reaches it is then still bounded; this is the
     only guard Kura arms.
     """
-    guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
-    return "\n".join((POD_SELF_DELETE_FUNCTION, guard, script))
+    # The guard defines kura_pod_self_delete itself.
+    return "\n".join((_runpod_lease_guard_shell(max_lease_sec=max_lease_sec, log_path=log_path), script))
 
 
 def launch_runpod_session(
@@ -1687,10 +1682,10 @@ sleep infinity
     safe_used_request["dataCenterCandidates"] = settings.get("data_center_ids")
     safe_used_request["dataCenterPriority"] = settings.get("data_center_priority")
     safe_used_request["countryCandidates"] = settings.get("country_codes")
-    state, _ = _runpod_state(pod)
+    state = _runpod_state(pod)
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)
-    realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "lease_guard": "deadline_file", "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
+    realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
     _write_json(realization_path, as_record("realization", realization))
     _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "purpose": purpose, "realization_id": realization_id, "pod_id": pod_id})
@@ -1718,10 +1713,8 @@ def reconcile_runpod(
         # wait or maximum lease, or was deleted elsewhere); recorded as gone.
         pod = _runpod_pod_or_none(pod_id, api_key, timeout=timeout)
         observed_at = _now()
-        if pod is None:
-            state, exit_code = "interrupted", None
-        else:
-            state, exit_code = _runpod_state(pod)
+        state = "interrupted" if pod is None else _runpod_state(pod)
+        exit_code = None
         ended = None if state == "running" else observed_at
         ended_source = None if state == "running" else "observed_at"
         observation = {

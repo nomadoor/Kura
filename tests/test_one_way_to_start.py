@@ -55,17 +55,6 @@ class OneWayToStartTests(unittest.TestCase):
         for module in (cli, launch, plan):
             self.assertIs(module.capacity_policy, run_envelope.capacity_policy)
 
-    def test_a_request_written_with_the_review_hold_still_runs(self) -> None:
-        from pathlib import Path
-
-        from kura import runner
-
-        with patch("kura.run_commands.launch._run_remote_locked", return_value=0) as remote:
-            runner._remote(Path("runs/example"), Path("requests/r.json"), {"options": {"max_lease": "3h", "hold_for": "30m", "notify_repeat_interval": "10m"}}, reattach=False)
-        self.assertNotIn("hold_for", remote.call_args.kwargs)
-        self.assertNotIn("notify_repeat_interval", remote.call_args.kwargs)
-        self.assertEqual(remote.call_args.kwargs["max_lease"], 3 * 3600)
-
     def test_a_run_waiting_for_its_gpu_can_be_staged_and_launched_again(self) -> None:
         # A follower that stops mid-wait leaves the run queued; the runner resumes it by staging and launching.
         from kura.executors.common import can_start

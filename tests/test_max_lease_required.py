@@ -114,28 +114,6 @@ class MaxLeaseRequiredTests(unittest.TestCase):
             request.assert_not_called()
             self.assertIn("--max-lease must be a positive duration", stderr.getvalue())
 
-    def test_an_old_runner_request_without_a_lease_runs_with_the_default(self) -> None:
-        from kura import runner
-        from kura.executors.common import DEFAULT_MAX_LEASE_SEC
-
-        with patch("kura.run_commands.launch._run_remote_locked", return_value=0) as remote:
-            runner._remote(Path("runs/example"), Path("requests/r.json"), {"options": {"max_lease": "0"}}, reattach=False)
-        self.assertEqual(remote.call_args.kwargs["max_lease"], DEFAULT_MAX_LEASE_SEC)
-
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "runs" / "example"
-            run_dir.mkdir(parents=True)
-            request = run_dir / "r.json"
-            request.write_text(json.dumps({"billing_confirmed_at": "2026-10-10T00:00:00+09:00", "options": {"max_lease_sec": 0}}), encoding="utf-8")
-            with (
-                patch("kura.run_commands.render_runpod.launch_render_runpod") as render,
-                patch.object(runner, "_delete_pod", return_value=True),
-                patch.object(runner, "_status", return_value={}),
-                patch.object(runner, "_record_request_outcome"),
-            ):
-                runner._work_render_runpod(Path(directory), run_dir, request)
-            self.assertEqual(render.call_args.kwargs["max_lease_sec"], DEFAULT_MAX_LEASE_SEC)
-
     def test_every_pod_creation_path_requires_a_lease(self) -> None:
         import inspect
 
@@ -149,26 +127,26 @@ class MaxLeaseRequiredTests(unittest.TestCase):
                 self.assertEqual(parameter.annotation, "int")
         self.assertIn("kura_lease_initial", runpod._pod_start_script("true", max_lease_sec=60, log_path="/tmp/log"))
 
-    def test_both_runner_paths_read_an_old_request_lease_through_one_reader(self) -> None:
+    def test_both_runner_paths_read_a_request_lease_through_one_reader(self) -> None:
         from kura import runner
         from kura.executors.common import DEFAULT_MAX_LEASE_SEC
         from kura.run_commands import plan
 
-        cases = ((None, DEFAULT_MAX_LEASE_SEC), (0, DEFAULT_MAX_LEASE_SEC), ("0", DEFAULT_MAX_LEASE_SEC), (3600, 3600), ("2h", 7200))
+        cases = ((None, DEFAULT_MAX_LEASE_SEC), (3600, 3600), ("2h", 7200))
         for value, expected in cases:
             with self.subTest(value=value):
-                self.assertEqual(plan.request_max_lease_seconds(value), expected)
+                self.assertEqual(plan.max_lease_seconds(value), expected)
                 self.assertEqual(self._training_lease(runner, value), expected)
                 self.assertEqual(self._render_lease(runner, value), expected)
-        for value in ("abc", -5):
+        for value in ("abc", -5, 0, "0"):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    plan.request_max_lease_seconds(value)
+                    plan.max_lease_seconds(value)
                 with self.assertRaises(ValueError):
                     self._training_lease(runner, value)
                 with self.assertRaises(ValueError):
                     self._render_lease(runner, value)
-        with patch.object(plan, "request_max_lease_seconds", return_value=99) as reader:
+        with patch.object(plan, "max_lease_seconds", return_value=99) as reader:
             self.assertEqual((self._training_lease(runner, "1h"), self._render_lease(runner, 3600)), (99, 99))
         self.assertEqual(reader.call_count, 2)
 

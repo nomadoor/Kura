@@ -866,7 +866,7 @@ def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, st
 def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     """Render once on a Pod whose billing the writer confirmed; a render cut short is recorded, its Pod deleted."""
     from kura.executors.common import set_stop_check
-    from kura.run_commands.plan import request_max_lease_seconds
+    from kura.run_commands.plan import max_lease_seconds
     from kura.run_commands.render_runpod import launch_render_runpod
 
     details = _read_json(request)
@@ -897,7 +897,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         # It notifies on completion and failure itself, on the request's channels or Kura's defaults.
         launch_render_runpod(
             run_dir.name, dry_run=False, image=details.get("remote_image"), notify_channels=details.get("notify"), yes=True,
-            max_lease_sec=request_max_lease_seconds(options.get("max_lease_sec")), controlled_by=controlled_by,
+            max_lease_sec=max_lease_seconds(options.get("max_lease_sec")), controlled_by=controlled_by,
             runpod_config_override=details.get("runpod_config"),
         )
     finally:
@@ -972,7 +972,6 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
                     return 0
                 # With no create intent no Pod exists, so a confirmed launch simply continues (run-records ADR).
-                _first_attempt(request)
                 code: int | None = _remote(run_dir, request, details, reattach=False)
             else:
                 code = _continue_runpod(run_dir, request, details, realization)
@@ -996,17 +995,12 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         set_stop_check(None)
 
 
-# Launch-request options older Kura wrote that nothing reads now.
-RETIRED_REQUEST_OPTIONS = frozenset({"hold_for", "notify_repeat_interval"})
-
-
 def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: bool) -> int:
     from kura.run_commands.launch import _run_remote_locked
-    from kura.run_commands.plan import request_max_lease_seconds
+    from kura.run_commands.plan import max_lease_seconds
 
-    # Requests written by older Kura may carry options that no longer exist (the review hold).
-    options = {key: value for key, value in (details.get("options") or {}).items() if key not in RETIRED_REQUEST_OPTIONS}
-    options["max_lease"] = request_max_lease_seconds(options.get("max_lease"))
+    options = dict(details.get("options") or {})
+    options["max_lease"] = max_lease_seconds(options.get("max_lease"))
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
                      "billing_confirmed_at": details.get("billing_confirmed_at")}
     return _run_remote_locked(

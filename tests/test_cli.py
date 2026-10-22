@@ -6991,7 +6991,7 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
         self.assertNotIn("sleep \"$kura_wait\"", disabled)
 
     def test_max_lease_guard_deletes_the_pod_with_the_same_self_delete(self) -> None:
-        guard = _runpod_lease_guard_shell(max_lease_sec=3600, pod_id="pod-7", log_path="/workspace/runs/example/logs/stdout.log")
+        guard = _runpod_lease_guard_shell(max_lease_sec=3600, log_path="/workspace/runs/example/logs/stdout.log")
         self.assertIn("kura_pod_self_delete", guard)
         self.assertIn("kura_lease_initial=$(( $(date +%s) + 3600 ))", guard)
         result = subprocess.run(["bash", "-n"], input=guard, text=True, capture_output=True, check=False)
@@ -7810,8 +7810,11 @@ class RunPodLifecycleTests(unittest.TestCase):
         """Every start command Kura writes arms the same maximum lease before anything else."""
         from kura.executors.runpod import POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
 
-        guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
-        self.assertTrue(script.startswith(POD_SELF_DELETE_FUNCTION + "\n" + guard + "\n"), script[:200])
+        guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, log_path=log_path)
+        self.assertTrue(guard.startswith(POD_SELF_DELETE_FUNCTION + "\n"), guard[:200])
+        self.assertTrue(script.startswith(guard + "\n"), script[:200])
+        # The self-delete function is defined once per start command.
+        self.assertEqual(script.count(POD_SELF_DELETE_FUNCTION), 1)
         syntax = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
