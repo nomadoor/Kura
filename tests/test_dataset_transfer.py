@@ -632,6 +632,10 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             transfer_manifest=str(remote_dir / Path(record["manifest"]).name),
             transfer_manifest_sha256=self.manifest_sha256,
             command_env=command_env,
+            # Unattended completion off: the job script would otherwise leave a
+            # background timer (sleep, then kura_pod_self_delete) running after
+            # the test, one per call.
+            unattended_wait_sec=0,
         )
         return subprocess.run(["sh", "-c", script], text=True, capture_output=True, check=False)
 
