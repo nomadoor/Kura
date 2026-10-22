@@ -19,7 +19,7 @@ from typing import Any
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
 from kura.container_scripts.ai_toolkit_models import list_model_files
 from kura import doctor
-from kura.backends import BACKENDS
+from kura.backends import trainer_cache_outputs
 from kura.executors.common import CLEANUP_ELIGIBLE_STATES, run_finished, unresolved_create_intents
 from kura.fsio import atomic_write_json
 from kura.hf_cache import hub_usage
@@ -273,9 +273,7 @@ def _scratch_paths(run_dir: Path) -> list[Path]:
     """A finished run's `cache/`, `tmp/`, `.cache/`, and `transfer/` (its RunPod upload archive), less the
     directories where a trainer writes weights before Kura publishes them (each adapter's `cache_outputs`):
     those, and the directories above them, stay."""
-    # Every adapter's directories, whichever backend the run used: the names are the trainers' own, so another
-    # backend's run never has them, and reading the run's backend would add a way to fail for nothing.
-    kept = {run_dir / relative for adapter in BACKENDS.values() for relative in adapter.cache_outputs
+    kept = {run_dir / relative for relative in trainer_cache_outputs()
             if (run_dir / relative).exists() or (run_dir / relative).is_symlink()}
 
     def free(path: Path) -> list[Path]:

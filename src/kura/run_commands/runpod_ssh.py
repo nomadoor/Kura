@@ -33,6 +33,7 @@ from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import recorded_output_paths
+from kura.backends import trainer_cache_outputs
 from kura.executors import _apply_stdout_progress, _redact_secret_text
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, format_cost_ceiling, pod_cost_ceiling, pod_may_exist
 from kura.fsio import append_line_durably, atomic_write_json
@@ -128,6 +129,10 @@ def _runpod_remote_snapshot_manifest(
     run_id: str,
     timeout_sec: int = RUNPOD_TRANSFER_TIMEOUT_SEC,
 ) -> list[dict[str, Any]]:
+    """Every file under the run on the Pod, less its upload area (`transfer/`) and its working `cache/`,
+    except the directories in `cache/` where a trainer writes weights before Kura publishes them
+    (`trainer_cache_outputs`): a local run keeps those too, and a wrapper killed before publishing leaves
+    the only copy there."""
     remote_root = f"{workspace.rstrip('/')}/runs/{run_id}"
     script = f"""
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
@@ -137,23 +142,44 @@ import json
 import os
 
 root = {remote_root!r}
+cache_outputs = {list(trainer_cache_outputs())!r}
+
+
+def collected(relative, directory):
+    if relative == "transfer" and directory:
+        return False
+    if not (relative.startswith("cache/") or relative == "cache" and directory):
+        return True
+    return any(relative.startswith(keep + "/") or directory and (relative == keep or keep.startswith(relative + "/"))
+               for keep in cache_outputs)
+
+
+def skipped_link(relative, path):
+    # Inside cache/ a link is passed over, as the whole of cache/ was before, so collecting a
+    # trainer's weights from there never makes a collection fail.
+    inside = relative == "cache" or relative.startswith("cache/")
+    return inside and (os.path.islink(path) or not (os.path.isfile(path) or os.path.isdir(path)))
+
+
 items = []
 errors = []
 for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
-    relative_root = os.path.relpath(current, root)
-    if relative_root == ".":
-        dirs[:] = [name for name in dirs if name not in {{"cache", "transfer"}}]
     kept_dirs = []
     for name in sorted(dirs):
         path = os.path.join(current, name)
+        relative = os.path.relpath(path, root).replace(os.sep, "/")
+        if not collected(relative, True) or skipped_link(relative, path):
+            continue
         if os.path.islink(path):
-            errors.append("symlink directory: " + os.path.relpath(path, root))
+            errors.append("symlink directory: " + relative)
         else:
             kept_dirs.append(name)
     dirs[:] = kept_dirs
     for name in sorted(files):
         path = os.path.join(current, name)
         relative = os.path.relpath(path, root).replace(os.sep, "/")
+        if not collected(relative, False) or skipped_link(relative, path):
+            continue
         if os.path.islink(path) or not os.path.isfile(path):
             errors.append("non-regular file: " + relative)
             continue
