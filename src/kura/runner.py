@@ -1014,22 +1014,10 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
     options["max_lease"] = max_lease_seconds(options.get("max_lease"))
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
                      "billing_confirmed_at": details.get("billing_confirmed_at")}
-    def finished_launch() -> dict[str, Any] | None:
-        status = _status(run_dir)
-        return _launched_realization(run_dir, request, status) if run_finished(status) else None
-
-    finished_before = finished_launch() is not None
-    code = _run_remote_locked(
+    return _run_remote_locked(
         run_dir.name, yes=True, reattach=reattach, controlled_by=controlled_by,
         runpod_config_override=details.get("runpod_config"), **options,
     )
-    realization = finished_launch()
-    if not finished_before and realization is not None and isinstance(realization.get("pod"), dict):
-        # The controller collected the run and deleted its Pod (or refused it before upload); the run
-        # ended here, so it is notified here, once, as a Docker run is. A launch that created no Pod
-        # ends `launch_failed` without a notice, as on Docker.
-        _notify_finished(run_dir, request, _status(run_dir))
-    return code
 
 
 def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int | None:
@@ -1055,9 +1043,8 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
         # not followed or retried, and one RunPod no longer runs ends the run as recorded.
         current = reconcile_runpod(run_dir, source="explicit")
         if current.get("pod_missing_at"):
-            end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
-            _notify_text(details, f"Kura run interrupted: {run_dir.name}",
-                         f"Run {run_dir.name}'s Pod no longer exists; outputs not collected before it went are gone.")
+            status = end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
+            _notify_finished(run_dir, request, status, detail="Its Pod no longer exists; outputs not collected before it went are gone.")
             return 0
         if run_finished(current):
             return _delete_finished_runs_pod(run_dir, request, details, current)
@@ -1092,18 +1079,26 @@ _KEY_HINT = ("If RunPod refuses the key, set a working one with `kura secrets se
              "terminal; the runner's next try reads it.")
 
 
+def _notify_once(request: Path, suffix: str, kind: str, send: Callable[[], None]) -> None:
+    """Send a notice unless the marker beside the request says it was sent, then write the marker.
+
+    Sent first: a marker that cannot be written (a full disk) means the notice may come again,
+    never that it is lost. An older Kura's counter in the same file means "sent" too."""
+    marker = _sibling(request, suffix)
+    if marker.exists():
+        return
+    send()
+    try:
+        atomic_write_json(marker, record(kind, {"at": _now()}))
+    except OSError as exc:
+        _log(f"{request.parent.parent.name}: could not record that a notice was sent ({exc})")
+
+
 def _retry_uncounted(request: Path, details: dict[str, Any], suffix: str, kind: str, subject: str, body: str) -> None:
     """Notify on the first failed try of a step the runner retries with its backoff until it succeeds
-    or the Pod is gone; None tells the runner to retry it. A marker beside the request says the notice
-    was sent (older Kura kept a count in the same file; its presence means the same); nothing hands a
-    RunPod run to a person (runpod-unattended-completion ADR)."""
-    try:
-        fd = os.open(_sibling(request, suffix), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError:
-        return None
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(record(kind, {"at": _now()}), handle)
-    _notify_text(details, subject, body)
+    or the Pod is gone; None tells the runner to retry it. Nothing hands a RunPod run to a person
+    (runpod-unattended-completion ADR)."""
+    _notify_once(request, suffix, kind, lambda: _notify_text(details, subject, body))
     return None
 
 
@@ -1143,9 +1138,10 @@ def _delete_unstarted_pod(run_dir: Path, request: Path, details: dict[str, Any])
 
     if not _delete_pod(run_dir, why="its job never started"):
         return _pod_delete_failed(run_dir, request, details, f"Run {run_dir.name} never started its job, and its Pod")
-    end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
-    _notify_text(details, f"Kura run interrupted: {run_dir.name}",
-                 f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Start it again as a new run with `kura run new --from {run_dir.name} --slug <words>`.")
+    status = end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
+    _notify_finished(run_dir, request, status, detail=(
+        "Its Pod was deleted because its job never started; nothing was lost. "
+        f"Start it again as a new run with `kura run new --from {run_dir.name} --slug <words>`."))
     return 0
 
 
@@ -1171,7 +1167,7 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
         _end_unlaunched_wait(run_dir, "launch_failed", "the continued capacity wait failed before it created a Pod")
         return 0
     if run_finished(status):
-        # `_remote` notified when the run finished.
+        _notify_if_pod_run_finished(run_dir, request, status)
         return 1 if _pod_left_running(run_dir, status) else 0
     if code and isinstance(status.get("remote_exit_code"), int):
         _collection_failed(run_dir, request, details)
@@ -1193,7 +1189,16 @@ def _stop_runpod_on_request(run_dir: Path, request: Path, details: dict[str, Any
         return False
     _record_request_outcome(request, ".stop-done.json", "stop_done")
     _log(f"{run_dir.name}: stopped on request")
+    _notify_if_pod_run_finished(run_dir, request, _status(run_dir))
     return True
+
+
+def _notify_if_pod_run_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> None:
+    """Notify a finished RunPod run whose launch created a Pod. A launch that created none ends
+    `launch_failed` without a notice, as on Docker; `_notify_finished` sends any one run's notice once."""
+    realization = _launched_realization(run_dir, request, status)
+    if run_finished(status) and realization is not None and isinstance(realization.get("pod"), dict):
+        _notify_finished(run_dir, request, status)
 
 
 def _notify_channels(details: dict[str, Any]) -> Any:
@@ -1228,9 +1233,9 @@ def _carry_out_stop(run_dir: Path, request: Path) -> None:
     _log(f"{run_dir.name}: stopped on request")
 
 
-def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> None:
+def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, detail: str | None = None) -> None:
     """Notify once that a run finished, on `_notify_channels`: the one owner for Docker and RunPod
-    training and local renders."""
+    training and local renders. A marker beside the request keeps every later follower quiet."""
     channels = _notify_channels(_read_json(request))
     from kura.notifications import notify
 
@@ -1239,10 +1244,16 @@ def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> No
     # so only a local render reaches here as a render.
     noun = "render" if _request_executor(request) == "render-local" else "run"
     why = f" It was {status['stop_reason']}." if status.get("stop_reason") else ""
-    try:
-        notify(channels, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.{why}", priority="3")
-    except Exception as exc:  # a notification never fails the run
-        _log(f"{run_dir.name}: notification failed: {exc}")
+    problem = f" {status['publication_error']}." if status.get("publication_error") else ""
+    body = f"{noun.capitalize()} {run_dir.name} finished as {state}.{why}{problem}" + (f" {detail}" if detail else "")
+
+    def send() -> None:
+        try:
+            notify(channels, subject=f"Kura {noun} {state}: {run_dir.name}", body=body, priority="3")
+        except Exception as exc:  # a notification never fails the run
+            _log(f"{run_dir.name}: notification failed: {exc}")
+
+    _notify_once(request, ".finished-notified.json", "finished_notified", send)
 
 
 # Following from a command -----------------------------------------------------------
