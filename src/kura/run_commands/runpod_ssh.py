@@ -1535,6 +1535,11 @@ def _try_sync_runpod_remote_stdout(run_dir: Path, *, ssh_timeout_sec: int = 10) 
 
 
 def _read_runpod_remote_exit(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> dict[str, Any] | None:
+    """The job's exit record, or None when the Pod answered and holds none yet.
+
+    Raises ValueError when the Pod cannot be asked over SSH, so a follower can
+    tell an unreachable Pod from a job that is still running.
+    """
     remote_dir = f"{workspace.rstrip('/')}/runs/{run_id}/realizations"
     script = f"""
 set -u
@@ -1546,9 +1551,11 @@ fi
 """.strip()
     try:
         result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=timeout_sec)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode or not result.stdout.strip():
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"cannot reach the Pod over SSH: {_safe_error(exc)}") from exc
+    if result.returncode:
+        raise ValueError(_redact_secret_text(result.stderr.strip() or f"SSH to the Pod failed with exit code {result.returncode}"))
+    if not result.stdout.strip():
         return None
     try:
         data = json.loads(result.stdout)
@@ -2243,8 +2250,19 @@ def _warn_if_lease_short(run_dir: Path, realization_id: str, run_id: str, notify
         print(f"[kura] notification failed: {exc}", file=sys.stderr)
 
 
+# Exit checks in a row that cannot reach the Pod before the follower gives up: about two minutes
+# when SSH is refused at once, longer (up to tens of minutes) when each attempt waits for its connect timeout.
+# The runner's next attempt then asks RunPod whether the Pod still exists (`reconcile_runpod`).
+UNREACHABLE_EXIT_CHECKS = 30
+
+
 def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, realization_id: str, job_timeout_sec: int | None, notify_channels: Any = None) -> int:
-    """Follow a started remote job until its exit record appears; return its exit code."""
+    """Follow a started remote job until its exit record appears; return its exit code.
+
+    Raises ValueError when the Pod cannot be reached for UNREACHABLE_EXIT_CHECKS
+    checks in a row; the follower decides nothing about the Pod itself.
+    """
+    unreachable = 0
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None
     # The Pod bills until the controller notices the job ended, so the cheap
     # remote-exit check runs every few seconds; the heavier log and
@@ -2264,7 +2282,14 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
             _warn_if_lease_short(run_dir, realization_id, run_id, notify_channels)
             next_sync = now + sync_interval_sec
         if now >= next_exit_check:
-            exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
+            try:
+                exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
+                unreachable = 0
+            except ValueError as exc:
+                unreachable += 1
+                if unreachable >= UNREACHABLE_EXIT_CHECKS:
+                    raise ValueError(f"the Pod could not be reached for {unreachable} exit checks in a row ({_safe_error(exc)})") from exc
+                exit_record = None
             if exit_record is not None:
                 record_launch_phase(run_dir, realization_id, "remote_exit_observed", remote_timestamp=exit_record.get("timestamp"))
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
