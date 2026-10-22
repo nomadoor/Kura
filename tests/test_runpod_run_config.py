@@ -117,9 +117,10 @@ class RunPodLaunchSettingsTests(unittest.TestCase):
                 self.assertEqual(untouched["gpu_type_priority"], "availability")
 
     def test_ports_follow_one_rule_for_training_and_render(self) -> None:
-        # backend_ports.<image> first, then the section's ports, then the image's own defaults.
+        # backend_ports.<image> first, then the section's ports, then the image's own defaults;
+        # the Pod create request adds 22/tcp to each (pod_ports).
         cases = [
-            ({}, ["8675/http", "22/tcp"], ["22/tcp"]),
+            ({}, ["8675/http"], []),
             ({"ports": ["22/tcp", "8888/http"]}, ["22/tcp", "8888/http"], ["22/tcp", "8888/http"]),
             ({"ports": ["22/tcp", "8888/http"], "backend_ports": {"ai-toolkit": ["22/tcp"], "comfyui": ["22/tcp", "8188/http"]}}, ["22/tcp"], ["22/tcp", "8188/http"]),
         ]
@@ -129,7 +130,7 @@ class RunPodLaunchSettingsTests(unittest.TestCase):
                 self.assertEqual(self.settings({"type": "train", "backend": {"name": "ai-toolkit"}}, config)["ports"], training_ports)
                 self.assertEqual(self.settings(self.RENDER, config)["ports"], render_ports)
         musubi = self.settings(self.TRAIN, {"runpod": {"gpu_type_ids": ["A"]}})
-        self.assertEqual(musubi["ports"], ["22/tcp"])
+        self.assertEqual(musubi["ports"], [])
 
     def test_a_render_lays_comfyui_runpod_over_runpod_and_training_does_not(self) -> None:
         config = {"runpod": {"gpu_type_ids": ["A"], "container_disk_gb": 150}, "comfyui": {"runpod": {"container_disk_gb": 80, "ports": ["22/tcp"]}}}

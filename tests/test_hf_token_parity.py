@@ -77,7 +77,7 @@ class HfTokenParityTests(unittest.TestCase):
         with patch.dict(os.environ, _environment_with("HUGGINGFACE_HUB_TOKEN"), clear=True):
             self.assertEqual(container_secrets_record(), {"container_secrets": []})
         root = Path(__file__).resolve().parents[1] / "src" / "kura" / "executors"
-        for name, count in (("docker.py", 1), ("runpod.py", 2)):
+        for name, count in (("docker.py", 1), ("runpod.py", 1)):
             source = (root / name).read_text(encoding="utf-8")
             self.assertEqual(source.count("**container_secrets_record()"), count, name)
             self.assertNotIn('"secrets": {', source, name)

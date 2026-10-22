@@ -1163,105 +1163,85 @@ def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def launch_runpod(
-    *,
-    run_dir: Path,
-    spec: dict[str, Any],
-    image: str,
-    config: dict[str, Any],
-    dry_run: bool = False,
-    wait_for_capacity_sec: int = 0,
-    capacity_poll_interval_sec: int = 30,
-    yes: bool = False,
-    max_lease_sec: int,
-    unattended_wait: str | None = None,
-    controlled_by: dict[str, Any] | None = None,
-) -> str | None:
-    """Create a RunPod Pod using a pre-staged workspace."""
-    _require_upload_storage(config)
-    settings = _runpod_settings(config)
-    realization_id = _realization_id()
-    workspace_path = settings["workspace_path"]
-    # The job over SSH creates and checks these roots; a malformed declaration is refused here first, before any Pod exists.
-    validated_write_roots(spec, workspace_path=workspace_path)
-    runtime_env = _runpod_training_env(
-        spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
-    )
-    log_path = runtime_env["KURA_LOG_PATH"]
-    secret_keys = [key for key in runtime_env if _is_secret(key)]
+# Kura reaches every Pod it creates over SSH: inputs arrive, the job runs, and outputs leave that way.
+SSH_PORT = "22/tcp"
+
+
+def pod_ports(ports: Any) -> list[str]:
+    """The ports a Pod Kura creates opens: the configured ones in their order, with `22/tcp` added
+    when they leave it out, since Kura can neither collect nor stop the job of a Pod it cannot reach."""
+    listed = [port for port in ports if isinstance(port, str)] if isinstance(ports, list) else []
+    return listed if SSH_PORT in listed else [*listed, SSH_PORT]
+
+
+def _pod_create_request(
+    run_dir: Path, realization_id: str, settings: dict[str, Any], *, image: str, env: dict[str, str], start_script: str, max_lease_sec: int,
+) -> dict[str, Any]:
+    """The one Pod create request every launch sends; each attempt adds its GPU, cloud, and location.
+
+    Training and render pass what really differs: the image, the env, and the script the Pod runs
+    after the maximum lease is armed. The volume is fixed at 0 where the request is sent
+    (`_runpod_graphql_create_input`).
+    """
+    secret_keys = [key for key in env if _is_secret(key)]
     if secret_keys:
         raise ValueError(undeclared_secret_refusal("RunPod pod env", secret_keys))
-    status = _load_status(run_dir)
-    stage_ref = status.get("last_stage")
-    if not isinstance(stage_ref, str):
-        raise ValueError("runpod upload mode found no staged bundle; `kura run execute` stages one before it uploads")
-    stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
-    if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
-        raise ValueError("latest stage is not a runpod upload bundle")
-    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
-        if stage.get("transfer") != "selected-files":
-            raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
-        run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
-        manifest_sha256 = pin_transfer_manifest(
-            run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
-        )
-    transfer = {"archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
-    if stage.get("transfer") == "selected-files":
-        # Verified above, before the Pod exists.
-        transfer.update({
-            "stage": stage_ref,
-            "archive_sha256": stage["archive_sha256"],
-            "input_sha256": stage["input_sha256"],
-            # The Pod accepts only this manifest; upload re-proves the stage
-            # against it before sending anything.
-            "pinned_manifest": pinned_manifest,
-            "manifest_sha256": manifest_sha256,
-            "verification": "stage-matches-compile-before-pod-creation",
-        })
-    upload_script = r'''
-set -u
-mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
-mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
-touch "$KURA_LOG_PATH"
-if ! command -v sshd >/dev/null 2>&1; then
-  apt-get update >> "$KURA_LOG_PATH" 2>&1
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
-fi
-mkdir -p /run/sshd /root/.ssh
-chmod 700 /root/.ssh
-if [ -n "${PUBLIC_KEY:-}" ]; then
-  printf '%s\n' "$PUBLIC_KEY" | grep '^ssh-' > /root/.ssh/authorized_keys || true
-  chmod 600 /root/.ssh/authorized_keys
-fi
-/usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
-echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"
-sleep infinity
-'''.strip()
-    start_command = ["sh", "-lc", _pod_start_script(upload_script, max_lease_sec=max_lease_sec, log_path=log_path)]
-    workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
-    request_body = {
-        "name": f"kura-{run_dir.name}-{realization_id}",
+    request: dict[str, Any] = {
+        "name": _intent_pod_name(run_dir, realization_id, {}),
         "gpuCount": settings["gpu_count"],
         "containerDiskInGb": settings["container_disk_gb"],
-        "interruptible": settings["interruptible"], "env": runtime_env,
+        "interruptible": settings["interruptible"],
+        "env": env,
         "minCudaVersion": runpod_min_cuda_version(image),
         "imageName": image,
-        "dockerStartCmd": start_command,
+        "dockerStartCmd": ["sh", "-lc", _pod_start_script(start_script, max_lease_sec=max_lease_sec, log_path=env["KURA_LOG_PATH"])],
+        "ports": pod_ports(settings.get("ports")),
     }
     if settings.get("support_public_ip") is not None:
-        request_body["supportPublicIp"] = bool(settings["support_public_ip"])
-    if isinstance(settings.get("ports"), list) and all(isinstance(port, str) for port in settings["ports"]):
-        request_body["ports"] = settings["ports"]
-    safe_request = dict(request_body)
-    safe_request["env"] = _safe_env(runtime_env)
-    safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
-    safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
-    safe_request["gpuTypePriority"] = settings.get("gpu_type_priority")
-    safe_request["cloudTypeCandidates"] = settings["cloud_types"]
-    safe_request["dataCenterCandidates"] = settings.get("data_center_ids")
-    safe_request["dataCenterPriority"] = settings.get("data_center_priority")
-    safe_request["countryCandidates"] = settings.get("country_codes")
+        request["supportPublicIp"] = bool(settings["support_public_ip"])
+    return request
+
+
+def _recorded_request(request: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    """A create request as records hold it: secrets hidden, with the candidates it was chosen from."""
+    return {
+        **request, "env": _safe_env(request["env"]),
+        "gpuTypeCandidates": settings["gpu_type_ids"], "gpuTypePriority": settings.get("gpu_type_priority"),
+        "cloudTypeCandidates": settings["cloud_types"],
+        "dataCenterCandidates": settings.get("data_center_ids"), "dataCenterPriority": settings.get("data_center_priority"),
+        "countryCandidates": settings.get("country_codes"),
+    }
+
+
+def _create_pod(
+    run_dir: Path,
+    *,
+    realization_id: str,
+    request: dict[str, Any],
+    settings: dict[str, Any],
+    config: dict[str, Any],
+    facts: dict[str, Any],
+    purpose: str | None = None,
+    controlled_by: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    yes: bool = False,
+    max_lease_sec: int,
+    wait_for_capacity_sec: int = 0,
+    capacity_poll_interval_sec: int = 30,
+    unattended_wait: str | None = None,
+) -> str | None:
+    """Create one Pod from `request` and record the launch; every Pod Kura creates is created here.
+
+    Takes the billing confirmation, writes the create intent before the first create, tries
+    each GPU, cloud, and location candidate in order (or waits for capacity when
+    `wait_for_capacity_sec` is set), asks `_pod_made_by_failed_create` after every failed
+    create, and records the realization and status. `facts` are what the realization records
+    besides the Pod and its request.
+    """
+    image = request["imageName"]
+    log_path = request["env"]["KURA_LOG_PATH"]
+    pod_name = request["name"]
+    safe_request = _recorded_request({**request, "gpuTypeIds": _runpod_gpu_attempts(settings["gpu_type_ids"])[0]}, settings)
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
         return None
@@ -1277,22 +1257,26 @@ sleep infinity
         max_lease_sec=max_lease_sec,
         wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait,
-        min_cuda_version=request_body["minCudaVersion"],
+        min_cuda_version=request["minCudaVersion"],
         confirmed_at=(controlled_by or {}).get("billing_confirmed_at"),
     )
+    launch = {
+        "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}),
+        **({"purpose": purpose} if purpose else {}),
+    }
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
     capacity_wait_started_at: str | None = None
     capacity_wait_closed = False
 
-    def close_capacity_wait(outcome: str, **facts: Any) -> None:
+    def close_capacity_wait(outcome: str, **end: Any) -> None:
         """Write the wait's one end line, if a wait started; the last line says where it stands."""
         nonlocal capacity_wait_closed
         if capacity_wait_started_at is None or capacity_wait_closed:
             return
         capacity_wait_closed = True
-        append_capacity_wait(run_dir, realization_id, as_record("capacity_wait_end", {"at": _now(), "outcome": outcome, "failed_rounds": capacity_rounds, **facts}))
+        append_capacity_wait(run_dir, realization_id, as_record("capacity_wait_end", {"at": _now(), "outcome": outcome, "failed_rounds": capacity_rounds, **end}))
 
     capacity_wait_started_monotonic = time.monotonic()
     capacity_rounds = 0
@@ -1312,7 +1296,7 @@ sleep infinity
                 measurement = confirmation_measurement
                 confirmation_measurement = None
                 if measurement is None:
-                    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=request_body["minCudaVersion"])
+                    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=request["minCudaVersion"])
                 if measurement.get("status") == "ok":
                     for candidate in measurement.get("candidates", []):
                         if not isinstance(candidate, dict) or not isinstance(candidate.get("gpu_type_id"), str):
@@ -1342,13 +1326,13 @@ sleep infinity
                 ]
 
             for gpu_type_ids, cloud_type, placement in attempts:
-                attempt_request = dict(request_body)
+                attempt_request = dict(request)
                 attempt_request["gpuTypeIds"] = gpu_type_ids
                 attempt_request["cloudType"] = cloud_type
                 attempt_request.update(placement)
                 controller_phase = "create"
                 if not intent_written:
-                    _write_create_intent(run_dir, realization_id, pod_name=request_body["name"], request=safe_request, image=image, logs_path=log_path, controlled_by=controlled_by)
+                    _write_create_intent(run_dir, realization_id, pod_name=pod_name, request=safe_request, image=image, logs_path=log_path, purpose=purpose, controlled_by=controlled_by)
                     intent_written = True
                 try:
                     pod = _runpod_request("POST", "/pods", api_key, attempt_request)
@@ -1356,7 +1340,7 @@ sleep infinity
                     controller_phase = "probe"
                     break
                 except ValueError as exc:
-                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, request_body["name"], exc)
+                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, pod_name, exc)
                     if pod is not None:
                         used_request = attempt_request
                         controller_phase = "probe"
@@ -1428,9 +1412,8 @@ sleep infinity
         if capacity_wait_started_at is not None:
             close_capacity_wait("cancelled")
         # RunPod may have created the Pod, or did and its reply was in hand when the interrupt came.
-        create_uncertain = intent_written and (controller_phase == "create" or pod is not None)
-        if create_uncertain:
-            write_create_unconfirmed(run_dir, realization_id, error="the launch was interrupted while RunPod was creating the Pod")
+        if intent_written and (controller_phase == "create" or pod is not None):
+            raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, "the launch was interrupted while RunPod was creating the Pod") from exc
 
         def mutate_cancelled(latest: dict[str, Any]) -> None:
             latest.update({"state": "interrupted", "ended": cancelled_at, "exit_code": None, "host": "runpod"})
@@ -1438,16 +1421,11 @@ sleep infinity
 
         _mutate_run_status(run_dir, mutate_cancelled)
         append_run_event(run_dir, {"event": "runpod_capacity_wait_cancelled", "timestamp": cancelled_at, "executor": "runpod", "attempts": capacity_rounds, "phase": controller_phase})
-        if create_uncertain:
-            raise ValueError(
-                "RunPod capacity wait was interrupted during Pod creation; creation is unconfirmed. "
-                f"Run `kura run reconcile {run_dir.name}` before retrying: it looks for the Pod by name"
-            ) from exc
         if intent_written and pod is None:
             # Every create so far was refused, so no Pod exists; settle the intent here.
             realization_path = run_dir / "realizations" / f"{realization_id}.json"
             cancelled = {
-                "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
+                **launch, "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
                 "request": safe_request, "logs_path": log_path, "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
                 "error": "the capacity wait was cancelled; every create attempt had been refused, so no Pod exists", **kura_provenance(),
             }
@@ -1458,60 +1436,128 @@ sleep infinity
         # An unconfirmed create, or any other failure, still ends the wait.
         close_capacity_wait("abandoned", error=_redact_secret_text(str(exc)))
         raise
+    realization_path = run_dir / "realizations" / f"{realization_id}.json"
+    realization_path.parent.mkdir(exist_ok=True)
     if pod is None or used_request is None:
         failed_at = _now()
         if capacity_wait_started_at is not None:
             close_capacity_wait("gave_up", last_result=launch_errors[-1].get("classification") if launch_errors else None)
-        realization_path = run_dir / "realizations" / f"{realization_id}.json"
-        realization_path.parent.mkdir(exist_ok=True)
-        failed_request = dict(safe_request)
-        failed_request["launch_attempts"] = launch_errors
         realization = {
-            "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": "launch_failed", "attempted_at": failed_at,
-            "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": None, "request": failed_request,
-            "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
-            "logs_path": log_path,
-            "workspace_contract": workspace_contract,
+            **launch, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None,
+            "request": {**safe_request, "launch_attempts": launch_errors}, "logs_path": log_path, **facts,
             "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
-            **container_secrets_record(),
             **kura_provenance(),
         }
         _write_json(realization_path, as_record("realization", realization))
         _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
         append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
         raise ValueError("RunPod launch failed for all configured cloud types: " + realization["error"])
-    safe_used_request = dict(used_request)
-    safe_used_request["env"] = _safe_env(runtime_env)
-    safe_used_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
-    safe_used_request["gpuTypePriority"] = settings.get("gpu_type_priority")
-    safe_used_request["cloudTypeCandidates"] = settings["cloud_types"]
-    safe_used_request["dataCenterCandidates"] = settings.get("data_center_ids")
-    safe_used_request["dataCenterPriority"] = settings.get("data_center_priority")
-    safe_used_request["countryCandidates"] = settings.get("country_codes")
+    safe_used_request = _recorded_request(used_request, settings)
     if capacity_wait_started_at is not None:
         safe_used_request["capacityWait"] = {"startedAt": capacity_wait_started_at, "failedRounds": capacity_rounds}
         close_capacity_wait("created")
     pod_id = pod.get("id")
     if not isinstance(pod_id, str) or not pod_id:
         raise ValueError("RunPod create response did not include a pod ID")
-    state = _runpod_state(pod)
-    realization_path = run_dir / "realizations" / f"{realization_id}.json"
-    realization_path.parent.mkdir(exist_ok=True)
     realization = {
-        "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": state, "launched_at": _now(),
-        "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": _runpod_pod_snapshot(pod),
-        "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
-        "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer,
-        "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
-        **container_secrets_record(), **kura_provenance(),
+        **launch, "state": _runpod_state(pod), "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod),
+        "request": safe_used_request, "logs_path": log_path, **facts,
+        "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance(),
     }
     _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
     _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
     if capacity_wait_started_at is not None:
         append_run_event(run_dir, {"event": "runpod_capacity_acquired", "timestamp": _now(), "executor": "runpod", "attempts": capacity_rounds + 1, "pod_id": pod_id})
-    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "realization_id": realization_id, "pod_id": pod_id})
+    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", **({"purpose": purpose} if purpose else {}),
+                               "realization_id": realization_id, "pod_id": pod_id})
     return realization_id
+
+
+def launch_runpod(
+    *,
+    run_dir: Path,
+    spec: dict[str, Any],
+    image: str,
+    config: dict[str, Any],
+    dry_run: bool = False,
+    wait_for_capacity_sec: int = 0,
+    capacity_poll_interval_sec: int = 30,
+    yes: bool = False,
+    max_lease_sec: int,
+    unattended_wait: str | None = None,
+    controlled_by: dict[str, Any] | None = None,
+) -> str | None:
+    """Create a training Pod that Kura uploads the staged bundle to and runs the backend in over SSH."""
+    _require_upload_storage(config)
+    settings = _runpod_settings(config)
+    realization_id = _realization_id()
+    workspace_path = settings["workspace_path"]
+    # The job over SSH creates and checks these roots; a malformed declaration is refused here first, before any Pod exists.
+    validated_write_roots(spec, workspace_path=workspace_path)
+    runtime_env = _runpod_training_env(
+        spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
+    )
+    # Built first: the request refuses a secret in the Pod env before the stage is read.
+    request = _pod_create_request(run_dir, realization_id, settings, image=image, env=runtime_env, max_lease_sec=max_lease_sec, start_script=r'''
+set -u
+mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
+mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
+touch "$KURA_LOG_PATH"
+if ! command -v sshd >/dev/null 2>&1; then
+  apt-get update >> "$KURA_LOG_PATH" 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
+fi
+mkdir -p /run/sshd /root/.ssh
+chmod 700 /root/.ssh
+if [ -n "${PUBLIC_KEY:-}" ]; then
+  printf '%s\n' "$PUBLIC_KEY" | grep '^ssh-' > /root/.ssh/authorized_keys || true
+  chmod 600 /root/.ssh/authorized_keys
+fi
+/usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
+echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"
+sleep infinity
+'''.strip())
+    status = _load_status(run_dir)
+    stage_ref = status.get("last_stage")
+    if not isinstance(stage_ref, str):
+        raise ValueError("runpod upload mode found no staged bundle; `kura run execute` stages one before it uploads")
+    stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
+    if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
+        raise ValueError("latest stage is not a runpod upload bundle")
+    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        if stage.get("transfer") != "selected-files":
+            raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
+        run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
+        manifest_sha256 = pin_transfer_manifest(
+            run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
+        )
+    transfer = {"archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
+    if stage.get("transfer") == "selected-files":
+        # Verified above, before the Pod exists.
+        transfer.update({
+            "stage": stage_ref,
+            "archive_sha256": stage["archive_sha256"],
+            "input_sha256": stage["input_sha256"],
+            # The Pod accepts only this manifest; upload re-proves the stage
+            # against it before sending anything.
+            "pinned_manifest": pinned_manifest,
+            "manifest_sha256": manifest_sha256,
+            "verification": "stage-matches-compile-before-pod-creation",
+        })
+    facts = {
+        "image_identity": image_reference_identity(image),
+        **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}),
+        "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
+        "workspace_contract": "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod",
+        "transfer": transfer, **container_secrets_record(),
+    }
+    return _create_pod(
+        run_dir, realization_id=realization_id, request=request, settings=settings, config=config, facts=facts, controlled_by=controlled_by,
+        dry_run=dry_run, yes=yes, max_lease_sec=max_lease_sec, wait_for_capacity_sec=wait_for_capacity_sec,
+        capacity_poll_interval_sec=capacity_poll_interval_sec, unattended_wait=unattended_wait,
+    )
 
 
 # Where the Pod keeps its lease deadline, in seconds since the epoch.
@@ -1581,10 +1627,8 @@ def launch_runpod_session(
     """
     settings = _runpod_settings(config)
     realization_id = _realization_id()
-    workspace_path = settings["workspace_path"]
-    runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name)
-    log_path = runtime_env["KURA_LOG_PATH"]
-    ssh_script = r'''
+    runtime_env = _runpod_session_env(workspace_path=settings["workspace_path"], run_id=run_dir.name)
+    request = _pod_create_request(run_dir, realization_id, settings, image=image, env=runtime_env, max_lease_sec=max_lease_sec, start_script=r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 touch "$KURA_LOG_PATH"
@@ -1601,96 +1645,12 @@ fi
 /usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
 echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
 sleep infinity
-'''.strip()
-    request_body = {
-        "name": f"kura-{run_dir.name}-{realization_id}",
-        "gpuCount": settings["gpu_count"],
-        "containerDiskInGb": settings["container_disk_gb"],
-        "interruptible": settings["interruptible"],
-        "env": runtime_env,
-        "dockerStartCmd": ["sh", "-lc", _pod_start_script(ssh_script, max_lease_sec=max_lease_sec, log_path=log_path)],
-        "imageName": image,
-        "minCudaVersion": runpod_min_cuda_version(image),
-    }
-    if settings.get("support_public_ip") is not None:
-        request_body["supportPublicIp"] = bool(settings["support_public_ip"])
-    if isinstance(settings.get("ports"), list) and all(isinstance(port, str) for port in settings["ports"]):
-        request_body["ports"] = settings["ports"]
-    safe_request = dict(request_body)
-    safe_request["env"] = _safe_env(runtime_env)
-    safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
-    safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
-    safe_request["gpuTypePriority"] = settings.get("gpu_type_priority")
-    safe_request["cloudTypeCandidates"] = settings["cloud_types"]
-    safe_request["dataCenterCandidates"] = settings.get("data_center_ids")
-    safe_request["dataCenterPriority"] = settings.get("data_center_priority")
-    safe_request["countryCandidates"] = settings.get("country_codes")
-    if dry_run:
-        print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
-        return None
-    api_key = runpod_api_key("needed to launch a RunPod session")
-    _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec, min_cuda_version=request_body["minCudaVersion"],
-                           confirmed_at=(controlled_by or {}).get("billing_confirmed_at"))
-    pod: dict[str, Any] | None = None
-    used_request: dict[str, Any] | None = None
-    launch_errors: list[dict[str, str]] = []
-    intent_written = False
-    for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]):
-        for cloud_type in settings["cloud_types"]:
-            for placement in _runpod_location_attempts(settings):
-                attempt_request = dict(request_body)
-                attempt_request["gpuTypeIds"] = gpu_type_ids
-                attempt_request["cloudType"] = cloud_type
-                attempt_request.update(placement)
-                if not intent_written:
-                    _write_create_intent(run_dir, realization_id, pod_name=request_body["name"], request=safe_request, image=image, logs_path=log_path, purpose=purpose, controlled_by=controlled_by)
-                    intent_written = True
-                try:
-                    pod = _runpod_request("POST", "/pods", api_key, attempt_request)
-                    used_request = attempt_request
-                    break
-                except KeyboardInterrupt as exc:
-                    raise _hand_over_unconfirmed_create(run_dir, realization_id, request_body["name"], "interrupted during the create request") from exc
-                except ValueError as exc:
-                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, request_body["name"], exc)
-                    if pod is not None:
-                        used_request = attempt_request
-                        break
-                    launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
-            if pod is not None:
-                break
-        if pod is not None:
-            break
-    if pod is None or used_request is None:
-        failed_at = _now()
-        realization_path = run_dir / "realizations" / f"{realization_id}.json"
-        realization_path.parent.mkdir(exist_ok=True)
-        failed_request = dict(safe_request)
-        failed_request["launch_attempts"] = launch_errors
-        realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), **kura_provenance()}
-        _write_json(realization_path, as_record("realization", realization))
-        _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
-        append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
-        raise ValueError("RunPod session launch failed for all configured cloud types: " + realization["error"])
-    pod_id = pod.get("id")
-    if not isinstance(pod_id, str) or not pod_id:
-        raise ValueError("RunPod create response did not include a pod ID")
-    safe_used_request = dict(used_request)
-    safe_used_request["env"] = _safe_env(runtime_env)
-    safe_used_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
-    safe_used_request["gpuTypePriority"] = settings.get("gpu_type_priority")
-    safe_used_request["cloudTypeCandidates"] = settings["cloud_types"]
-    safe_used_request["dataCenterCandidates"] = settings.get("data_center_ids")
-    safe_used_request["dataCenterPriority"] = settings.get("data_center_priority")
-    safe_used_request["countryCandidates"] = settings.get("country_codes")
-    state = _runpod_state(pod)
-    realization_path = run_dir / "realizations" / f"{realization_id}.json"
-    realization_path.parent.mkdir(exist_ok=True)
-    realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
-    _write_json(realization_path, as_record("realization", realization))
-    _mutate_run_status(run_dir, lambda latest: point_status_at_launch(latest, realization_id, realization))
-    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "purpose": purpose, "realization_id": realization_id, "pod_id": pod_id})
-    return realization_id
+'''.strip())
+    facts = {"workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally"}
+    return _create_pod(
+        run_dir, realization_id=realization_id, request=request, settings=settings, config=config, facts=facts, purpose=purpose,
+        controlled_by=controlled_by, dry_run=dry_run, yes=yes, max_lease_sec=max_lease_sec,
+    )
 
 
 def reconcile_runpod(

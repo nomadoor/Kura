@@ -32,17 +32,14 @@ def requested_gpu_types(compute: Any) -> list[str] | None:
     return [legacy] if legacy is not None else None
 
 
-# The ports a ComfyUI render Pod opens when the workspace names none: SSH, which Kura reaches it through.
-RENDER_DEFAULT_PORTS = ("22/tcp",)
-
-
 def runpod_launch_settings(run: dict[str, Any], workspace_config: dict[str, Any]) -> dict[str, Any]:
     """The RunPod settings a launch of this run uses, before `_runpod_settings` checks them.
 
     The plan, the training and render launches, and the runner's launch request all take them
     from here. A render reads `runpod` with `comfyui.runpod` laid over it; a training run reads
     `runpod`. The Pod opens `runpod.backend_ports.<image>` when it names the run's image, else the
-    section's `ports`, else the image's own (the adapter's for training, SSH for ComfyUI). A run's
+    section's `ports`, else the adapter's own for training and none for ComfyUI; the Pod create
+    request adds `22/tcp` to whichever applies (`pod_ports`). A run's
     `compute.gpu` replaces the GPU list, and Kura tries it in the order the run gives.
     """
     source = workspace_config.get("runpod") if isinstance(workspace_config, dict) else None
@@ -51,7 +48,7 @@ def runpod_launch_settings(run: dict[str, Any], workspace_config: dict[str, Any]
         comfyui = workspace_config.get("comfyui") if isinstance(workspace_config.get("comfyui"), dict) else {}
         if isinstance(comfyui.get("runpod"), dict):
             settings.update(comfyui["runpod"])
-        image_name, default_ports = "comfyui", RENDER_DEFAULT_PORTS
+        image_name, default_ports = "comfyui", ()
     else:
         backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
         adapter = get_backend(backend.get("name"))

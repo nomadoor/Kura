@@ -8379,7 +8379,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)),
                     patch("kura.executors.runpod._runpod_request", side_effect=KeyboardInterrupt),
                 ):
-                    with self.assertRaisesRegex(ValueError, "creation is unconfirmed"):
+                    with self.assertRaisesRegex(ValueError, "did not confirm whether it created Pod.*kura run reconcile"):
                         launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
@@ -8390,8 +8390,9 @@ class RunPodLifecycleTests(unittest.TestCase):
                             yes=True,
                         )
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(events[-1]["event"], "runpod_capacity_wait_cancelled")
-            self.assertEqual(events[-1]["phase"], "create")
+            # Handed over by the one owner of a create Kura cannot confirm, as a failed lookup is.
+            self.assertEqual(events[-1]["event"], "runpod_create_unconfirmed")
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
             # The interruption is recorded beside the intent, which stays for discovery.
             [unconfirmed] = list((run_dir / "realizations").glob("*.create-unconfirmed.json"))
             self.assertEqual(json.loads(unconfirmed.read_text(encoding="utf-8"))["kind"], "create_unconfirmed")
@@ -8431,7 +8432,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_ids"], ["NVIDIA A40"])
             self.assertTrue(launch.call_args.kwargs["yes"])
             self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_priority"], "custom")
-            self.assertEqual(launch.call_args.kwargs["config"]["ports"], ["8675/http", "22/tcp"])
+            self.assertEqual(launch.call_args.kwargs["config"]["ports"], ["8675/http"])
 
     def test_run_launch_rejects_a_second_capacity_wait_controller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
