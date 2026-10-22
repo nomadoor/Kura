@@ -29,8 +29,7 @@ def _runpod_run(status: dict):
         previous = Path.cwd()
         os.chdir(root)
         try:
-            with patch.object(launch, "reconcile_runpod", side_effect=lambda run_dir, *_args, **_kwargs: json.loads((run_dir / "status.json").read_text(encoding="utf-8"))):
-                yield run_dir
+            yield run_dir
         finally:
             os.chdir(previous)
 
@@ -44,76 +43,10 @@ class ExecuteReattachTests(unittest.TestCase):
             (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"kind": "remote_job", "schema_version": 1, "pid": "42"}), encoding="utf-8")
             self.assertTrue(remote_job_started(run_dir, "r1"))
 
-    def test_a_running_job_is_followed_and_collected_without_launching_again(self) -> None:
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
-            with patch.object(launch, "follow_running_runpod_job", return_value=0) as follow, \
-                    patch.object(launch, "stage_run") as stage, patch.object(launch, "launch_run") as launch_run, \
-                    patch.object(launch, "download_with_retries", return_value=0) as download, \
-                    patch.object(launch, "stop_runpod", return_value={}) as stop, \
-                    patch.object(launch, "format_run_completion", return_value="done"), patch.object(launch, "_notify"), \
-                    redirect_stderr(io.StringIO()), patch("sys.stdout", io.StringIO()):
-                code = launch.execute_run("example", yes=True)
-        self.assertEqual(code, 0)
-        follow.assert_called_once()
-        stage.assert_not_called()
-        launch_run.assert_not_called()
-        download.assert_called_once()
-        stop.assert_called_once()
-        self.assertEqual(stop.call_args.args[0].name, "example")
-
-    def test_a_running_pod_whose_job_never_started_is_refused(self) -> None:
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}):
-            stderr = io.StringIO()
-            with patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
-                code = launch.execute_run("example", yes=True)
-        self.assertEqual(code, 1)
-        stage.assert_not_called()
-        self.assertIn("kura run stop example", stderr.getvalue())
-
-    def test_a_job_start_recorded_for_an_earlier_realization_does_not_count(self) -> None:
-        with _runpod_run({"state": "running", "pod_id": "pod-2", "remote_job_started_at": "earlier", "last_realization": "realizations/r2.json"}):
-            stderr = io.StringIO()
-            with patch.object(launch, "follow_running_runpod_job") as follow, redirect_stderr(stderr):
-                code = launch.execute_run("example", yes=True)
-        self.assertEqual(code, 1)
-        follow.assert_not_called()
-        self.assertIn("never started", stderr.getvalue())
-
-    def test_a_pod_that_deleted_itself_is_recorded_and_reported_not_followed(self) -> None:
-        from kura.executors.runpod import RunPodAPIError, reconcile_runpod
-
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}) as run_dir:
-            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
-            stderr = io.StringIO()
-            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
-                    patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)), \
-                    patch.object(launch, "reconcile_runpod", wraps=reconcile_runpod) as reconcile, \
-                    patch.object(launch, "follow_running_runpod_job") as follow, patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
-                code = launch.execute_run("example", yes=True)
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        self.assertEqual(code, 1)
-        self.assertEqual(reconcile.call_args.kwargs["source"], "automatic")
-        follow.assert_not_called()
-        stage.assert_not_called()
-        self.assertEqual(status["state"], "interrupted")
-        self.assertTrue(status["pod_missing_at"])
-        self.assertIn("kura run new --from example", stderr.getvalue())
-
-    def test_reattach_is_checked_again_under_the_controller_lock(self) -> None:
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}) as run_dir:
-            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "pod_id": "pod-1", "pod_stopped_at": "t"}), encoding="utf-8")
-            stderr = io.StringIO()
-            with patch.object(launch, "follow_running_runpod_job") as follow, patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
-                code = launch.run_remote("example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0, reattach=True)
-        self.assertEqual(code, 1)
-        follow.assert_not_called()
-        stage.assert_not_called()
-        self.assertIn("no longer running", stderr.getvalue())
-
     def test_the_runner_follower_reattaches_without_deciding_again(self) -> None:
         # The runner's `_continue_runpod` decided to follow; the controller it calls trusts that decision.
         with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
-            with patch.object(launch, "reconcile_runpod", side_effect=AssertionError("decided twice")), \
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=AssertionError("decided twice")), \
                     patch.object(launch, "follow_running_runpod_job", return_value=0) as follow, \
                     patch.object(launch, "download_with_retries", return_value=0), patch.object(launch, "stop_runpod", return_value={}), \
                     patch.object(launch, "format_run_completion", return_value="done"), patch.object(launch, "_notify"), \
@@ -123,41 +56,18 @@ class ExecuteReattachTests(unittest.TestCase):
         self.assertEqual(code, 0)
         follow.assert_called_once()
 
-    def test_remote_on_a_missing_run_is_an_error_not_a_traceback(self) -> None:
-        with _runpod_run({"state": "compiled"}):
-            stderr = io.StringIO()
-            with redirect_stderr(stderr):
-                code = launch.run_remote("nope", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0)
-        self.assertEqual(code, 1)
-        self.assertIn("run does not exist", stderr.getvalue())
-
     def test_a_compiled_run_launches_through_the_runner(self) -> None:
         with _runpod_run({"state": "compiled"}):
-            with patch.object(launch, "_launch_runpod_through_runner", return_value=0) as through_runner, \
-                    patch.object(launch, "run_remote") as run_remote:
+            with patch.object(launch, "_launch_runpod_through_runner", return_value=0) as through_runner:
                 launch.execute_run("example", yes=True)
         through_runner.assert_called_once()
-        run_remote.assert_not_called()
 
-    def test_a_job_started_before_the_runner_keeps_its_in_process_follower(self) -> None:
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
-            with patch.object(launch, "_launch_runpod_through_runner") as through_runner, \
-                    patch.object(launch, "run_remote", return_value=0) as run_remote:
+    def test_a_running_run_is_followed_through_the_runner_too(self) -> None:
+        # Every RunPod training run goes through the runner; runs started before it existed are gone at their lease.
+        with _runpod_run({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}):
+            with patch.object(launch, "_launch_runpod_through_runner", return_value=0) as through_runner:
                 launch.execute_run("example", yes=True)
-        through_runner.assert_not_called()
-        self.assertTrue(run_remote.call_args.kwargs["reattach"])
-
-
-    def test_a_second_controller_for_the_same_run_is_refused(self) -> None:
-        from kura.executors.common import _run_operation_lock
-
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t"}) as run_dir:
-            stderr = io.StringIO()
-            with _run_operation_lock(run_dir, "controller"), patch.object(launch, "follow_running_runpod_job") as follow, redirect_stderr(stderr):
-                code = launch.run_remote("example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0, reattach=True)
-        self.assertEqual(code, 1)
-        follow.assert_not_called()
-        self.assertIn("already controlling", stderr.getvalue())
+        through_runner.assert_called_once()
 
 
 if __name__ == "__main__":

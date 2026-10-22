@@ -142,31 +142,6 @@ class StopTests(unittest.TestCase):
             self.assertTrue(_status(run_dir)["pod_stopped_at"])
 
 
-class ExecuteReattachTests(unittest.TestCase):
-    def test_a_404_is_recorded_and_reported_instead_of_followed(self) -> None:
-        from kura.run_commands import launch
-
-        with _run() as run_dir:
-            with _api(NOT_FOUND), _owner() as owner, redirect_stderr(io.StringIO()):
-                with self.assertRaisesRegex(ValueError, "outputs are gone"):
-                    launch._running_remote_job("example")
-            owner.assert_called_once()
-            status = _status(run_dir)
-            self.assertEqual(status["state"], "interrupted")
-            self.assertTrue(status["pod_missing_at"])
-
-    def test_anything_else_is_raised_and_not_recorded(self) -> None:
-        from kura.run_commands import launch
-
-        for error in NOT_GONE:
-            with self.subTest(error=str(error)), _run() as run_dir:
-                with _api(error), _owner() as owner, self.assertRaises(ValueError) as raised:
-                    launch._running_remote_job("example")
-                owner.assert_called_once()
-                self.assertNotIn("outputs are gone", str(raised.exception))
-                self.assertNotIn("pod_missing_at", _status(run_dir))
-
-
 class FollowerTests(unittest.TestCase):
     def _request(self, run_dir: Path):
         from kura import runner

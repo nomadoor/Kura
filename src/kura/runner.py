@@ -835,13 +835,12 @@ def _work_render_local(workspace: Path, run_dir: Path, request: Path) -> int:
     except (OSError, ValueError, http.client.HTTPException) as exc:
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", error=str(exc))
         _notify_text(_read_json(request), f"Kura render failed: {run_dir.name}",
-                     f"Render {run_dir.name} could not start: {exc}. The run is still compiled; launch it again once ComfyUI is ready.",
-                     auto=True)
+                     f"Render {run_dir.name} could not start: {exc}. The run is still compiled; launch it again once ComfyUI is ready.")
         return 0
     finally:
         set_stop_check(None)
         remove_leftover_stages(workspace, run_dir)
-    _notify_finished(run_dir, request, _status(run_dir), auto=True)
+    _notify_finished(run_dir, request, _status(run_dir))
     return 0
 
 
@@ -859,8 +858,7 @@ def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, st
     else:
         _log(f"{run_dir.name}: render interrupted")
     _notify_text(_read_json(request), f"Kura render interrupted: {run_dir.name}",
-                 f"Render {run_dir.name} stopped mid-way; images written so far are kept. Create a new render run to finish it.",
-                 auto=True)
+                 f"Render {run_dir.name} stopped mid-way; images written so far are kept. Create a new render run to finish it.")
 
 
 def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
@@ -1016,10 +1014,22 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
     options["max_lease"] = max_lease_seconds(options.get("max_lease"))
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
                      "billing_confirmed_at": details.get("billing_confirmed_at")}
-    return _run_remote_locked(
+    def finished_launch() -> dict[str, Any] | None:
+        status = _status(run_dir)
+        return _launched_realization(run_dir, request, status) if run_finished(status) else None
+
+    finished_before = finished_launch() is not None
+    code = _run_remote_locked(
         run_dir.name, yes=True, reattach=reattach, controlled_by=controlled_by,
         runpod_config_override=details.get("runpod_config"), **options,
     )
+    realization = finished_launch()
+    if not finished_before and realization is not None and isinstance(realization.get("pod"), dict):
+        # The controller collected the run and deleted its Pod (or refused it before upload); the run
+        # ended here, so it is notified here, once, as a Docker run is. A launch that created no Pod
+        # ends `launch_failed` without a notice, as on Docker.
+        _notify_finished(run_dir, request, _status(run_dir))
+    return code
 
 
 def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int | None:
@@ -1083,14 +1093,17 @@ _KEY_HINT = ("If RunPod refuses the key, set a working one with `kura secrets se
 
 
 def _retry_uncounted(request: Path, details: dict[str, Any], suffix: str, kind: str, subject: str, body: str) -> None:
-    """Record one more failed try of a step the runner retries with its backoff until it succeeds
-    or the Pod is gone, and notify on the first; None tells the runner to retry it. The count only
-    decides that one notification: nothing hands a RunPod run to a person (runpod-unattended-completion ADR)."""
-    path = _sibling(request, suffix)
-    count = int(_read_json(path).get("count", 0)) + 1
-    atomic_write_json(path, record(kind, {"count": count, "at": _now()}))
-    if count == 1:
-        _notify_text(details, subject, body)
+    """Notify on the first failed try of a step the runner retries with its backoff until it succeeds
+    or the Pod is gone; None tells the runner to retry it. A marker beside the request says the notice
+    was sent (older Kura kept a count in the same file; its presence means the same); nothing hands a
+    RunPod run to a person (runpod-unattended-completion ADR)."""
+    try:
+        fd = os.open(_sibling(request, suffix), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        return None
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record(kind, {"at": _now()}), handle)
+    _notify_text(details, subject, body)
     return None
 
 
@@ -1158,7 +1171,7 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
         _end_unlaunched_wait(run_dir, "launch_failed", "the continued capacity wait failed before it created a Pod")
         return 0
     if run_finished(status):
-        # The RunPod controller already notified completion with the request's channels.
+        # `_remote` notified when the run finished.
         return 1 if _pod_left_running(run_dir, status) else 0
     if code and isinstance(status.get("remote_exit_code"), int):
         _collection_failed(run_dir, request, details)
@@ -1183,15 +1196,20 @@ def _stop_runpod_on_request(run_dir: Path, request: Path, details: dict[str, Any
     return True
 
 
-def _notify_text(details: dict[str, Any], subject: str, body: str, *, auto: bool = False) -> None:
-    """Notify on the request's channels; `auto` lets Kura's defaults apply when none were named."""
-    channels = details.get("notify") or (details.get("options") or {}).get("notify_channels")
-    if not channels and not auto:
-        return
+def _notify_channels(details: dict[str, Any]) -> Any:
+    """The one channel rule for every runner notice: the request's channels, else Kura's defaults
+    (`KURA_NOTIFY`, else the channels this host can use). `kura run execute` names none, so a training
+    run notifies where the README says a finish notice goes."""
+    return details.get("notify") or (details.get("options") or {}).get("notify_channels") or None
+
+
+def _notify_text(details: dict[str, Any], subject: str, body: str) -> None:
+    """Notify on `_notify_channels`; a notification never fails the run."""
+    channels = _notify_channels(details)
     from kura.notifications import notify
 
     try:
-        notify(channels or None, subject=subject, body=body, priority="4")
+        notify(channels, subject=subject, body=body, priority="4")
     except Exception as exc:  # a notification never fails the run
         _log(f"notification failed: {exc}")
 
@@ -1210,19 +1228,19 @@ def _carry_out_stop(run_dir: Path, request: Path) -> None:
     _log(f"{run_dir.name}: stopped on request")
 
 
-def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, auto: bool = False) -> None:
-    """Notify once that a run finished; `auto` lets Kura's default channels apply, as renders always did."""
-    channels = _read_json(request).get("notify")
-    if not channels and not auto:
-        return
+def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> None:
+    """Notify once that a run finished, on `_notify_channels`: the one owner for Docker and RunPod
+    training and local renders."""
+    channels = _notify_channels(_read_json(request))
     from kura.notifications import notify
 
     state = status.get("state")
-    # A RunPod render notifies from its own launch, so only a local render reaches here as a render.
+    # Docker and RunPod training both notify here; a RunPod render notifies from its own launch,
+    # so only a local render reaches here as a render.
     noun = "render" if _request_executor(request) == "render-local" else "run"
     why = f" It was {status['stop_reason']}." if status.get("stop_reason") else ""
     try:
-        notify(channels or None, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.{why}", priority="3")
+        notify(channels, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.{why}", priority="3")
     except Exception as exc:  # a notification never fails the run
         _log(f"{run_dir.name}: notification failed: {exc}")
 

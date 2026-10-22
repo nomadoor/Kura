@@ -63,14 +63,12 @@ class MaxLeaseRequiredTests(unittest.TestCase):
                 patch.object(launch, "download_with_retries", return_value=0),
                 patch.object(launch, "_latest_realization_id", return_value=None),
                 patch.object(launch, "stop_runpod", return_value={}),
-                patch.object(launch, "_notify") as notify,
                 patch("sys.stdout", new_callable=io.StringIO) as stdout,
                 patch("sys.stderr", new_callable=io.StringIO),
             ):
                 launch._run_remote_locked("example", upload_timeout=1, job_timeout=None, download_attempts=1, download_interval=1, yes=True)
             # The record says failed with exit 3; the follower's own exit code does not rewrite it.
             self.assertIn("failed  exit 3", stdout.getvalue())
-            self.assertIn("failed", notify.call_args.kwargs["subject"])
 
     def test_the_launch_check_refuses_a_zero_lease_before_billing_confirmation(self) -> None:
         from kura.run_commands import launch

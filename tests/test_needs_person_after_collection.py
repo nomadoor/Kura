@@ -36,7 +36,7 @@ class NeedsPersonTests(unittest.TestCase):
         # The controller's own stop failed; the Pod holds nothing the snapshot lacks, so a follower deletes it.
         self.assertTrue(runner._pod_left_running(Path("."), NEEDS_PERSON))
 
-    def test_the_controller_deletes_the_pod_and_says_the_run_needs_attention(self) -> None:
+    def test_the_controller_deletes_the_pod_and_leaves_the_notice_to_the_runner(self) -> None:
         from tests.test_cli import _run_remote_in_process
 
         with tempfile.TemporaryDirectory() as directory:
@@ -55,14 +55,15 @@ class NeedsPersonTests(unittest.TestCase):
                      patch("kura.run_commands.launch.launch_run", return_value=0), \
                      patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
                      patch("kura.run_commands.launch.download_with_retries", side_effect=collected), \
-                     patch("kura.run_commands.launch._notify") as notify, \
+                     patch("kura.notifications.notify") as notify, \
                      patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop:
                     code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, max_lease="3h", yes=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 1)
             stop.assert_called_once()
-            self.assertIn("needs attention", notify.call_args.kwargs["subject"])
+            # The runner says how the run finished (`_notify_finished`), once, as for a Docker run.
+            notify.assert_not_called()
 
 
 if __name__ == "__main__":
