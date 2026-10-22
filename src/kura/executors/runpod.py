@@ -29,7 +29,7 @@ from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT
 from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
-from kura.executors.common import host_time
+from kura.executors.common import create_intent_executor, host_time
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -615,19 +615,6 @@ def _is_runpod_transient_error(exc: ValueError) -> bool:
     return "runpod api is unreachable" in text or any(f"({code})" in text for code in (429, 500, 502, 503, 504))
 
 
-def _create_outcome_uncertain(exc: ValueError) -> bool:
-    """Whether a failed create may still have created a Pod.
-
-    A refusal (capacity, validation, rate limit) means nothing was created. A
-    server error or a lost connection after the request was sent does not say.
-    """
-    if isinstance(exc, RunPodAPIError):
-        return exc.status_code >= 500
-    text = str(exc).lower()
-    # A reply that arrived but cannot be read says nothing about the create either.
-    return any(marker in text for marker in ("runpod api is unreachable", "invalid json", "unexpected response", "did not contain"))
-
-
 def unstopped_recovered_pod(run_dir: Path) -> str | None:
     """The ids of the Pods a recovery recorded that nothing has deleted yet (`pods_left`).
 
@@ -739,16 +726,26 @@ def _hand_over_unconfirmed_create(run_dir: Path, realization_id: str, pod_name: 
     )
 
 
-def _discover_after_unconfirmed_create(run_dir: Path, realization_id: str, api_key: str, pod_name: str, exc: ValueError) -> list[dict[str, Any]]:
-    """The one Pod an unconfirmed create made, or hand the run over to the user."""
+def _pod_made_by_failed_create(run_dir: Path, realization_id: str, api_key: str, pod_name: str, exc: ValueError) -> dict[str, Any] | None:
+    """Whether a failed create made a Pod after all: the one Pod by its name, None when it made none,
+    or the run handed over to the user when the answer is not known.
+
+    A failed reply does not say whether RunPod created the Pod, so every failure
+    is looked up by name before anything is created again; only a capacity
+    refusal, the one failure a capacity wait repeats, skips the lookup. A complete
+    listing without the name means nothing was created and the next candidate
+    may be tried.
+    """
+    if _is_runpod_capacity_error(exc):
+        return None
     error = _redact_secret_text(str(exc))
     try:
         found = _discover_pods(api_key, pod_name)
     except ValueError as lookup:
         raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, f"{error}; looking it up also failed: {_redact_secret_text(str(lookup))}") from exc
-    if len(found) != 1:
-        raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, error) from exc
-    return found
+    if len(found) > 1:
+        raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, f"{error}; RunPod lists {len(found)} Pods by that name") from exc
+    return found[0] if found else None
 
 
 def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
@@ -771,7 +768,7 @@ def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
             settle_status_from_realization(run_dir, intent_path.parent / f"{realization_id}.json")
             lines.append(f"the launch recorded {realization_id}.json but stopped before status followed it; status now does")
             continue
-        pod_name = intent.get("pod_name") if isinstance(intent.get("pod_name"), str) else f"kura-{run_dir.name}-{realization_id}"
+        pod_name = _intent_pod_name(run_dir, realization_id, intent)
         if api_key is None:
             api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
         pods = _discover_pods(api_key, pod_name)
@@ -1353,9 +1350,9 @@ sleep infinity
                     controller_phase = "probe"
                     break
                 except ValueError as exc:
-                    if _create_outcome_uncertain(exc):
-                        found = _discover_after_unconfirmed_create(run_dir, realization_id, api_key, request_body["name"], exc)
-                        pod, used_request = found[0], attempt_request
+                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, request_body["name"], exc)
+                    if pod is not None:
+                        used_request = attempt_request
                         controller_phase = "probe"
                         break
                     round_exceptions.append(exc)
@@ -1651,9 +1648,9 @@ sleep infinity
                 except KeyboardInterrupt as exc:
                     raise _hand_over_unconfirmed_create(run_dir, realization_id, request_body["name"], "interrupted during the create request") from exc
                 except ValueError as exc:
-                    if _create_outcome_uncertain(exc):
-                        found = _discover_after_unconfirmed_create(run_dir, realization_id, api_key, request_body["name"], exc)
-                        pod, used_request = found[0], attempt_request
+                    pod = _pod_made_by_failed_create(run_dir, realization_id, api_key, request_body["name"], exc)
+                    if pod is not None:
+                        used_request = attempt_request
                         break
                     launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
             if pod is not None:
@@ -1791,8 +1788,35 @@ def _already_gone(pod_id: str, api_key: str) -> bool:
         return False
 
 
+def _intent_pod_name(run_dir: Path, realization_id: str, intent: dict[str, Any]) -> str:
+    """The name a create intent's Pod carries; intents that did not record one used the default."""
+    return intent["pod_name"] if isinstance(intent.get("pod_name"), str) else f"kura-{run_dir.name}-{realization_id}"
+
+
+def _run_pod_names(run_dir: Path) -> list[str]:
+    """Every name this run's launches created RunPod Pods under, from their create intents.
+
+    A create whose reply was lost can leave a Pod no record names; it carries
+    its intent's name, so deleting by these names catches it whatever the reply
+    was. A name holds the run and realization ids, so no other run's Pod
+    carries one.
+    """
+    names = []
+    for path in sorted((run_dir / "realizations").glob(f"*{CREATE_INTENT_SUFFIX}")):
+        if create_intent_executor(path) != "runpod":
+            continue
+        try:
+            intent = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(intent, dict):
+            names.append(_intent_pod_name(run_dir, path.name[: -len(CREATE_INTENT_SUFFIX)], intent))
+    return list(dict.fromkeys(names))
+
+
 def stop_runpod(run_dir: Path) -> dict[str, Any]:
-    """Delete the run's Pod and any duplicate its records name.
+    """Delete the run's Pod, any duplicate its records name, and every Pod carrying one of the run's
+    Pod names (`_run_pod_names`). Every path that deletes a run's Pods comes here.
 
     Deleting needs only the API key and the records: no Pod-create setting is
     read, so settings that could not create a Pod never keep one billing.
@@ -1803,6 +1827,9 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
             f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
             "first, which finds the Pod by name so this command can delete it"
         )
+    # Read with that check, while every intent is settled: a launch that starts during this stop adds a
+    # name later, and its Pod is never deleted here.
+    pod_names = _run_pod_names(run_dir)
     # Only once the records agree that no launch left a Pod is a capacity wait's status believed.
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(
@@ -1826,16 +1853,33 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
     duplicates = _duplicate_pod_ids(run_dir, status)
     requested_at = _now()
     targets: list[dict[str, Any]] = []
-    for target in (pod_id, *duplicates):
+
+    def delete(target: str, **found: str) -> None:
         try:
             _runpod_request("DELETE", f"/pods/{target}", api_key)
-            targets.append({"pod_id": target, "result": "deleted"})
+            targets.append({"pod_id": target, "result": "deleted", **found})
         except ValueError as exc:
             if not _already_gone(target, api_key):
-                write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets + [{"pod_id": target, "result": "failed"}],
+                write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets + [{"pod_id": target, "result": "failed", **found}],
                                   requested_at=requested_at, stopped_at=None, outcome="failed", error=_redact_secret_text(str(exc)))
                 raise
-            targets.append({"pod_id": target, "result": "already_gone"})
+            targets.append({"pod_id": target, "result": "already_gone", **found})
+
+    for target in (pod_id, *duplicates):
+        delete(target)
+    try:
+        named = [(pod["id"], name) for name in pod_names for pod in _runpod_pods_named(api_key, name)]
+    except ValueError as exc:
+        error = _redact_secret_text(str(exc))
+        write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets, requested_at=requested_at, stopped_at=None,
+                          outcome="failed", error=f"could not list Pods by this run's names: {error}")
+        raise ValueError(
+            f"handled the run's recorded Pods, but could not list Pods by this run's names to find one a lost create reply left "
+            f"({error}); run `kura run stop {run_dir.name}` again"
+        ) from exc
+    for found_id, name in named:
+        if all(item["pod_id"] != found_id for item in targets):
+            delete(found_id, found_by="name", pod_name=name)
     ended_at = _now()
     write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets, requested_at=requested_at, stopped_at=ended_at, outcome="stopped")
 

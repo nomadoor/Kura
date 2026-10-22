@@ -78,9 +78,24 @@ creates nothing, so only decisions 3 to 7 apply to it.
   waiting for a person only bills. A failed delete there is retried with the
   runner's backoff until it succeeds, notified once, and never counted toward
   the collection failures that hand a run to a person (2026-10-10).
-- A create that fails with a timeout or a transient error ends the attempt
-  loop and goes to discovery. Only an explicit refusal, such as no capacity,
-  may try the next GPU candidate.
+- A create that fails, whatever its reply says, goes to discovery before
+  anything is created again (2026-10-22); the reply's status, code, or text
+  never decides that nothing was made. One match is adopted; a complete listing
+  without the name means nothing was created, and the next GPU candidate may be
+  tried; a listing that fails or finds more than one hands the run to the user.
+  Only a capacity refusal skips the lookup, because a capacity wait repeats it
+  every round.
+- A lookup can miss a Pod that a create whose reply was lost makes only
+  afterwards. So deleting a run's Pods (`stop_runpod`, the one deleter the
+  runner and every command use) also lists Pods by every name the run's create
+  intents used and deletes each one carrying such a name exactly, recording it
+  in the stop record with `found_by: name` (2026-10-22). A listing that fails
+  fails the stop after the recorded Pods are deleted, so it is tried again.
+  The names are read while every intent is settled, so a launch that starts
+  during the stop is never swept. Such a late Pod bills until the run's Pods
+  are deleted, or until its own maximum lease. When every create of a launch
+  failed, the run records no Pod and nothing deletes it, so a Pod that appears
+  after the lookup is bounded only by its maximum lease (accepted 2026-10-22).
 - RunPod has no idempotency key for creation, so the Pod-side maximum lease
   remains the backstop.
 
