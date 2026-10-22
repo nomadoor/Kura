@@ -6920,6 +6920,50 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
             process.wait(timeout=30)
         self.assertEqual(calls, [])
 
+    def test_a_stale_collecting_mark_does_not_hold_the_pod(self) -> None:
+        """A downloader that died mid-way leaves a mark nobody refreshes; the timer deletes the Pod anyway."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env, calls, _server = self._sandbox(root)
+            collected, collecting = root / "example.collected", root / "example.collecting"
+            collecting.touch()
+            stale = time.time() - 3600
+            os.utime(collecting, (stale, stale))
+            # Waiting for a collection ends the timer here instead of looping, so a wrong wait fails fast.
+            stub = 'sleep() { if [ "$1" = 60 ]; then echo "held for a collection" >> "$KURA_LOG_PATH"; exit 0; fi; command sleep "$1"; }'
+            script = "\n".join([
+                stub,
+                POD_SELF_DELETE_FUNCTION,
+                "export KURA_JOB_STARTED_EPOCH=$(date +%s)",
+                _unattended_completion_shell(wait_sec=1, collected_mark=str(collected), collecting_mark=str(collecting)),
+                "wait",
+            ])
+            subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+            log = (root / "stdout.log").read_text(encoding="utf-8")
+        self.assertNotIn("held for a collection", log)
+        self.assertEqual([call["mutation"] for call in calls], ["podTerminate"])
+
+    def test_a_stale_collecting_mark_does_not_keep_the_pod_while_the_delete_is_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # The first attempt (podTerminate, then podStop) fails, so the delete is retried.
+            env, calls, _server = self._sandbox(root, unavailable=2)
+            env["KURA_POD_SELF_DELETE_RETRY_SEC"] = "7"
+            collected, collecting = root / "example.collected", root / "example.collecting"
+            # A mark left by a downloader that died long ago appears during the first wait.
+            stub = f'sleep() {{ if [ "$1" = 7 ]; then touch -t 200001010000 {collecting}; fi; }}'
+            script = "\n".join([
+                stub,
+                POD_SELF_DELETE_FUNCTION,
+                "export KURA_JOB_STARTED_EPOCH=$(date +%s)",
+                _unattended_completion_shell(wait_sec=1, collected_mark=str(collected), collecting_mark=str(collecting)),
+                "wait",
+            ])
+            subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+            log = (root / "stdout.log").read_text(encoding="utf-8")
+        self.assertNotIn("the Pod is to be kept now", log)
+        self.assertEqual([call["mutation"] for call in calls], ["podTerminate", "podStop", "podTerminate"], log)
+
     def test_automatic_wait_is_the_longer_of_two_hours_and_the_training_time(self) -> None:
         for elapsed, expected in ((60, 7200), (10_000, 10_000)):
             with self.subTest(elapsed=elapsed), tempfile.TemporaryDirectory() as directory:
@@ -6977,6 +7021,51 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(touch.call_args.args[1], "/tmp/kura-jobs/example.collecting")
         self.assertEqual(clear.call_args.args[1], "/tmp/kura-jobs/example.collecting")
+
+    def test_a_download_keeps_the_collecting_mark_fresh_until_it_ends(self) -> None:
+        """One transfer can take hours, so the mark is re-touched on an interval and stops with the download."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            details = {"pod_id": "pod-1", "ip": "203.0.113.5", "port": 22, "key": "/tmp/key"}
+            events: list[tuple[str, str]] = []
+
+            def touch(_details: dict[str, Any], mark: str) -> bool:
+                events.append(("touch", mark))
+                return True
+
+            def clear(_details: dict[str, Any], mark: str) -> bool:
+                events.append(("clear", mark))
+                return True
+
+            def slow_manifest(*_args: Any, **_kwargs: Any) -> Any:
+                time.sleep(0.5)
+                raise ValueError("remote manifest unreadable")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
+                     patch("kura.run_commands.runpod_ssh._start_ssh_master"), \
+                     patch("kura.run_commands.runpod_ssh.RUNPOD_COLLECTING_REFRESH_SEC", 0.05), \
+                     patch("kura.run_commands.runpod_ssh._touch_runpod_mark", side_effect=touch), \
+                     patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=slow_manifest), \
+                     patch("kura.run_commands.runpod_ssh._clear_runpod_mark", side_effect=clear), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+                    ended = len(events)
+                    time.sleep(0.3)
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(events), ended, "the refresh must stop when the download ends")
+        self.assertGreaterEqual(sum(1 for kind, _ in events if kind == "touch"), 3, events)
+        self.assertEqual(events[-1], ("clear", "/tmp/kura-jobs/example.collecting"), "no touch may land after the mark is cleared")
+        self.assertTrue(all(mark == "/tmp/kura-jobs/example.collecting" for _, mark in events))
 
     def test_a_download_does_not_start_without_the_collecting_mark(self) -> None:
         details = {"pod_id": "pod-1", "ip": "203.0.113.5", "port": 22, "key": "/tmp/key"}

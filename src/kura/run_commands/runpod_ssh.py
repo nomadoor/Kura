@@ -15,12 +15,13 @@ import subprocess
 import sys
 import stat
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from kura.secrets import container_secret_env
 from kura.yamlio import YAMLError
@@ -451,6 +452,7 @@ def download_run(run_id: str, *, force: bool = False) -> int:
 
 def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
     collecting_on: dict[str, Any] | None = None
+    stop_refreshing: Callable[[], None] = lambda: None
     try:
         run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
@@ -586,6 +588,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         _start_ssh_master(details)
         _mark_runpod_outputs_collecting(details, run_id)
         collecting_on = details
+        stop_refreshing = _keep_collecting_mark_fresh(details, run_id)
         destination.mkdir(exist_ok=True)
         workspace = _runpod_workspace_for_run(run_dir)
         remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
@@ -693,14 +696,18 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             },
         )
         record_recovery_download(recovery_artifacts)
+        stop_refreshing()
         _mark_runpod_outputs_collected(details, run_id)
         return _collected_exit_code(run_dir)
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
         if collecting_on is not None:
             # A failed download is not in progress; keep the unattended timer armed.
+            stop_refreshing()
             _clear_runpod_mark(collecting_on, _runpod_collecting_mark(run_id))
         return 1
+    finally:
+        stop_refreshing()
 
 
 def cmd_run_download(args: argparse.Namespace) -> int:
@@ -1679,11 +1686,23 @@ def _runpod_collecting_mark(run_id: str) -> str:
     return f"/tmp/kura-jobs/{run_id}.collecting"
 
 
+# A download re-touches its collecting mark on the Pod this often, and the Pod's
+# unattended timer honours only a mark touched within the freshness window: a
+# downloader that died (host asleep, killed) stops refreshing, so its mark goes
+# stale and the timer deletes the Pod instead of leaving it to the lease. The
+# window covers several missed refreshes (each touch may take up to its 60 s SSH
+# timeout) so a slow link does not let the Pod go under a live download.
+RUNPOD_COLLECTING_REFRESH_SEC = 60
+RUNPOD_COLLECTING_FRESH_SEC = 600
+
+
 def _unattended_completion_shell(*, wait_sec: int | None, collected_mark: str, collecting_mark: str | None = None) -> str:
     """Shell that starts the post-training timer; ``wait_sec=None`` is the automatic wait."""
     if wait_sec == 0:
         return 'echo "[kura] unattended completion is off; only the maximum lease bounds this Pod" >> "$KURA_LOG_PATH" 2>&1 || true'
     fixed = "" if wait_sec is None else str(int(wait_sec))
+    collecting = shlex.quote(collecting_mark or collected_mark + ".collecting")
+    collected = shlex.quote(collected_mark)
     return f"""
 kura_elapsed=$(( $(date +%s) - KURA_JOB_STARTED_EPOCH ))
 kura_wait={fixed}
@@ -1693,13 +1712,15 @@ fi
 echo "[kura] unattended completion: the Pod deletes itself in ${{kura_wait}}s unless Kura collects the outputs first" >> "$KURA_LOG_PATH" 2>&1 || true
 (
   sleep "$kura_wait"
-  # A controller that started collecting keeps the Pod; if it dies mid-way,
-  # the maximum lease still deletes the Pod.
-  while [ -e {shlex.quote(collecting_mark or collected_mark + ".collecting")} ] && [ ! -e {shlex.quote(collected_mark)} ]; do sleep 60; done
-  if [ -e {shlex.quote(collected_mark)} ]; then exit 0; fi
+  # A collection is in progress while its downloader keeps the mark fresh; a
+  # mark it stopped touching (the downloader died) counts as none.
+  kura_collecting() {{ [ -n "$(find {collecting} -mmin -{RUNPOD_COLLECTING_FRESH_SEC // 60} 2>/dev/null)" ]; }}
+  # A controller that is collecting keeps the Pod until it has the outputs.
+  while kura_collecting && [ ! -e {collected} ]; do sleep 60; done
+  if [ -e {collected} ]; then exit 0; fi
   echo "[kura] unattended wait of ${{kura_wait}}s expired before the outputs were collected; deleting the Pod" >> "$KURA_LOG_PATH" 2>&1 || true
   # A controller that starts collecting while the delete is retried keeps the Pod.
-  kura_keep_for_collection() {{ [ -e {shlex.quote(collecting_mark or collected_mark + ".collecting")} ] || [ -e {shlex.quote(collected_mark)} ]; }}
+  kura_keep_for_collection() {{ kura_collecting || [ -e {collected} ]; }}
   kura_pod_self_delete "$KURA_LOG_PATH" kura_keep_for_collection || true
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
@@ -1763,6 +1784,30 @@ def _mark_runpod_outputs_collecting(details: dict[str, Any], run_id: str) -> Non
     """
     if not _touch_runpod_mark(details, _runpod_collecting_mark(run_id)):
         raise ValueError("cannot mark the RunPod outputs as being collected")
+
+
+def _keep_collecting_mark_fresh(details: dict[str, Any], run_id: str) -> Callable[[], None]:
+    """Re-touch the collecting mark until the returned stop is called; best effort.
+
+    A fixed interval rather than a touch per step: the snapshot arrives in one
+    scp that can take hours. Stop waits for an in-flight touch, so none lands
+    after the caller clears the mark; calling it again does nothing.
+    """
+    stop = threading.Event()
+    mark = _runpod_collecting_mark(run_id)
+
+    def refresh() -> None:
+        while not stop.wait(RUNPOD_COLLECTING_REFRESH_SEC):
+            _touch_runpod_mark(details, mark)
+
+    thread = threading.Thread(target=refresh, name=f"kura-collecting-{run_id}", daemon=True)
+    thread.start()
+
+    def stop_refreshing() -> None:
+        stop.set()
+        thread.join()
+
+    return stop_refreshing
 
 
 def _mark_runpod_outputs_collected(details: dict[str, Any], run_id: str) -> None:
