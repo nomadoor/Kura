@@ -15,6 +15,9 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-22 | RunPod reconcile | A Pod lookup that returns the Pod with `desiredStatus: TERMINATED` ends the run `interrupted` without `pod_missing_at`, so the runner's `_continue_runpod` still reattaches to it; decide whether TERMINATED is "gone" in `_runpod_pod_or_none` | review of the one 404 rule | P9
+- 2026-10-22 | RunPod reconcile | `reconcile_runpod`'s `source` now only decides whether an unchanged observation is written, yet the runner passes `source="explicit"` and the parameter is undocumented; say what it means in its docstring | review of the one 404 rule | -
+- 2026-10-22 | tests | `observe_run` (stage, launch) and `execute_run` reach the one "Pod gone" owner only through `reconcile_runpod`; no test spies on the owner from those entry points | review of the one 404 rule | -
 - 2026-10-19 | tests | The command-env owner test reaches Musubi's and sd-scripts' generated env through `_backend_env` / `_validate_native_env`, not through a whole generated `command_musubi_tuner` / `command_sd_scripts` compile | review of the one command-env check | -
 - 2026-10-19 | monitor cost | REJECTED: the monitor froze a Pod's cost at the run's `ended` once the run finished, though the Pod could still bill; already fixed by the Pod-cost change (#299), whose `pod_gpu_cost` counts to `pod_stopped_at`, else `pod_missing_at`, else now | 0.7.0 audit | P6
 - 2026-10-19 | prune message | For a run held for a person (`recovery_required`, nothing downloaded) `kura run prune` says "its Pod may still bill; run `kura run stop` first"; say to collect with `kura run execute` or `kura run pull` first, or stop; and add a `cmd_run_prune` test with a missing Pod beside a running duplicate | review of the pods-that-may-bill change | P6

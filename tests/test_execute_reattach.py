@@ -79,21 +79,25 @@ class ExecuteReattachTests(unittest.TestCase):
         follow.assert_not_called()
         self.assertIn("never started", stderr.getvalue())
 
-    def test_a_pod_that_deleted_itself_is_reported_not_followed_or_recorded(self) -> None:
-        from kura.executors.runpod import RunPodAPIError
+    def test_a_pod_that_deleted_itself_is_recorded_and_reported_not_followed(self) -> None:
+        from kura.executors.runpod import RunPodAPIError, reconcile_runpod
 
         with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}) as run_dir:
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             stderr = io.StringIO()
-            with patch.object(launch, "reconcile_runpod", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)) as reconcile, \
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                    patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)), \
+                    patch.object(launch, "reconcile_runpod", wraps=reconcile_runpod) as reconcile, \
                     patch.object(launch, "follow_running_runpod_job") as follow, patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
                 code = launch.execute_run("example", yes=True)
-            state = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"]
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
         self.assertEqual(reconcile.call_args.kwargs["source"], "automatic")
         follow.assert_not_called()
         stage.assert_not_called()
-        self.assertEqual(state, "running")
-        self.assertIn("kura run reconcile example", stderr.getvalue())
+        self.assertEqual(status["state"], "interrupted")
+        self.assertTrue(status["pod_missing_at"])
+        self.assertIn("kura run new --from example", stderr.getvalue())
 
     def test_reattach_is_checked_again_under_the_controller_lock(self) -> None:
         with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}) as run_dir:

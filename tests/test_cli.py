@@ -8789,16 +8789,16 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertIn("pod_missing_at", status)
         self.assertTrue(observation["pod_missing"])
 
-    def test_automatic_reconcile_never_marks_a_pod_missing(self) -> None:
+    def test_automatic_reconcile_records_a_pod_that_no_longer_exists_too(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
-                    with self.assertRaises(RunPodAPIError):
-                        reconcile_runpod(run_dir, source="automatic")
-            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+                    status = reconcile_runpod(run_dir, source="automatic")
+        self.assertEqual(status["state"], "interrupted")
+        self.assertIn("pod_missing_at", status)
 
     def test_reconcile_runpod_still_raises_other_api_errors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

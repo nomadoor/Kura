@@ -147,7 +147,7 @@ and local download are confirmed.
 On RunPod, `pod_stopped_at` in `kura run status` means Kura's stop confirmed
 the Pod is gone (deleted, or already gone): it and its disk no longer exist and
 it no longer bills. `pod_missing_at` means
-`kura run reconcile` found it already gone (`runpod-lifecycle`).
+RunPod answered that the Pod no longer exists when Kura looked (`runpod-lifecycle`).
 
 A new run starts from the old one's settings with `kura run new --from
 <run-id> --slug <words>`, or from its saved training state with `kura run

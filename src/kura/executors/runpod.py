@@ -182,6 +182,22 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
     raise ValueError(f"unsupported RunPod API operation: {method} {path}")
 
 
+def _runpod_pod_or_none(pod_id: str, api_key: str, *, timeout: float = 30.0) -> dict[str, Any] | None:
+    """The Pod as RunPod reports it, or None when RunPod says it does not exist.
+
+    The one rule for "the Pod is gone", used by every caller: the Pod's lookup
+    answered not found (status 404). Any other failure raises and means "not
+    known", never gone. If a transient not-found ever ends a run early, the
+    Pod's own maximum lease still bounds its billing.
+    """
+    try:
+        return _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
+    except RunPodAPIError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+
+
 def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, min_cuda_version: str | None = None) -> dict[str, Any]:
     """Measure current RunPod stock and price for an ordered GPU candidate list.
 
@@ -1693,17 +1709,9 @@ def reconcile_runpod(
         pod_id = realization.get("pod", {}).get("id")
         if not isinstance(pod_id, str):
             raise ValueError("latest realization has no RunPod pod ID")
-        try:
-            pod: dict[str, Any] | None = _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
-        except RunPodAPIError as exc:
-            # The Pod no longer exists: it deleted itself (unattended wait or
-            # maximum lease) or was deleted elsewhere. Only an explicit
-            # reconcile records that as terminal; an automatic observation
-            # (the monitor) must not turn one flaky "not found" into a run that
-            # looks safe to relaunch while its Pod may still be billing.
-            if exc.status_code != 404 or source != "explicit":
-                raise
-            pod = None
+        # None: the Pod no longer exists (it deleted itself at its unattended
+        # wait or maximum lease, or was deleted elsewhere); recorded as gone.
+        pod = _runpod_pod_or_none(pod_id, api_key, timeout=timeout)
         observed_at = _now()
         if pod is None:
             state, exit_code = "interrupted", None
@@ -1775,6 +1783,14 @@ def pods_left(run_dir: Path, status: dict[str, Any]) -> list[str]:
     return left + _duplicate_pod_ids(run_dir, status)
 
 
+def _already_gone(pod_id: str, api_key: str) -> bool:
+    """Whether a Pod whose delete failed is gone anyway, by the one rule; any doubt is "no"."""
+    try:
+        return _runpod_pod_or_none(pod_id, api_key) is None
+    except ValueError:
+        return False
+
+
 def stop_runpod(run_dir: Path) -> dict[str, Any]:
     """Delete the run's Pod and any duplicate its records name.
 
@@ -1815,8 +1831,7 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
             _runpod_request("DELETE", f"/pods/{target}", api_key)
             targets.append({"pod_id": target, "result": "deleted"})
         except ValueError as exc:
-            message = str(exc).lower()
-            if "404" not in message and "pod not found" not in message:
+            if not _already_gone(target, api_key):
                 write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets + [{"pod_id": target, "result": "failed"}],
                                   requested_at=requested_at, stopped_at=None, outcome="failed", error=_redact_secret_text(str(exc)))
                 raise

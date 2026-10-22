@@ -1038,7 +1038,7 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
     if remote_job_started(run_dir, realization_id):
         from kura.executors.runpod import reconcile_runpod
 
-        # An explicit observation records a Pod that is gone, so it is not followed or retried.
+        # A Pod RunPod reports gone is recorded, so it is not followed or retried.
         current = reconcile_runpod(run_dir, source="explicit")
         if current.get("pod_missing_at"):
             end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
