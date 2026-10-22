@@ -91,6 +91,11 @@ creates nothing, so only decisions 3 to 7 apply to it.
   intents used and deletes each one carrying such a name exactly, recording it
   in the stop record with `found_by: name` (2026-10-22). A listing that fails
   fails the stop after the recorded Pods are deleted, so it is tried again.
+  The names are read while every intent is settled, so a launch that starts
+  during the stop is never swept. Such a late Pod bills until the run's Pods
+  are deleted, or until its own maximum lease. When every create of a launch
+  failed, the run records no Pod and nothing deletes it, so a Pod that appears
+  after the lookup is bounded only by its maximum lease (accepted 2026-10-22).
 - RunPod has no idempotency key for creation, so the Pod-side maximum lease
   remains the backstop.
 

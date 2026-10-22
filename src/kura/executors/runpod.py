@@ -768,7 +768,7 @@ def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
             settle_status_from_realization(run_dir, intent_path.parent / f"{realization_id}.json")
             lines.append(f"the launch recorded {realization_id}.json but stopped before status followed it; status now does")
             continue
-        pod_name = intent.get("pod_name") if isinstance(intent.get("pod_name"), str) else f"kura-{run_dir.name}-{realization_id}"
+        pod_name = _intent_pod_name(run_dir, realization_id, intent)
         if api_key is None:
             api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
         pods = _discover_pods(api_key, pod_name)
@@ -1788,13 +1788,18 @@ def _already_gone(pod_id: str, api_key: str) -> bool:
         return False
 
 
-def _pods_by_run_names(run_dir: Path, api_key: str) -> list[tuple[str, str]]:
-    """Every Pod (id, name) whose name exactly matches a name this run's launches created Pods under.
+def _intent_pod_name(run_dir: Path, realization_id: str, intent: dict[str, Any]) -> str:
+    """The name a create intent's Pod carries; intents that did not record one used the default."""
+    return intent["pod_name"] if isinstance(intent.get("pod_name"), str) else f"kura-{run_dir.name}-{realization_id}"
+
+
+def _run_pod_names(run_dir: Path) -> list[str]:
+    """Every name this run's launches created RunPod Pods under, from their create intents.
 
     A create whose reply was lost can leave a Pod no record names; it carries
-    the name of its create intent, so deleting by name catches it whatever the
-    reply was. Only the run's own intents give names, and a name holds the run
-    and realization ids, so no other run's Pod matches.
+    its intent's name, so deleting by these names catches it whatever the reply
+    was. A name holds the run and realization ids, so no other run's Pod
+    carries one.
     """
     names = []
     for path in sorted((run_dir / "realizations").glob(f"*{CREATE_INTENT_SUFFIX}")):
@@ -1804,14 +1809,14 @@ def _pods_by_run_names(run_dir: Path, api_key: str) -> list[tuple[str, str]]:
             intent = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if isinstance(intent, dict) and isinstance(intent.get("pod_name"), str):
-            names.append(intent["pod_name"])
-    return [(pod["id"], name) for name in dict.fromkeys(names) for pod in _runpod_pods_named(api_key, name)]
+        if isinstance(intent, dict):
+            names.append(_intent_pod_name(run_dir, path.name[: -len(CREATE_INTENT_SUFFIX)], intent))
+    return list(dict.fromkeys(names))
 
 
 def stop_runpod(run_dir: Path) -> dict[str, Any]:
     """Delete the run's Pod, any duplicate its records name, and every Pod carrying one of the run's
-    Pod names (`_pods_by_run_names`). Every path that deletes a run's Pods comes here.
+    Pod names (`_run_pod_names`). Every path that deletes a run's Pods comes here.
 
     Deleting needs only the API key and the records: no Pod-create setting is
     read, so settings that could not create a Pod never keep one billing.
@@ -1822,6 +1827,9 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
             f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
             "first, which finds the Pod by name so this command can delete it"
         )
+    # Read with that check, while every intent is settled: a launch that starts during this stop adds a
+    # name later, and its Pod is never deleted here.
+    pod_names = _run_pod_names(run_dir)
     # Only once the records agree that no launch left a Pod is a capacity wait's status believed.
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(
@@ -1860,13 +1868,13 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
     for target in (pod_id, *duplicates):
         delete(target)
     try:
-        named = _pods_by_run_names(run_dir, api_key)
+        named = [(pod["id"], name) for name in pod_names for pod in _runpod_pods_named(api_key, name)]
     except ValueError as exc:
         error = _redact_secret_text(str(exc))
         write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets, requested_at=requested_at, stopped_at=None,
                           outcome="failed", error=f"could not list Pods by this run's names: {error}")
         raise ValueError(
-            f"deleted the run's recorded Pod, but could not list Pods by this run's names to find one a lost create reply left "
+            f"handled the run's recorded Pods, but could not list Pods by this run's names to find one a lost create reply left "
             f"({error}); run `kura run stop {run_dir.name}` again"
         ) from exc
     for found_id, name in named:
