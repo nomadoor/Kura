@@ -52,7 +52,7 @@ class OneLaunchWriterTests(unittest.TestCase):
                 self.assertNotIn(key, status)
             from kura import runner
 
-            self.assertTrue(runner._pod_left_running(status))
+            self.assertTrue(runner._pod_left_running(run_dir, status))
             self.assertEqual(shadow_differences(run_dir, status), {})
 
     def test_a_failed_session_launch_says_what_its_realization_says(self) -> None:

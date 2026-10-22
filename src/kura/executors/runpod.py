@@ -611,21 +611,22 @@ def _create_outcome_uncertain(exc: ValueError) -> bool:
 
 
 def unstopped_recovered_pod(run_dir: Path) -> str | None:
-    """The id of a Pod a recovery recorded and nothing has stopped yet.
+    """The ids of the Pods a recovery recorded that nothing has deleted yet (`pods_left`).
 
-    Such a Pod still bills, and a new launch would drop its id from status, so
-    launching waits until `kura run stop` has deleted it.
+    Such a Pod still bills, and a new launch would replace the realization that
+    names it, so launching waits until `kura run stop` has deleted it.
     """
     status = _load_status(run_dir)
-    pod_id = status.get("pod_id")
     reference = status.get("last_realization")
-    if not isinstance(pod_id, str) or not isinstance(reference, str) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
+    if not isinstance(reference, str):
         return None
     try:
         realization = json.loads((run_dir / reference).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return pod_id if isinstance(realization, dict) and realization.get("recovered_from_intent") else None
+    if not (isinstance(realization, dict) and realization.get("recovered_from_intent")):
+        return None
+    return ", ".join(pods_left(run_dir, status)) or None
 
 
 def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
@@ -1743,6 +1744,35 @@ def reconcile_runpod(
         return status
 
 
+def _duplicate_pod_ids(run_dir: Path, status: dict[str, Any]) -> list[str]:
+    """Pods a recovered launch found beside the recorded one (`duplicate_pod_ids` in its realization).
+
+    Only the latest realization is read: a launch that would replace it waits
+    while any of them is left (`unstopped_recovered_pod`).
+    """
+    reference = status.get("last_realization")
+    if not isinstance(reference, str):
+        return []
+    try:
+        recorded = json.loads((run_dir / reference).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    duplicates = recorded.get("duplicate_pod_ids") if isinstance(recorded, dict) else None
+    if not isinstance(duplicates, list):
+        return []
+    return [item for item in duplicates if isinstance(item, str) and item != status.get("pod_id")]
+
+
+def pods_left(run_dir: Path, status: dict[str, Any]) -> list[str]:
+    """The run's recorded Pods that may still exist and bill: its Pod unless a stop deleted it or
+    RunPod reported it gone, and every duplicate until a stop deleted them all with it."""
+    if status.get("pod_stopped_at"):
+        return []
+    pod_id = status.get("pod_id")
+    left = [pod_id] if isinstance(pod_id, str) and not status.get("pod_missing_at") else []
+    return left + _duplicate_pod_ids(run_dir, status)
+
+
 def stop_runpod(run_dir: Path) -> dict[str, Any]:
     """Delete the run's Pod and any duplicate its records name.
 
@@ -1775,14 +1805,7 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
         record_launch_phase(run_dir, realization_id, "pod_stop_requested", pod_id=pod_id)
     # The Pod's container disk is disposable; terminate compute explicitly,
     # together with any duplicate a recovered launch recorded beside it.
-    duplicates: list[str] = []
-    if realization:
-        try:
-            recorded = json.loads((run_dir / realization).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            recorded = {}
-        if isinstance(recorded, dict) and isinstance(recorded.get("duplicate_pod_ids"), list):
-            duplicates = [item for item in recorded["duplicate_pod_ids"] if isinstance(item, str) and item != pod_id]
+    duplicates = _duplicate_pod_ids(run_dir, status)
     requested_at = _now()
     targets: list[dict[str, Any]] = []
     for target in (pod_id, *duplicates):

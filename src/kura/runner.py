@@ -430,7 +430,7 @@ def run_unfinished(run_dir: Path) -> bool:
     if realization is None or realization.get("controlled_by", {}).get("request") != request.name:
         # Claimed, but its launch is not recorded yet: the follower settles it.
         return True
-    return not run_finished(status) or _pod_left_running(status)
+    return not run_finished(status) or _pod_left_running(run_dir, status)
 
 
 def pod_may_still_bill(run_dir: Path, status: dict[str, Any]) -> str | None:
@@ -442,22 +442,23 @@ def pod_may_still_bill(run_dir: Path, status: dict[str, Any]) -> str | None:
 
     if unresolved_create_intents(run_dir, "runpod"):
         return f"a launch stopped before recording whether it created a Pod; run `kura run reconcile {run_dir.name}` first, which finds it by name"
-    if _pod_left_running(status):
-        return f"its Pod {status['pod_id']} may still exist and bill; run `kura run stop {run_dir.name}` first"
+    from kura.executors.runpod import pods_left
+
+    if left := pods_left(run_dir, status):
+        return f"its {'Pods' if len(left) > 1 else 'Pod'} {', '.join(left)} may still exist and bill; run `kura run stop {run_dir.name}` first"
     return None
 
 
-def _pod_left_running(status: dict[str, Any]) -> bool:
-    """A finished run whose Pod still bills.
+def _pod_left_running(run_dir: Path, status: dict[str, Any]) -> bool:
+    """A finished run whose Pods still bill and that a follower deletes.
 
     A run that needs a person keeps its Pod only while its outputs are not
     collected; once the snapshot is downloaded the Pod holds nothing more.
     """
+    from kura.executors.runpod import pods_left
+
     held_for_a_person = status.get("state") == "recovery_required" and not status.get("downloaded_run")
-    return (
-        isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at")
-        and not held_for_a_person
-    )
+    return bool(pods_left(run_dir, status)) and not held_for_a_person
 
 
 def _realization(run_dir: Path, reference: Any) -> dict[str, Any] | None:
@@ -943,12 +944,12 @@ def _delete_pod(run_dir: Path, *, why: str) -> bool:
 
     False when RunPod could not be asked; the next follower tries again.
     """
-    from kura.executors.runpod import stop_runpod
+    from kura.executors.runpod import pods_left, stop_runpod
 
     try:
         _settle_unconfirmed_creates(run_dir)
         status = _status(run_dir)
-        if isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at"):
+        if pods_left(run_dir, status):
             stop_runpod(run_dir)
             _log(f"{run_dir.name}: deleted the Pod ({why})")
     except (OSError, ValueError) as exc:
@@ -1023,7 +1024,7 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
     status = _status(run_dir)
     realization_id = str(realization.get("id"))
     if run_finished(status):
-        if _pod_left_running(status):
+        if _pod_left_running(run_dir, status):
             # Collected or never started: either way nothing on the Pod is still needed, so a
             # failed delete is retried uncounted and never rewrites how the run ended.
             if _delete_pod(run_dir, why="the finished run left it running"):
@@ -1103,7 +1104,7 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     status = _status(run_dir)
     if run_finished(status):
         # The RunPod controller already notified completion with the request's channels.
-        return 1 if _pod_left_running(status) else 0
+        return 1 if _pod_left_running(run_dir, status) else 0
     if code is None:
         return 1
     realization = _realization(run_dir, status.get("last_realization"))
