@@ -218,8 +218,9 @@ secrets set RUNPOD_API_KEY`, and its next try reads it and continues. The
 Pod's lease bounds the retries (its unattended wait usually ends it sooner):
 report the cause named in `logs/runner.log`, or collect by hand with
 `kura run download <run-id> --force`; a longer lease (`kura run lease`) is the
-user's billing decision. A job started before the runner
-existed is still followed in-process by `kura run execute`.
+user's billing decision. The runner notifies when the run finishes, on the
+channels `KURA_NOTIFY` names, else the ones the host can use (ntfy when
+`KURA_NTFY_TOPIC` is set), the same for a local run.
 
 ```sh
 kura run execute <run-id>

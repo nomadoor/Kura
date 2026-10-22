@@ -12,10 +12,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
+from kura.executors import launch_docker, launch_runpod, observe_run
 from kura.yamlio import YAMLError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
-from kura.executors.runpod import confirm_runpod_billing, pod_may_exist, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, append_run_event, record_launch_phase, can_start, start_refusal
+from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -52,26 +52,6 @@ def _unattended_wait(value: Any) -> tuple[int | None, str]:
     if seconds <= 0:
         return 0, "off; only the maximum lease deletes the Pod"
     return seconds, f"{value} after the job ends; then the Pod deletes itself unless outputs were collected"
-
-
-def run_remote(run_id: str, **kwargs: Any) -> int:
-    """Launch (or follow) a RunPod run and collect it; one controller per run at a time."""
-    try:
-        run_dir = _run_path(run_id)
-        if not run_dir.is_dir():
-            raise ValueError(f"run does not exist: {run_id}")
-        with _run_operation_lock(run_dir, "controller", blocking=False):
-            # Checked again under the controller lock: the run may have changed since execute looked,
-            # and a stale decision must not follow or relaunch. The runner decides this in its follower.
-            if kwargs.get("reattach") and not _running_remote_job(run_id):
-                raise ValueError(f"run {run_id} is no longer running a job to follow; check `kura run status {run_id}`")
-            return _run_remote_locked(run_id, **kwargs)
-    except _OperationBusy:
-        print(f"cannot run remote job: another `kura run execute` is already controlling {run_id}; let it finish or stop it first", file=sys.stderr)
-        return 1
-    except (OSError, ValueError) as exc:
-        print(f"cannot run remote job: {_safe_error(exc)}", file=sys.stderr)
-        return 1
 
 
 def _run_remote_locked(
@@ -167,9 +147,6 @@ def _run_remote_locked(
             except (OSError, json.JSONDecodeError):
                 status_now = {"state": "recovery_required"}
             print(format_run_completion(_workspace(), run_dir, status_now))
-            _notify(notify_channels, subject=f"Kura run needs attention: {run_id}",
-                    body=f"Run {run_id} finished, but {status_now.get('publication_error') or 'its outputs could not be published'}. "
-                         f"The outputs are downloaded; the Pod will be stopped now. Inspect with `kura run status {run_id}`.")
             return 1
         if realization_id:
             record_launch_phase(run_dir, realization_id, "download_finished")
@@ -182,15 +159,12 @@ def _run_remote_locked(
             completion_status = {}
         # Printed as recorded: the collection settles the state, and this follower's exit code does not rewrite it.
         print(format_run_completion(_workspace(), run_dir, completion_status))
-        state_word = str(completion_status.get("state") or "finished")
-        _notify(notify_channels, subject=f"Kura run {state_word}: {run_id}", body=f"Run {run_id} {state_word} with exit code {exit_code}. The Pod will be stopped now.")
         return exit_code
     except TransferRefused as exc:
         # Refused before any upload: nothing ran remotely, so stop at once;
         # there is nothing to review.
         safe_to_stop = True
         print(f"cannot run remote job: {_safe_error(exc)}; stopping the unused Pod", file=sys.stderr)
-        _notify(notify_channels, subject=f"Kura run refused: {run_id}", body=f"Run {run_id} was refused before upload:\n{_safe_error(exc)}\nThe unused Pod is being stopped.")
         return 1
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         message = _safe_error(exc)
@@ -202,26 +176,11 @@ def _run_remote_locked(
             + f". Run `kura run execute {run_id}` again to follow the job and collect."
         )
         print(deadline_note, file=sys.stderr)
-        if controlled_by:
-            # The runner retries this attempt itself, notifies once when an exited job cannot be
-            # collected, and when the run ends; a notice per retry would only ask a person to act.
-            # A launch that recorded no Pod is not retried: it ends `launch_failed`.
-            print("the job runner retries this follower; nothing to do unless it notifies" if launched
-                  else "the job runner records this launch as failed once no Pod it may have created is left unsettled", file=sys.stderr)
-            return 1
-        _notify(
-            notify_channels,
-            subject=f"Kura run controller failed: {run_id}",
-            body=(
-                f"Run {run_id} controller stopped before confirmed download/stop:\n"
-                f"{message}\n\n"
-                f"{deadline_note}\n\n"
-                "The remote Pod may still be running and billing. Recover with:\n"
-                f"kura run reconcile {run_id}\n"
-                f"kura run download {run_id} --force\n"
-                f"kura run stop {run_id}"
-            ),
-        )
+        # The runner retries this attempt itself, notifies once when an exited job cannot be
+        # collected, and when the run ends; a notice per retry would only ask a person to act.
+        # A launch that recorded no Pod is not retried: it ends `launch_failed`.
+        print("the job runner retries this follower; nothing to do unless it notifies" if launched
+              else "the job runner records this launch as failed once no Pod it may have created is left unsettled", file=sys.stderr)
         return 1
     finally:
         if launched and safe_to_stop:
@@ -233,41 +192,6 @@ def _run_remote_locked(
                 print(f"cannot stop the RunPod pod: {_safe_error(exc)}; run `kura run stop {run_id}`", file=sys.stderr)
         elif launched:
             print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `kura run stop {run_id}` after recovery", file=sys.stderr)
-
-
-def _running_remote_job(run_id: str) -> bool:
-    """Whether a RunPod run's remote job is already running for this command to follow.
-
-    True when an earlier controller started the current realization's job and
-    is gone. The Pod is checked first, so a Pod that deleted itself is
-    recorded and reported, not followed; a Pod whose job never started is refused.
-    """
-    run_dir = _run_path(run_id)
-    if not (run_dir / "status.json").is_file():
-        return False
-    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    if status.get("state") != "running" or not pod_may_exist(status):
-        return False
-    try:
-        status = reconcile_runpod(run_dir, source="automatic")
-    except _OperationBusy as exc:
-        raise ValueError(f"cannot check the Pod of {run_id} right now ({exc}); try again") from exc
-    if status.get("pod_missing_at"):
-        raise ValueError(
-            f"RunPod has no Pod for {run_id} any more, so the run is recorded as interrupted: if it deleted itself after its "
-            f"wait or lease, its uncollected outputs are gone. Start a new run with `kura run new --from {run_id} --slug <words>`"
-        )
-    if status.get("state") != "running":
-        return False
-    realization_ref = status.get("last_realization")
-    realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else ""
-    started = realization_id and remote_job_started(run_dir, realization_id)
-    if not started:
-        raise ValueError(
-            f"run {run_id} has a running Pod but its job never started (an earlier launch stopped mid-way); "
-            f"run `kura run stop {run_id}`, then start a new run from its settings with `kura run new --from {run_id} --slug <words>`"
-        )
-    return True
 
 
 def execute_run(
@@ -298,7 +222,7 @@ def execute_run(
         if render_executor(locked) == "runpod":
             return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels, runpod={"image": image, "yes": yes, "max_lease": max_lease})
         return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels)
-    if executor == "runpod" and locked.get("type", "train") != "render" and not _runs_outside_the_runner(run_id):
+    if executor == "runpod":
         policy = capacity_policy(locked)
         return _launch_runpod_through_runner(run_id, follow=True, yes=yes, options={
             "upload_timeout": upload_timeout, "job_timeout": job_timeout, "download_attempts": download_attempts,
@@ -308,30 +232,6 @@ def execute_run(
             "capacity_poll_interval": (policy["poll_interval"] or "30s") if capacity_poll_interval is None else capacity_poll_interval,
             "unattended_wait": unattended_wait,
         })
-    if executor == "runpod":
-        try:
-            reattach = _running_remote_job(run_id)
-        except ValueError as exc:
-            print(f"cannot execute run: {_safe_error(exc)}", file=sys.stderr)
-            return 1
-        policy = capacity_policy(locked)
-        frozen_wait = policy["timeout"] or "0"
-        frozen_poll = policy["poll_interval"] or "30s"
-        return run_remote(
-            run_id,
-            upload_timeout=upload_timeout,
-            job_timeout=job_timeout,
-            download_attempts=download_attempts,
-            download_interval=download_interval,
-            max_lease=max_lease,
-            notify_channels=notify_channels,
-            image=image,
-            wait_for_capacity=frozen_wait if wait_for_capacity is None else wait_for_capacity,
-            capacity_poll_interval=frozen_poll if capacity_poll_interval is None else capacity_poll_interval,
-            yes=yes,
-            unattended_wait=unattended_wait,
-            reattach=reattach,
-        )
     if executor == "docker":
         return _launch_docker_through_runner(run_id, image=image, follow=True, notify_channels=notify_channels)
     print(f"cannot execute run: unsupported compiled executor {executor!r}", file=sys.stderr)
@@ -677,20 +577,6 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
         return 130
     print(format_render_completion(workspace, run_dir, exit_code=code))
     return code
-
-
-def _runs_outside_the_runner(run_id: str) -> bool:
-    """A RunPod job started before the runner existed keeps its in-process follower."""
-    from kura import runner
-
-    run_dir = _run_path(run_id)
-    try:
-        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if status.get("state") != "running" or runner.runner_controlled(run_dir):
-        return False
-    return True
 
 
 def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, options: dict[str, Any]) -> int:

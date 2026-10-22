@@ -144,10 +144,12 @@ class RunnerEndsTheRunTests(unittest.TestCase):
 
             # The runner's next attempt asks RunPod, which says the Pod no longer exists.
             with _api([RunPodAPIError("RunPod Pod not found", status_code=404)]), \
-                    patch("kura.run_commands.launch._run_remote_locked") as remote, patch.object(runner, "_notify_text") as notify:
+                    patch("kura.run_commands.launch._run_remote_locked") as remote, patch("kura.notifications.notify") as notify:
                 self.assertEqual(runner.work(workspace, "example", request.name), 0)
             remote.assert_not_called()
             notify.assert_called_once()
+            self.assertEqual(notify.call_args.kwargs["subject"], "Kura run interrupted: example")
+            self.assertIn("outputs not collected before it went are gone", notify.call_args.kwargs["body"])
             status = _status(run_dir)
             self.assertEqual(status["state"], "interrupted")
             self.assertTrue(status["pod_missing_at"])

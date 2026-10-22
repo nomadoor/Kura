@@ -492,7 +492,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
 
     def test_a_pre_upload_refusal_stops_the_unused_pod_without_a_review_hold(self) -> None:
         from kura.dataset_transfer import StagedTransferChanged
-        from kura.run_commands.launch import run_remote
+        from kura.run_commands.launch import _run_remote_locked
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -505,11 +505,11 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 patch("kura.run_commands.launch.download_with_retries") as download,
                 patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop,
                 patch("kura.run_commands.launch.time.sleep") as sleep,
-                patch("kura.run_commands.launch._notify"),
                 patch("sys.stderr", new_callable=io.StringIO),
             ):
-                code = run_remote(
+                code = _run_remote_locked(
                     "example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0,
+                    controlled_by={"request": "r.launch.json"},
                 )
 
             self.assertEqual(code, 1)

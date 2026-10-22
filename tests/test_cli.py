@@ -108,11 +108,11 @@ def _wsl_with_short_host_drive(*, linux_free_gib: int = 900, host_free_gib: int 
 
 
 def _run_remote_in_process(args: argparse.Namespace) -> int:
-    """A RunPod run through its in-process controller, as the runner's follower runs it."""
-    from kura.run_commands.launch import run_remote
+    """A RunPod run through its controller, as the runner's follower runs it."""
+    from kura.run_commands.launch import _run_remote_locked
 
-    options = {key: value for key, value in vars(args).items() if key not in {"run_id", "notify", "hold_for", "notify_repeat_interval"}}
-    return run_remote(args.run_id, notify_channels=getattr(args, "notify", None), **options)
+    options = {key: value for key, value in vars(args).items() if key not in {"run_id", "notify"}}
+    return _run_remote_locked(args.run_id, notify_channels=getattr(args, "notify", None), controlled_by={"request": "r.launch.json"}, **options)
 
 class InitCommandTests(unittest.TestCase):
     def test_cli_version_and_help_text(self) -> None:
@@ -7839,6 +7839,22 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("/usr/sbin/sshd", start[2])
             self.assertNotIn("train.py", start[2])
 
+    def test_a_confirmed_launch_measures_stock_only_when_it_waits_for_capacity(self) -> None:
+        # The writer of the runner request showed the price and took the confirmation; creating
+        # without a wait looks nothing up again, and a wait measures stock in its own rounds.
+        for wait_sec, lookups in ((0, 0), (600, 1)):
+            with self.subTest(wait_sec=wait_sec), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = self._run_dir(root)
+                self._stage_upload(root, run_dir)
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("sys.stderr", io.StringIO()):
+                    with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)) as measured, \
+                         patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
+                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                                      image="registry/image:tag", config=self._config(), yes=True, max_lease_sec=3600,
+                                      wait_for_capacity_sec=wait_sec, controlled_by={"request": "r.launch.json", "billing_confirmed_at": "2026-10-23T00:00:00+09:00"})
+                self.assertEqual(measured.call_count, lookups)
+
     def test_launch_runpod_refuses_a_removed_storage_mode_before_any_runpod_api_call(self) -> None:
         # A runner launch request written before the modes were removed carries its own settings.
         for mode in ("container_disk", "object_staging"):
@@ -9048,29 +9064,28 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(launch.call_args.kwargs["max_lease"], 3 * 3600)
             stop.assert_not_called()
 
-    def test_run_remote_notifies_loudly_on_controller_timeout(self) -> None:
+    def test_a_controller_timeout_leaves_the_pod_to_the_runner_retry_without_a_notice(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             (root / "runs" / "example").mkdir(parents=True)
             previous = Path.cwd()
             os.chdir(root)
+            stderr = io.StringIO()
             try:
                 with patch("kura.run_commands.launch.stage_run", return_value=0), \
                      patch("kura.run_commands.launch.launch_run", return_value=0), \
                      patch("kura.run_commands.launch._runpod_run_over_ssh", side_effect=subprocess.TimeoutExpired(["runpod-remote-job", "example"], 1)), \
-                     patch("kura.run_commands.launch._notify") as notify, \
+                     patch("kura.notifications.notify") as notify, patch("sys.stderr", stderr), \
                      patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop:
-                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, notify="ntfy", hold_for="30m", notify_repeat_interval="10m"))
+                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, notify="ntfy"))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 1)
             stop.assert_not_called()
-            notify.assert_called_once()
-            self.assertIn("controller failed", notify.call_args.kwargs["subject"])
-            self.assertIn("may still be running and billing", notify.call_args.kwargs["body"])
-            self.assertIn("deletes itself (with its outputs) at the maximum lease after it started, collected or not, and earlier by the unattended wait", notify.call_args.kwargs["body"])
-            self.assertIn("kura run stop example", notify.call_args.kwargs["body"])
+            # The runner retries the follower and notifies when the run ends; a notice per retry would only ask a person to act.
+            notify.assert_not_called()
+            self.assertIn("deletes itself (with its outputs) at the maximum lease after it started", stderr.getvalue())
 
     def test_stop_run_without_realization_reports_clean_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9104,7 +9119,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
                      patch("kura.run_commands.launch.download_with_retries", return_value=0), \
                      patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop:
-                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="0"))
+                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
@@ -9125,7 +9140,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
                      patch("kura.run_commands.launch.download_with_retries", return_value=0), \
                      patch("kura.run_commands.launch.stop_runpod", return_value={}):
-                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="0"))
+                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)

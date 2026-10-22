@@ -773,8 +773,9 @@ class RunPodFollowerTests(unittest.TestCase):
                 codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
             self.assertEqual(codes, [1] * attempts)
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "completed")
-            notify.assert_called_once()
-            self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
+            # How the run ended, once, and that its Pod could not be deleted, once.
+            self.assertEqual([call.kwargs["subject"].split(":")[0] for call in notify.call_args_list],
+                             ["Kura run's Pod could not be deleted", "Kura run completed"])
 
     def test_a_job_whose_pid_file_exists_is_followed_not_deleted(self) -> None:
         with _workspace() as (root, run_dir):
@@ -834,7 +835,21 @@ class RunPodFollowerTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual((status["state"], status["downloaded_run"]), ("completed", "downloads/x"))
             self.assertFalse(runner.run_unfinished(run_dir))
-            notify.assert_called_once()
+            # One notice that collection is failing, and one that the run finished.
+            self.assertEqual([call.kwargs["subject"] for call in notify.call_args_list],
+                             ["Kura run's outputs could not be collected yet: example", "Kura run completed: example"])
+
+    def test_a_failure_notice_an_older_kura_counted_is_not_sent_again(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            self._exited_job(run_dir, request)
+            runner._sibling(request, ".collection-failures.json").write_text(json.dumps({"kind": "collection_failures", "count": 3}), encoding="utf-8")
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
+                 patch("kura.run_commands.launch._run_remote_locked", return_value=1), \
+                 patch("kura.notifications.notify") as notify:
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            notify.assert_not_called()
 
     def test_a_collection_that_fails_until_the_pod_is_gone_ends_interrupted(self) -> None:
         with _workspace() as (root, run_dir):
@@ -999,6 +1014,40 @@ class RunPodFollowerTests(unittest.TestCase):
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "unknown")
             self.assertFalse(runner.run_unfinished(run_dir))
 
+    def test_a_finished_run_is_notified_once_by_one_owner_on_both_executors(self) -> None:
+        # Docker and RunPod tell how a run finished through `_notify_finished`, by one channel rule, once.
+        for executor in ("docker", "runpod"):
+            for channels in (None, ["ntfy"]):
+                with self.subTest(executor=executor, channels=channels), _workspace() as (root, run_dir):
+                    if executor == "runpod":
+                        request = _runpod_request(run_dir, notify=channels)
+                    else:
+                        request = runner.write_launch_request(run_dir, executor="docker", notify=channels)
+                    runner.claim_request(request, 1)
+
+                    def collected(*_args, **_kwargs):
+                        _runpod_launched(run_dir, request, state="completed", publication_state="completed", pod_stopped_at="t")
+                        return 0
+
+                    def docker_finished(run_dir_arg, *_args, **_kwargs):
+                        _launched(run_dir_arg, request, state="completed", publication_state="completed")
+                        return _status_as_recorded(run_dir_arg)
+
+                    with patch("kura.run_commands.launch._run_remote_locked", side_effect=collected), \
+                         patch("kura.run_commands.launch.launch_run", side_effect=lambda *a, **k: _launched(run_dir, request, state="running") or 0), \
+                         patch("kura.executors.docker.reconcile_docker", side_effect=docker_finished), \
+                         patch.object(runner, "_notify_finished", wraps=runner._notify_finished) as owner, \
+                         patch("kura.notifications.notify") as notify:
+                        self.assertEqual(runner.work(root, "example", request.name, sleep=lambda _s: None), 0)
+                        if executor == "runpod":
+                            # A later follower (one that deletes a Pod left behind) notifies nothing more.
+                            runner.work(root, "example", request.name, sleep=lambda _s: None)
+                    self.assertGreaterEqual(owner.call_count, 1)
+                    # Without channels on the request, Kura's defaults apply (`notify(None, ...)`).
+                    notify.assert_called_once()
+                    self.assertEqual(notify.call_args.args[0], channels)
+                    self.assertEqual(notify.call_args.kwargs["subject"], "Kura run completed: example")
+
     def test_a_capacity_wait_cut_short_continues_whether_or_not_it_wrote_a_create_intent(self) -> None:
         # The follower can die before or after a refused create in the wait wrote the create intent. Either
         # way no Pod exists (the lookup by name finds none), so the confirmed launch continues the wait.
@@ -1104,7 +1153,8 @@ class RunPodFollowerTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "running")
             self.assertTrue(runner.run_unfinished(run_dir))
-            self.assertEqual(json.loads(runner._sibling(request, ".delete-failures.json").read_text(encoding="utf-8"))["count"], attempts)
+            # A marker says the one notice was sent; it is written once, not counted.
+            self.assertEqual(json.loads(runner._sibling(request, ".delete-failures.json").read_text(encoding="utf-8"))["kind"], "pod_delete_failures")
             notify.assert_called_once()
             self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
 

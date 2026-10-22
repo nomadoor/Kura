@@ -231,24 +231,16 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, 
             "{ id displayName memoryInGb " + " ".join(cloud_fields) + " }"
         )
     query = "query KuraGpuAvailability { " + " ".join(aliases) + " }"
-    body = json.dumps({"query": query}).encode("utf-8")
-    request = bearer_request(
-        "https://api.runpod.io/graphql", api_key, data=body, method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": f"Kura/{__version__}"},
-    )
     try:
-        with urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = _redact_secret_text(exc.read().decode("utf-8", errors="replace"))
-        kind = "auth" if exc.code in {401, 403} else "rate_limit" if exc.code == 429 else "transient" if exc.code >= 500 else "request"
-        return {"status": "unavailable", "error_kind": kind, "reason": f"RunPod GraphQL failed ({exc.code}): {detail}", "candidates": []}
-    except (URLError, OSError, json.JSONDecodeError) as exc:
+        data = _runpod_graphql(query, {}, api_key, timeout=20)
+    except RunPodAPIError as exc:
+        # A GraphQL error list arrives as status 400: a request problem, like any other 4xx but these.
+        code = exc.status_code
+        kind = "auth" if runpod_key_refused(exc) else "rate_limit" if code == 429 else "transient" if code >= 500 else "request"
+        return {"status": "unavailable", "error_kind": kind, "reason": str(exc), "candidates": []}
+    except ValueError as exc:
+        # Unreachable, a broken reply, or one without data: worth trying again.
         return {"status": "unavailable", "error_kind": "transient", "reason": _redact_secret_text(str(exc)), "candidates": []}
-    errors = payload.get("errors") if isinstance(payload, dict) else None
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if errors or not isinstance(data, dict):
-        return {"status": "unavailable", "error_kind": "request", "reason": _redact_secret_text(str(errors or "unexpected RunPod response")), "candidates": []}
     candidates: list[dict[str, Any]] = []
     for index, requested_id in enumerate(gpu_type_ids):
         matches = data.get(f"g{index}")
@@ -428,8 +420,9 @@ def _confirm_runpod_launch(
     unattended_wait: str | None = None,
     min_cuda_version: str | None = None,
     confirmed_at: str | None = None,
-) -> dict[str, Any]:
-    """Require one authorization before a billable Pod-creation attempt sequence."""
+) -> dict[str, Any] | None:
+    """Require one authorization before a billable Pod-creation attempt sequence; the stock and price
+    shown, or None when the request's writer already confirmed (`confirmed_at`)."""
 
     interactive = sys.stdin.isatty()
     if not interactive and not yes:
@@ -438,12 +431,13 @@ def _confirm_runpod_launch(
             "use --yes only when the user has explicitly instructed this billed launch"
         )
 
-    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
     if confirmed_at:
-        # The command that wrote the launch request showed this and took the confirmation.
+        # The command that wrote the launch request showed the price and took the confirmation, so
+        # nothing is measured again here; a capacity wait measures stock in its own rounds.
         # A confirmation an older Kura recorded in UTC is shown in local time, as Kura writes its own.
         print(f"Creating the RunPod Pod confirmed at {host_time(confirmed_at) or confirmed_at}", file=sys.stderr)
-        return measurement
+        return None
+    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
     candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
     measured_by_id = {
         candidate.get("gpu_type_id"): candidate
