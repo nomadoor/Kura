@@ -9086,7 +9086,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
 
             self.assertEqual(code, 1)
-            self.assertIn("run has no realization to stop", stderr.getvalue())
+            self.assertIn("run has no launch recorded to stop", stderr.getvalue())
 
     def test_run_remote_stops_pod_immediately_when_hold_is_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
