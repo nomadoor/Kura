@@ -67,7 +67,6 @@ class ExecutorInfo:
     job_state: str | None = None
     remote_state: str | None = None
     downloaded: bool = False
-    recovery_required: bool = False
     pod_stopped: bool = False
     mirrored_checkpoint_step: int | None = None
     checkpoint_sync_error: str | None = None
@@ -712,7 +711,6 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
         job_state=_string(status.get("state")),
         remote_state=_string(status.get("remote_state")),
         downloaded=bool(status.get("downloaded_run")),
-        recovery_required=status.get("state") == "recovery_required",
         # A Pod that may still bill is up; one a stop deleted or RunPod reported gone is not.
         pod_stopped=provider == "runpod" and isinstance(status.get("pod_id"), str) and not pods_left(run_dir, status),
         mirrored_checkpoint_step=mirrored_step,

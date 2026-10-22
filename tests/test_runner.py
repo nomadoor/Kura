@@ -681,6 +681,10 @@ def _runpod_request(run_dir: Path, **extra) -> Path:
     })
 
 
+def _status_as_recorded(run_dir: Path, *_args, **_kwargs) -> dict:
+    return json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+
+
 def _runpod_launched(run_dir: Path, request: Path, **status) -> None:
     (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"},
                                                                   "controlled_by": {"request": request.name}}), encoding="utf-8")
@@ -763,13 +767,12 @@ class RunPodFollowerTests(unittest.TestCase):
             request = _runpod_request(run_dir, notify=["ntfy"])
             runner.claim_request(request, 1)
             _runpod_launched(run_dir, request, state="completed")
-            attempts = runner.COLLECTION_ATTEMPTS + 2
+            attempts = 5
             with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")), \
                  patch("kura.notifications.notify") as notify:
                 codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
             self.assertEqual(codes, [1] * attempts)
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "completed")
-            self.assertFalse(runner._sibling(request, ".failures.json").exists())
             notify.assert_called_once()
             self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
 
@@ -799,49 +802,109 @@ class RunPodFollowerTests(unittest.TestCase):
                 self.assertEqual(runner.work(root, "example", request.name), 1)
             stop.assert_not_called()
 
-    def test_repeated_collection_failures_hand_the_run_to_a_person(self) -> None:
-        with _workspace() as (root, run_dir):
-            request = _runpod_request(run_dir)
-            runner.claim_request(request, 1)
-            # The job exited on the Pod, so each failed attempt is a failed collection.
-            _runpod_launched(run_dir, request, state="running", remote_state="completed", remote_exit_code=0)
-            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
-            codes = []
-            with patch("kura.run_commands.launch._run_remote_locked", return_value=1):
-                for _ in range(runner.COLLECTION_ATTEMPTS):
-                    codes.append(runner.work(root, "example", request.name))
-            self.assertEqual(codes, [1] * (runner.COLLECTION_ATTEMPTS - 1) + [0])
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual(status["state"], "recovery_required")
-            self.assertNotIn("recovery_required", status)  # the state alone says a person is needed
-            self.assertTrue(run_finished(status))
+    def _exited_job(self, run_dir: Path, request: Path) -> None:
+        # The job exited on the Pod, so each failed attempt is a failed collection.
+        _runpod_launched(run_dir, request, state="running", remote_state="completed", remote_exit_code=0)
+        (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
 
-    def test_failures_while_the_job_still_runs_are_retried_and_never_counted(self) -> None:
+    def test_a_failed_collection_is_retried_while_the_pod_exists_and_needs_no_person(self) -> None:
+        # The Pod is disposable: the runner keeps collecting it, notifies once, and never hands the run to a person.
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            self._exited_job(run_dir, request)
+            attempts = 5
+
+            def collected(*_args, **_kwargs):
+                _runpod_launched(run_dir, request, state="completed", exit_code=0, remote_exit_code=0,
+                                 publication_state="completed", downloaded_run="downloads/x", pod_stopped_at="t")
+                return 0
+
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
+                 patch("kura.notifications.notify") as notify:
+                with patch("kura.run_commands.launch._run_remote_locked", return_value=1):
+                    codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
+                self.assertEqual(codes, [1] * attempts)
+                self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+                self.assertTrue(runner.run_unfinished(run_dir))
+                notify.assert_called_once()
+                self.assertIn("could not be collected", notify.call_args.kwargs["subject"])
+                with patch("kura.run_commands.launch._run_remote_locked", side_effect=collected):
+                    self.assertEqual(runner.work(root, "example", request.name), 0)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((status["state"], status["downloaded_run"]), ("completed", "downloads/x"))
+            self.assertFalse(runner.run_unfinished(run_dir))
+            notify.assert_called_once()
+
+    def test_a_collection_that_fails_until_the_pod_is_gone_ends_interrupted(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            self._exited_job(run_dir, request)
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
+                 patch("kura.run_commands.launch._run_remote_locked", return_value=1), \
+                 patch("kura.notifications.notify") as notify:
+                codes = [runner.work(root, "example", request.name) for _ in range(5)]
+
+                def gone(run_dir_arg, *_args, **_kwargs):
+                    _status(run_dir_arg, **{**_status_as_recorded(run_dir_arg), "pod_missing_at": "t"})
+                    return _status_as_recorded(run_dir_arg)
+
+                with patch("kura.executors.runpod.reconcile_runpod", side_effect=gone):
+                    codes.append(runner.work(root, "example", request.name))
+            self.assertEqual(codes, [1] * 5 + [0])
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "interrupted")
+            self.assertFalse(runner.run_unfinished(run_dir))
+            # One notice that collection is failing, and one that the run ended.
+            self.assertEqual([call.kwargs["subject"].split(":")[0] for call in notify.call_args_list],
+                             ["Kura run's outputs could not be collected yet", "Kura run interrupted"])
+
+    def test_failures_while_the_job_still_runs_are_retried_and_never_notified(self) -> None:
         # The API or SSH being unreachable while training continues is not a failed collection:
         # ending the run then would leave the Pod to delete itself with outputs nobody collected.
         with _workspace() as (root, run_dir):
-            request = _runpod_request(run_dir)
+            request = _runpod_request(run_dir, notify=["ntfy"])
             runner.claim_request(request, 1)
             _runpod_launched(run_dir, request, state="running")
             (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
-            attempts = runner.COLLECTION_ATTEMPTS + 2
+            attempts = 5
             with patch("kura.run_commands.launch._run_remote_locked", return_value=1), \
-                 patch("kura.executors.runpod.reconcile_runpod", side_effect=lambda run_dir_arg, *_a, **_k: json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8"))):
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
+                 patch("kura.notifications.notify") as notify:
                 codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
             self.assertEqual(codes, [1] * attempts)
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
-            self.assertFalse(runner._sibling(request, ".failures.json").exists())
+            notify.assert_not_called()
 
-    def test_a_launch_that_fails_before_recording_a_pod_is_counted(self) -> None:
-        # No Pod exists, so nothing can be lost; three failed launches hand the request to a person.
+    def test_a_launch_that_fails_before_recording_a_pod_fails_at_once_as_on_docker(self) -> None:
+        # No Pod exists, so nothing can be lost or collected: the request ends on its first failure.
+        for executor in ("runpod", "docker"):
+            with self.subTest(executor=executor), _workspace() as (root, run_dir):
+                request = _runpod_request(run_dir) if executor == "runpod" else runner.write_launch_request(run_dir, executor="docker")
+                runner.claim_request(request, 1)
+                with patch("kura.run_commands.launch._run_remote_locked", return_value=1) as remote, \
+                     patch("kura.run_commands.launch.launch_run", return_value=1) as local:
+                    self.assertEqual(runner.work(root, "example", request.name), 0)
+                self.assertEqual((remote if executor == "runpod" else local).call_count, 1)
+                self.assertEqual(runner.request_outcome(request)["kind"], "launch_failed")
+                self.assertFalse(runner.run_unfinished(run_dir))
+                self.assertNotEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "recovery_required")
+
+    def test_a_launch_cut_short_after_its_create_intent_waits_for_the_lookup_by_name(self) -> None:
+        # A Pod may exist under the intent's name: the next follower settles it before anything ends.
         with _workspace() as (root, run_dir):
             request = _runpod_request(run_dir)
             runner.claim_request(request, 1)
-            _status(run_dir, state="staged")
-            with patch("kura.run_commands.launch._run_remote_locked", return_value=1):
-                codes = [runner.work(root, "example", request.name) for _ in range(runner.COLLECTION_ATTEMPTS)]
-            self.assertEqual(codes, [1] * (runner.COLLECTION_ATTEMPTS - 1) + [0])
-            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "recovery_required")
+            def cut_short(*_args, **_kwargs):
+                (run_dir / "realizations" / "r1.create-intent.json").write_text(json.dumps({
+                    "executor": "runpod", "controlled_by": {"request": request.name}}), encoding="utf-8")
+                return 1
+
+            with patch("kura.run_commands.launch._run_remote_locked", side_effect=cut_short):
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            self.assertIsNone(runner.request_outcome(request))
+            self.assertTrue(runner.run_unfinished(run_dir))
 
     def test_a_collected_run_whose_pod_delete_failed_keeps_how_it_ended(self) -> None:
         # The controller collected and its stop failed: the follower retries the delete, never the collection.
@@ -855,13 +918,12 @@ class RunPodFollowerTests(unittest.TestCase):
 
             with patch("kura.run_commands.launch._run_remote_locked", side_effect=collected_but_not_stopped):
                 self.assertEqual(runner.work(root, "example", request.name), 1)
-            attempts = runner.COLLECTION_ATTEMPTS + 2
+            attempts = 5
             with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")):
                 codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
             self.assertEqual(codes, [1] * attempts)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual((status["state"], status["exit_code"]), ("completed", 0))
-            self.assertFalse(runner._sibling(request, ".failures.json").exists())
 
     def test_a_stop_request_stops_the_pod(self) -> None:
         from kura.executors.common import StopRequested
@@ -899,7 +961,7 @@ class RunPodFollowerTests(unittest.TestCase):
             request = _runpod_request(run_dir, notify=["ntfy"])
             runner.claim_request(request, 1)
             _runpod_launched(run_dir, request, state="running")
-            attempts = runner.COLLECTION_ATTEMPTS + 2
+            attempts = 5
             with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")), \
                  patch("kura.notifications.notify") as notify:
                 codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
@@ -907,7 +969,6 @@ class RunPodFollowerTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "running")
             self.assertTrue(runner.run_unfinished(run_dir))
-            self.assertFalse(runner._sibling(request, ".failures.json").exists())
             self.assertEqual(json.loads(runner._sibling(request, ".delete-failures.json").read_text(encoding="utf-8"))["count"], attempts)
             notify.assert_called_once()
             self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
@@ -935,7 +996,6 @@ class RunPodFollowerTests(unittest.TestCase):
             with patch("kura.run_commands.launch._run_remote_locked", side_effect=stop_arrives_during_the_wait):
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             self.assertTrue(runner.stop_done(run_dir))
-            self.assertFalse(request.with_name(request.name.replace(".launch.json", ".failures.json")).exists())
 
     def test_runpod_requests_do_not_wait_for_a_local_slot(self) -> None:
         with _workspace() as (root, first):

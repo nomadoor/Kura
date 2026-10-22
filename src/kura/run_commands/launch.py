@@ -203,9 +203,11 @@ def _run_remote_locked(
         )
         print(deadline_note, file=sys.stderr)
         if controlled_by:
-            # The runner retries this attempt itself and notifies when the run needs a person or
-            # ends; a notice per retry (a Pod unreachable for hours) would only ask a person to act.
-            print("the job runner retries this follower; nothing to do unless it notifies", file=sys.stderr)
+            # The runner retries this attempt itself, notifies once when an exited job cannot be
+            # collected, and when the run ends; a notice per retry would only ask a person to act.
+            # A launch that recorded no Pod is not retried: it ends `launch_failed`.
+            print("the job runner retries this follower; nothing to do unless it notifies" if launched
+                  else "the job runner records this launch as failed once no Pod it may have created is left unsettled", file=sys.stderr)
             return 1
         _notify(
             notify_channels,

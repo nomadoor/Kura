@@ -450,15 +450,10 @@ def pod_may_still_bill(run_dir: Path, status: dict[str, Any]) -> str | None:
 
 
 def _pod_left_running(run_dir: Path, status: dict[str, Any]) -> bool:
-    """A finished run whose Pods still bill and that a follower deletes.
-
-    A run that needs a person keeps its Pod only while its outputs are not
-    collected; once the snapshot is downloaded the Pod holds nothing more.
-    """
+    """A finished run whose Pods still bill; a follower deletes them, since no Pod is kept for a person."""
     from kura.executors.runpod import pods_left
 
-    held_for_a_person = status.get("state") == "recovery_required" and not status.get("downloaded_run")
-    return bool(pods_left(run_dir, status)) and not held_for_a_person
+    return bool(pods_left(run_dir, status))
 
 
 def _realization(run_dir: Path, reference: Any) -> dict[str, Any] | None:
@@ -926,8 +921,6 @@ def _acknowledge_stop(run_dir: Path, request: Path) -> None:
 
 # RunPod followers ---------------------------------------------------------------------
 
-COLLECTION_ATTEMPTS = 3
-
 
 def _settle_unconfirmed_creates(run_dir: Path) -> None:
     """Find by name any Pod a launch cut short may have created, so it can be deleted or followed."""
@@ -1029,7 +1022,7 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
             # failed delete is retried uncounted and never rewrites how the run ended.
             if _delete_pod(run_dir, why="the finished run left it running"):
                 return 0
-            return _pod_delete_failed(run_dir, request, details, "has finished, but its Pod")
+            return _pod_delete_failed(run_dir, request, details, f"Run {run_dir.name} has finished, but its Pod")
         return 0
     if not isinstance(realization.get("pod"), dict) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
         # The Pod is gone or was never created; nothing is left to follow.
@@ -1059,22 +1052,40 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
     return _delete_unstarted_pod(run_dir, request, details)
 
 
-def _pod_delete_failed(run_dir: Path, request: Path, details: dict[str, Any], what: str) -> None:
-    """Record a failed delete of a Pod nothing on which is needed; None tells the runner to retry it uncounted.
+# A step the runner retries reads the RunPod key it started with.
+_STALE_KEY_HINT = ("If the RunPod key changed, the runner still holds the old one: run `kura runner stop`, then "
+                   "`kura runner start` to read the current key.")
 
-    The delete accepts "already gone", so retrying it is safe; holding the run for a
-    person would only keep the Pod billing.
-    """
-    retries_path = _sibling(request, ".delete-failures.json")
-    retries = int(_read_json(retries_path).get("count", 0)) + 1
-    atomic_write_json(retries_path, record("pod_delete_failures", {"count": retries, "at": _now()}))
-    if retries == 1:
-        _notify_text(details, f"Kura run's Pod could not be deleted: {run_dir.name}",
-                     f"Run {run_dir.name} {what} could not be deleted yet, so it may still be billing. "
-                     f"The runner keeps trying; runs/{run_dir.name}/logs/runner.log says why it failed. "
-                     "If the RunPod key changed, the runner still holds the old one: run `kura runner stop`, then "
-                     "`kura runner start` to read the current key. You can also delete the Pod in the RunPod console.")
+
+def _retry_uncounted(request: Path, details: dict[str, Any], suffix: str, kind: str, subject: str, body: str) -> None:
+    """Record one more failed try of a step the runner retries with its backoff until it succeeds
+    or the Pod is gone, and notify on the first; None tells the runner to retry it. The count only
+    decides that one notification: nothing hands a RunPod run to a person (runpod-unattended-completion ADR)."""
+    path = _sibling(request, suffix)
+    count = int(_read_json(path).get("count", 0)) + 1
+    atomic_write_json(path, record(kind, {"count": count, "at": _now()}))
+    if count == 1:
+        _notify_text(details, subject, body)
     return None
+
+
+def _pod_delete_failed(run_dir: Path, request: Path, details: dict[str, Any], what: str) -> None:
+    """A failed delete of a Pod nothing on which is needed; the delete accepts "already gone", so retrying it is safe."""
+    return _retry_uncounted(
+        request, details, ".delete-failures.json", "pod_delete_failures", f"Kura run's Pod could not be deleted: {run_dir.name}",
+        f"{what} could not be deleted yet, so it may still be billing. The runner keeps trying; "
+        f"runs/{run_dir.name}/logs/runner.log says why it failed. {_STALE_KEY_HINT} You can also delete the Pod in the RunPod console.")
+
+
+def _collection_failed(run_dir: Path, request: Path, details: dict[str, Any]) -> None:
+    """A failed collection of a job that has exited; the Pod's lease bounds the retries."""
+    run_id = run_dir.name
+    return _retry_uncounted(
+        request, details, ".collection-failures.json", "collection_failures", f"Kura run's outputs could not be collected yet: {run_id}",
+        f"Run {run_id}'s job has exited, but its outputs could not be collected yet; runs/{run_id}/logs/runner.log says why. "
+        "The runner keeps trying while the Pod exists, and the Pod deletes itself, with anything not collected, at its "
+        f"unattended wait or lease (`kura run lease {run_id} <duration>` extends it). {_STALE_KEY_HINT} "
+        f"You can also collect by hand with `kura run download {run_id} --force`.")
 
 
 def _delete_unstarted_pod(run_dir: Path, request: Path, details: dict[str, Any]) -> int | None:
@@ -1082,7 +1093,7 @@ def _delete_unstarted_pod(run_dir: Path, request: Path, details: dict[str, Any])
     from kura.executors.common import end_run
 
     if not _delete_pod(run_dir, why="its job never started"):
-        return _pod_delete_failed(run_dir, request, details, "never started its job, and its Pod")
+        return _pod_delete_failed(run_dir, request, details, f"Run {run_dir.name} never started its job, and its Pod")
     end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
                  f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Start it again as a new run with `kura run new --from {run_dir.name} --slug <words>`.")
@@ -1090,39 +1101,32 @@ def _delete_unstarted_pod(run_dir: Path, request: Path, details: dict[str, Any])
 
 
 def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any], code: int | None) -> int:
-    """A finished run ends the follower; repeated failures to collect hand the run to a person.
+    """What a finished attempt leaves for the runner: 0 when the request needs no more followers, 1 to retry
+    with the runner's backoff.
 
-    Counted: a launch that failed before it recorded a Pod, and a failed
-    collection of a job whose exit is recorded. Retried uncounted with the
-    runner's backoff: `code` None (a retry-safe step that failed), anything
-    while this request's Pod exists and its job's exit is not recorded (the API
-    or SSH unreachable while training continues), and a finished run whose Pod
-    delete failed (the next follower deletes it).
+    A launch that recorded no Pod for this request failed at once, as on Docker: no Pod exists, so
+    nothing is billed or lost (one cut short after its create intent waits for the lookup by name).
+    Anything else is retried, uncounted, until the run is finished and its Pods are gone: a failure
+    while the job runs, a failed delete, and a failed collection of a job that exited, which
+    notifies once. A Pod that is gone ends the run in `_continue_runpod`.
     """
-    from kura.executors.common import end_run
+    from kura.executors.common import unresolved_create_intents
 
     status = _status(run_dir)
+    realization = _realization(run_dir, status.get("last_realization"))
+    launched = realization is not None and (realization.get("controlled_by") or {}).get("request") == request.name
+    if not launched and code:
+        if unresolved_create_intents(run_dir, "runpod"):
+            return 1
+        _record_request_outcome(request, ".launch-failed.json", "launch_failed", exit_code=code,
+                                error=f"the launch failed before it recorded a Pod; see runs/{run_dir.name}/logs/runner.log")
+        return 0
     if run_finished(status):
         # The RunPod controller already notified completion with the request's channels.
         return 1 if _pod_left_running(run_dir, status) else 0
-    if code is None:
-        return 1
-    realization = _realization(run_dir, status.get("last_realization"))
-    launched = realization is not None and (realization.get("controlled_by") or {}).get("request") == request.name
-    if launched and not isinstance(status.get("remote_exit_code"), int):
-        return 1
-    failures_path = _sibling(request, ".failures.json")
-    failures = int(_read_json(failures_path).get("count", 0)) + 1
-    atomic_write_json(failures_path, record("follower_failures", {"count": failures, "at": _now()}))
-    if failures < COLLECTION_ATTEMPTS:
-        return 1
-    end_run(run_dir, "recovery_required", reason=f"collection failed {failures} times", keep_exit_code=True)
-    _log(f"{run_dir.name}: collection failed {failures} times; the run needs a person (see logs/runner.log)")
-    _notify_text(details, f"Kura run needs attention: {run_dir.name}",
-                 f"Run {run_dir.name} could not be collected after {failures} attempts, and its Pod may still be billing. "
-                 f"Inspect with `kura run status {run_dir.name}`, then `kura run download {run_dir.name} --force` "
-                 f"and `kura run stop {run_dir.name}`.")
-    return 0
+    if code and isinstance(status.get("remote_exit_code"), int):
+        _collection_failed(run_dir, request, details)
+    return 1
 
 
 def _stop_runpod_on_request(run_dir: Path, request: Path, details: dict[str, Any]) -> bool:

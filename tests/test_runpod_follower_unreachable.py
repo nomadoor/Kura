@@ -141,7 +141,6 @@ class RunnerEndsTheRunTests(unittest.TestCase):
             controller_notify.assert_not_called()
             runner_notify.assert_not_called()
             self.assertEqual(_status(run_dir)["state"], "running")
-            self.assertFalse(runner._sibling(request, ".failures.json").exists())  # retried uncounted
 
             # The runner's next attempt asks RunPod, which says the Pod no longer exists.
             with _api([RunPodAPIError("RunPod Pod not found", status_code=404)]), \

@@ -63,20 +63,6 @@ class SnapshotAcceptedTests(unittest.TestCase):
 
 
 class NeedsAPersonTests(unittest.TestCase):
-    def test_only_the_state_says_a_run_needs_a_person(self) -> None:
-        # RunPod used to set a status flag when the remote job exited, meaning "download pending".
-        from kura.monitor import collect_run_summary
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "example"
-            run_dir.mkdir(parents=True)
-            (run_dir / "run.yaml").write_text("id: example\ntype: train\ncompute: {executor: runpod}\n", encoding="utf-8")
-            for status, expected in (({"state": "running", "recovery_required": True}, False), ({"state": "recovery_required"}, True)):
-                with self.subTest(status=status):
-                    (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
-                    self.assertEqual(collect_run_summary(root, "example").executor_info.recovery_required, expected)
-
     def test_collection_no_longer_writes_the_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = _runpod_run(Path(directory), exit_code=0)
@@ -85,17 +71,18 @@ class NeedsAPersonTests(unittest.TestCase):
 
 
 class RemotePhaseTests(unittest.TestCase):
-    def test_a_run_that_needs_a_person_says_so_before_any_remote_phase(self) -> None:
+    def test_a_pod_up_is_never_shown_as_held_for_a_person(self) -> None:
+        # No Pod is kept for a person: one up is collected or deleted by the runner, whatever the run's state.
         from kura.monitor import ExecutorInfo, RunSummary
         from kura.tui import _remote_execution_phase
 
         def phase(state: str, remote_state: str | None) -> str:
             return _remote_execution_phase(RunSummary(
                 id="r", experiment=None, type="train", executor="runpod", state=state,
-                executor_info=ExecutorInfo(kind="remote", remote_state=remote_state, recovery_required=state == "recovery_required"),
+                executor_info=ExecutorInfo(kind="remote", remote_state=remote_state),
             ))
 
-        self.assertIn("recovery required", phase("recovery_required", "failed"))
+        self.assertIn("job failed · awaiting download", phase("recovery_required", "failed"))
         self.assertIn("job failed", phase("running", "failed"))
 
 
