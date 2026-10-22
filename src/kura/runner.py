@@ -876,6 +876,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     if not _first_attempt(request):
         # An earlier follower died: its Pod holds nothing worth keeping, so it goes, and the render is not continued.
         if not _delete_pod(run_dir, why="the render ended"):
+            _pod_delete_failed(run_dir, request, details, f"Render {run_dir.name} has ended, but its Pod")
             return 1
         status = _status(run_dir)
         realization = _realization(run_dir, status.get("last_realization"))
@@ -903,6 +904,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         set_stop_check(None)
     # A create cut short leaves an intent; the Pod it may have made is found by name and deleted.
     if not _delete_pod(run_dir, why="the render ended"):
+        _pod_delete_failed(run_dir, request, details, f"Render {run_dir.name} has ended, but its Pod")
         return 1
     status = _status(run_dir)
     realization = _realization(run_dir, status.get("last_realization"))
@@ -977,6 +979,12 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         except (OSError, ValueError) as exc:
             _log(f"{run_dir.name}: {exc}")
             code = 1
+            if launched:
+                from kura.executors.runpod import runpod_key_refused
+
+                if runpod_key_refused(exc):
+                    # Retried uncounted; this one notice names the cause, not a failed collection.
+                    code = _key_refused(run_dir, request, details)
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             # A stop that ended a step inside the launch (a wait, a hold) is finished here.
             # A delete that failed is retried after the runner's backoff, not every poll.
@@ -1052,9 +1060,9 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
     return _delete_unstarted_pod(run_dir, request, details)
 
 
-# A step the runner retries reads the RunPod key it started with.
-_STALE_KEY_HINT = ("If the RunPod key changed, the runner still holds the old one: run `kura runner stop`, then "
-                   "`kura runner start` to read the current key.")
+# Every follower reads the secrets files when it starts, so the next try uses a key set since.
+_KEY_HINT = ("If RunPod refuses the key, set a working one with `kura secrets set RUNPOD_API_KEY` in your own "
+             "terminal; the runner's next try reads it.")
 
 
 def _retry_uncounted(request: Path, details: dict[str, Any], suffix: str, kind: str, subject: str, body: str) -> None:
@@ -1074,7 +1082,7 @@ def _pod_delete_failed(run_dir: Path, request: Path, details: dict[str, Any], wh
     return _retry_uncounted(
         request, details, ".delete-failures.json", "pod_delete_failures", f"Kura run's Pod could not be deleted: {run_dir.name}",
         f"{what} could not be deleted yet, so it may still be billing. The runner keeps trying; "
-        f"runs/{run_dir.name}/logs/runner.log says why it failed. {_STALE_KEY_HINT} You can also delete the Pod in the RunPod console.")
+        f"runs/{run_dir.name}/logs/runner.log says why it failed. {_KEY_HINT} You can also delete the Pod in the RunPod console.")
 
 
 def _collection_failed(run_dir: Path, request: Path, details: dict[str, Any]) -> None:
@@ -1084,8 +1092,19 @@ def _collection_failed(run_dir: Path, request: Path, details: dict[str, Any]) ->
         request, details, ".collection-failures.json", "collection_failures", f"Kura run's outputs could not be collected yet: {run_id}",
         f"Run {run_id}'s job has exited, but its outputs could not be collected yet; runs/{run_id}/logs/runner.log says why. "
         "The runner keeps trying while the Pod exists, and the Pod deletes itself, with anything not collected, at its "
-        f"unattended wait or lease (`kura run lease {run_id} <duration>` extends it). {_STALE_KEY_HINT} "
+        f"unattended wait or lease (`kura run lease {run_id} <duration>` extends it). {_KEY_HINT} "
         f"You can also collect by hand with `kura run download {run_id} --force`.")
+
+
+def _key_refused(run_dir: Path, request: Path, details: dict[str, Any]) -> None:
+    """RunPod refused the runner's key, so it cannot learn whether the Pod still runs or is gone."""
+    run_id = run_dir.name
+    return _retry_uncounted(
+        request, details, ".key-refusals.json", "runpod_key_refusals", f"Kura run's RunPod key is refused: {run_id}",
+        f"RunPod refused the RUNPOD_API_KEY in your secrets files (or it is not set), so the runner cannot follow or "
+        f"collect run {run_id}; runs/{run_id}/logs/runner.log says why. The runner keeps trying. The Pod still deletes "
+        "itself, with anything not collected, at its unattended wait or lease. Set a working key with "
+        "`kura secrets set RUNPOD_API_KEY` in your own terminal; the runner's next try reads it and continues the run.")
 
 
 def _delete_unstarted_pod(run_dir: Path, request: Path, details: dict[str, Any]) -> int | None:

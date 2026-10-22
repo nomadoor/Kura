@@ -126,6 +126,14 @@ the runner restarts) was retried only by hand.
   leave only the lease to end it. When RunPod
   answers that the Pod is gone, the run ends `interrupted`: outputs not
   collected before it went are gone.
+- A RunPod API key RunPod refuses (401 or 403, or `RUNPOD_API_KEY` not set)
+  while the runner follows a launched Pod is retried the same way and notifies
+  once through the same helper, naming the fix: set the key; each follower
+  reads the secrets files when it starts, so the next try uses it. Without it
+  the runner could never learn that the Pod's lease deleted it, so the run
+  stayed `running`, unseen. `runpod_key_refused` is the one test for it, and a
+  render's Pod delete that fails notifies once through the same helper as a
+  training run's (2026-10-22).
 - A failed collection never makes a run `recovery_required`. The state keeps one meaning:
   a collected run whose outputs or required training state cannot be
   published; its outputs are local and its Pod is deleted.

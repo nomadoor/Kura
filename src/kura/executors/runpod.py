@@ -48,6 +48,14 @@ class RunPodAPIError(ValueError):
         self.status_code = status_code
 
 
+def runpod_key_refused(exc: BaseException) -> bool:
+    """Whether a failure means RunPod will not accept the RunPod API key Kura holds: RunPod
+    answered 401 or 403, or RUNPOD_API_KEY is not set. Retrying cannot clear it until the key is fixed."""
+    if isinstance(exc, RunPodAPIError):
+        return exc.status_code in (401, 403)
+    return isinstance(exc, MissingSecret) and exc.name == "RUNPOD_API_KEY"
+
+
 def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, timeout: float = 30.0) -> dict[str, Any]:
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     request = bearer_request(
