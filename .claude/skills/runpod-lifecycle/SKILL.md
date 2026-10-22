@@ -206,9 +206,13 @@ reach the Pod for 30 checks in a row (minutes, longer on a network that drops
 packets) gives up, and the runner's next attempt asks RunPod. Once RunPod
 answers that the Pod no longer exists, the run ends `interrupted` (outputs not
 collected are gone) and the runner notifies; a Pod that still runs is
-followed again until its lease ends it. After three failed collections of a job that
-has exited, it marks the run `recovery_required` and notifies; then collect
-and stop by hand with the commands below. A job started before the runner
+followed again until its lease ends it. A failed collection of a job that has
+exited is retried the same way while the Pod exists, and notified once; no Pod
+is kept for a person. The Pod's lease bounds the retries (its unattended wait
+usually ends it sooner):
+report the cause named in `logs/runner.log`, or collect by hand with
+`kura run download <run-id> --force`; a longer lease (`kura run lease`) is the
+user's billing decision. A job started before the runner
 existed is still followed in-process by `kura run execute`.
 
 ```sh

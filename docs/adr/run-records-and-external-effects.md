@@ -76,8 +76,10 @@ creates nothing, so only decisions 3 to 7 apply to it.
   intent whose pid file the Pod does not have), it deletes the Pod, records the
   run as interrupted, and notifies. Nothing on that Pod can be collected, and
   waiting for a person only bills. A failed delete there is retried with the
-  runner's backoff until it succeeds, notified once, and never counted toward
-  the collection failures that hand a run to a person (2026-10-10).
+  runner's backoff until it succeeds, and notified once (2026-10-10; amended
+  2026-10-22: it used to be kept apart from a count of failed collections that
+  handed a run to a person, which no longer exists, see
+  `runpod-unattended-completion.md`, "No Pod is kept for a person").
 - A create that fails, whatever its reply says, goes to discovery before
   anything is created again (2026-10-22); the reply's status, code, or text
   never decides that nothing was made. One match is adopted; a complete listing

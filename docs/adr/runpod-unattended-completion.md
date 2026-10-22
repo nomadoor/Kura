@@ -4,6 +4,10 @@ Status: accepted owner decision.
 
 Date: 2026-10-02
 
+Updated: 2026-10-22 — the job runner no longer keeps a Pod for a person after
+failed collections; it retries collection while the Pod exists. See "No Pod is
+kept for a person".
+
 Updated: 2026-10-10 — a training Pod arms its maximum lease when the Pod
 starts, like a render session Pod, instead of when Kura first reaches it.
 
@@ -92,6 +96,52 @@ While it follows a job, Kura estimates the time left from the training
 progress. When training plus collection looks unlikely to finish before the
 deadline, it warns once in the run's log and by notification, naming the
 command that extends the lease.
+
+## No Pod is kept for a person (2026-10-22)
+
+A Pod is disposable: the job runner creates it, follows it, collects its
+outputs, and deletes it, and when the runner is gone the Pod's own unattended
+wait and lease delete it. One rule contradicted this. After three failed
+collections of a job that had exited (about an hour), the runner recorded the
+run as `recovery_required`, notified, stopped following, and left the Pod
+alone for a person to collect and stop. That hold saved nothing: the Pod's
+wait started when the job exited and its lease when the Pod started, so the
+person had the same window with or without it, and the runner's hour-long
+count ran against the Pod's own timers. What it did change is that a failure
+that would clear (an edge error, a local reserve freed, a key re-read after
+the runner restarts) was retried only by hand.
+
+- A failed collection of a job that has exited is retried by the runner with
+  its usual backoff, uncounted, while the Pod exists. The first failure
+  notifies once, naming the reason's log, the bound, and `kura run download
+  --force` to collect by hand; one helper notifies once for this and for a
+  failed Pod delete. The lease is the bound that always holds: the unattended
+  wait usually ends the Pod earlier, but it waits for, and gives way to, a
+  collection that has marked the Pod, so retried collections can leave only
+  the lease to end it. When RunPod
+  answers that the Pod is gone, the run ends `interrupted`: outputs not
+  collected before it went are gone.
+- A failed collection never makes a run `recovery_required`. The state keeps one meaning:
+  a collected run whose outputs or required training state cannot be
+  published; its outputs are local and its Pod is deleted.
+- Every run Pod still listed as billing is the runner's to delete once the
+  run has finished; none is set aside for a person.
+- A launch that fails before it records a Pod ends `launch_failed` on its
+  first failure, as a Docker launch does: no Pod exists, so nothing bills or
+  is lost. One cut short after its create intent waits for the lookup by
+  name first (`run-records-and-external-effects.md`). It used to be counted
+  with the collection failures.
+- Records: no reader is kept for a run an older Kura held (`recovery_required`
+  with nothing downloaded). No workspace holds one, and its Pod is long gone
+  at its lease; such a run is treated like any other finished run whose Pod
+  may still bill.
+
+Rejected: keeping the hold (it saves no outputs and stops the only automatic
+retry while outputs can still be collected); extending the lease
+automatically while held (a longer lease is a billing decision Kura never
+makes, "Changing the lease"); a higher count (below the Pod's lifetime it
+stops retrying while retrying costs nothing extra, above it it is never
+reached).
 
 ## Consequences
 

@@ -38,12 +38,12 @@ class PodsLeftTests(unittest.TestCase):
             self.assertIsNotNone(runner.pod_may_still_bill(run_dir, _status(run_dir)))
             self.assertTrue(runner._pod_left_running(run_dir, _status(run_dir)))
 
-    def test_a_pod_held_for_a_person_still_bills(self) -> None:
+    def test_a_pod_an_older_kura_held_for_a_person_is_deleted_like_any_other(self) -> None:
+        # Kura no longer keeps a Pod for a person, and reads no old held form: its Pod still bills, so it goes.
         held = {"state": "recovery_required", "downloaded_run": None}
         with _run(held) as run_dir:
             self.assertIsNotNone(runner.pod_may_still_bill(run_dir, _status(run_dir)))
-            # Held, so the follower does not delete it.
-            self.assertFalse(runner._pod_left_running(run_dir, _status(run_dir)))
+            self.assertTrue(runner._pod_left_running(run_dir, _status(run_dir)))
 
     def test_a_stop_deletes_the_duplicate_of_a_missing_pod(self) -> None:
         with _run({"state": "interrupted", "pod_missing_at": "t"}, duplicates=["pod-2"]) as run_dir:

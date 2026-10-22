@@ -1959,8 +1959,6 @@ def _remote_execution_phase(summary: RunSummary) -> str:
         return "● job complete · outputs downloaded · pod stopped" if info.downloaded else "● pod stopped"
     if info.downloaded:
         return "● job complete · outputs downloaded · pod still up"
-    if info.recovery_required:
-        return "● recovery required · pod still up"
     if info.remote_state == "completed":
         return "● job complete · awaiting download and pod stop"
     if info.remote_state == "failed":

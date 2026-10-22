@@ -74,7 +74,7 @@ class PodCostTests(unittest.TestCase):
 
     def test_a_cost_is_final_only_when_the_pod_stop_is_recorded(self) -> None:
         cases = (
-            # The run ended but its Pod's stop is not recorded (held for recovery, or a failed delete).
+            # The run ended but its Pod's stop is not recorded (a delete that failed or has not run yet).
             ({"pod_stopped_at": None}, " so far; the Pod may still bill, "),
             ({"pod_stopped_at": None, "state": "recovery_required"}, " so far; the Pod may still bill, "),
             ({"pod_stopped_at": None, "pod_missing_at": "2026-10-19T20:07:54+09:00"},

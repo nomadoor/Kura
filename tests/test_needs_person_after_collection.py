@@ -1,4 +1,4 @@
-"""A RunPod run recorded as needing a person after collection keeps that state, loses its Pod, and is retried until the Pod is gone."""
+"""A collected RunPod run whose publication is blocked keeps `recovery_required`, loses its Pod, and is retried until the Pod is gone."""
 
 from __future__ import annotations
 
@@ -35,8 +35,6 @@ class NeedsPersonTests(unittest.TestCase):
     def test_a_collected_run_needing_a_person_still_gets_its_pod_deleted_by_the_runner(self) -> None:
         # The controller's own stop failed; the Pod holds nothing the snapshot lacks, so a follower deletes it.
         self.assertTrue(runner._pod_left_running(Path("."), NEEDS_PERSON))
-        held = {**NEEDS_PERSON, "downloaded_run": None}  # collection never finished: a person decides about the Pod
-        self.assertFalse(runner._pod_left_running(Path("."), held))
 
     def test_the_controller_deletes_the_pod_and_says_the_run_needs_attention(self) -> None:
         from tests.test_cli import _run_remote_in_process

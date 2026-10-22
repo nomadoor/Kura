@@ -134,14 +134,14 @@ and local download are confirmed.
 | `draft` | `run.yaml` is not frozen yet | `kura run compile <run-id>` |
 | `compiled` | frozen and never launched | `kura run plan <run-id>`, approval, `kura run execute <run-id>` |
 | `queued`, `staged`, `launching` | waiting for, or being put on, a machine | follow with `kura run execute <run-id>` |
-| `running` | the trainer is running; on RunPod, also until its outputs are collected | follow with `kura run execute <run-id>` |
+| `running` | the trainer is running; on RunPod, also until its outputs are collected, which the runner retries while the Pod exists | follow with `kura run execute <run-id>`; on a notice that the outputs could not be collected yet, report the reason in `runs/<run-id>/logs/runner.log` (`runpod-lifecycle`) |
 | `publishing` | local Docker only: the trainer exited 0; its outputs are not published yet | keep following; it is not finished |
 | `completed` | the trainer exited 0 and its outputs are published | verify the outputs and report |
 | `failed` | the trainer exited non-zero | read `kura run logs <run-id>`; any fix goes in a new run; with `publication_state: blocked`, `kura run status <run-id>` shows in `publication_error` which files or training state could not be collected |
 | `interrupted` | stopped by `kura run stop`, or by the disk watch when a store a local run writes to fell below the reserve (`kura run status <run-id>` shows `stop_reason`), or its Pod or container went away or was never confirmed created; a local run keeps what it wrote, but outputs a RunPod Pod held uncollected are gone | report; a new run needs approval |
 | `launch_failed` | the trainer never started | read the error; any fix goes in a new run |
 | `unknown` | the outcome was not observed: the container is gone, or the Pod exited, without an exit code | do not start the same run again; `kura run reconcile <run-id>` or `kura run stop <run-id>` so no Pod or container remains, then a new run with approval |
-| `recovery_required` | needs a person: outputs or required training state could not be published, or collecting from the Pod failed three times | on RunPod, when `kura run status <run-id>` shows `downloaded_run: null`, the outputs were never collected and the Pod is kept, still billing: report the reason in `runs/<run-id>/logs/runner.log`, then `kura run download <run-id> --force` and `kura run stop <run-id>` (`runpod-lifecycle`); otherwise the outputs are already local and collecting again cannot change them: report `publication_error` or `training_state_sync_error` from `kura run status <run-id>` |
+| `recovery_required` | needs a person: outputs or required training state could not be published | the outputs are already local and collecting again cannot change them: report `publication_error` or `training_state_sync_error` from `kura run status <run-id>` |
 | `stopped` | written by older Kura versions for a stopped run (now `interrupted`) | as for `interrupted` |
 
 On RunPod, `pod_stopped_at` in `kura run status` means Kura's stop confirmed
