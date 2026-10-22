@@ -52,6 +52,28 @@ class PodsLeftTests(unittest.TestCase):
             self.assertIn(("DELETE", "/pods/pod-2"), [call.args[:2] for call in request.call_args_list])
             self.assertEqual(runpod.pods_left(run_dir, _status(run_dir)), [])
 
+    def test_the_monitor_says_a_pod_is_up_only_while_one_may_bill(self) -> None:
+        from kura.monitor import _executor_info
+        from kura.tui import _remote_execution_phase
+        from types import SimpleNamespace
+
+        def shown(run_dir: Path) -> tuple[bool, str]:
+            status = _status(run_dir)
+            realization = json.loads((run_dir / "realizations" / "r1.json").read_text(encoding="utf-8"))
+            info = _executor_info("runpod", {}, status, realization, run_dir)
+            summary = SimpleNamespace(executor_info=info, capacity_wait=None, is_stale=False, state=status.get("state"),
+                                      progress=SimpleNamespace(step=None, total=None))
+            return info.pod_stopped, _remote_execution_phase(summary)
+
+        # RunPod reported the Pod gone: it is not provisioning, and it bills no more.
+        with _run({"state": "interrupted", "pod_missing_at": "t"}) as run_dir:
+            stopped, phase = shown(run_dir)
+            self.assertTrue(stopped)
+            self.assertNotIn("provisioning", phase)
+        # A duplicate outlives it: a Pod is still up.
+        with _run({"state": "interrupted", "pod_missing_at": "t"}, duplicates=["pod-2"]) as run_dir:
+            self.assertFalse(shown(run_dir)[0])
+
     def test_a_new_launch_waits_while_a_recovered_duplicate_is_left(self) -> None:
         with _run({"state": "interrupted", "pod_missing_at": "t"}, duplicates=["pod-2"]) as run_dir:
             realization = json.loads((run_dir / "realizations" / "r1.json").read_text(encoding="utf-8"))
