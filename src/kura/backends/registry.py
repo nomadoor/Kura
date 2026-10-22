@@ -144,7 +144,8 @@ class BackendAdapter:
     model_facts: Callable[[str | None], dict[str, Any]] | None = None
     default_ports: tuple[str, ...] = ("22/tcp",)
     # Directories, relative to the run, inside its `cache/` where the trainer writes weights before Kura
-    # publishes them to outputs/; a run cut short can leave the only copy there, so reclaim never frees them.
+    # publishes them to outputs/; a run cut short can leave the only copy there, so reclaim never frees them
+    # and a RunPod collection brings them home (`trainer_cache_outputs`).
     cache_outputs: tuple[str, ...] = ()
 
 
@@ -459,6 +460,14 @@ BACKENDS: dict[str, BackendAdapter] = {
 
 def backend_names() -> tuple[str, ...]:
     return tuple(BACKENDS)
+
+
+def trainer_cache_outputs() -> tuple[str, ...]:
+    """Every adapter's `cache_outputs`: the directories inside a run's `cache/` that hold weights not yet
+    published to outputs/. A local run keeps them (reclaim never frees them) and a RunPod collection
+    brings them home, so both executors keep the same files. Every backend's, whichever the run used:
+    the names are the trainers' own, so another backend's run never has them."""
+    return tuple(sorted({relative for adapter in BACKENDS.values() for relative in adapter.cache_outputs}))
 
 
 def get_backend(name: Any) -> BackendAdapter:
