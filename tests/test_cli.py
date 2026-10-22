@@ -7364,7 +7364,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             "gpuTypeIds": ["NVIDIA H100 80GB HBM3"],
             "cloudType": "SECURE",
             "containerDiskInGb": 150,
-            "volumeInGb": 0,
             "imageName": "registry/image@sha256:abc",
             "ports": ["22/tcp"],
             "env": {"KURA_RUN_ID": "example"},
@@ -7387,6 +7386,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(gql_input["env"], [{"key": "KURA_RUN_ID", "value": "example"}])
         self.assertEqual(gql_input["dockerArgs"], "sh -lc 'sleep infinity'")
         self.assertTrue(gql_input["startSsh"])
+        self.assertEqual(gql_input["volumeInGb"], 0)
         # Kura never starts a Pod from a RunPod template.
         self.assertNotIn("templateId", _runpod_graphql_create_input({**payload, "templateId": "tpl"}))
 
@@ -7616,9 +7616,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     realization_id = launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             self.assertIsNotNone(realization_id)
             payload = request.call_args.args[3]
-            self.assertNotIn("networkVolumeId", payload)
-            self.assertNotIn("volumeMountPath", payload)
-            self.assertEqual(payload["volumeInGb"], 0)
+            self._assert_creates_without_a_volume(payload)
             self.assertEqual(payload["dockerStartCmd"][:2], ["sh", "-lc"])
             self.assertNotIn("runpodctl receive", payload["dockerStartCmd"][2])
             self.assertIn("/usr/sbin/sshd", payload["dockerStartCmd"][2])
@@ -7678,7 +7676,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(payload["imageName"], "ostris/aitoolkit:latest")
             self._assert_arms_lease_first(payload["dockerStartCmd"][2], max_lease_sec=3 * 3600, log_path=log_path)
             self.assertEqual(payload["ports"], ["8675/http", "22/tcp"])
-            self.assertEqual(payload["volumeInGb"], 0)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             record = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual(record["container_cwd"], "/app/ai-toolkit")
@@ -7693,6 +7690,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     realization_id = launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=self._config(), purpose="comfyui-render", yes=True)
             self.assertIsNotNone(realization_id)
             payload = request.call_args.args[3]
+            self._assert_creates_without_a_volume(payload)
             self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
             self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
@@ -7703,6 +7701,19 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
             self._assert_arms_lease_first(payload["dockerStartCmd"][2], max_lease_sec=12 * 3600, log_path="/workspace/runs/example/logs/stdout.log")
+
+    def _assert_creates_without_a_volume(self, payload: dict) -> None:
+        """Every Pod is disposable: the create input decides there is no volume, whatever the body says."""
+        for key in ("volumeInGb", "volumeMountPath", "networkVolumeId"):
+            self.assertNotIn(key, payload)
+        create = _runpod_graphql_create_input({**payload, "gpuTypeIds": payload["gpuTypeIds"][:1]})
+        self.assertEqual(create["volumeInGb"], 0)
+        self.assertNotIn("volumeMountPath", create)
+        self.assertNotIn("networkVolumeId", create)
+        stale = _runpod_graphql_create_input({**payload, "gpuTypeIds": payload["gpuTypeIds"][:1], "volumeInGb": 50, "volumeMountPath": "/workspace", "networkVolumeId": "vol-1"})
+        self.assertEqual(stale["volumeInGb"], 0)
+        self.assertNotIn("volumeMountPath", stale)
+        self.assertNotIn("networkVolumeId", stale)
 
     def _assert_arms_lease_first(self, script: str, *, max_lease_sec: int, log_path: str) -> None:
         """Every start command Kura writes arms the same maximum lease before anything else."""

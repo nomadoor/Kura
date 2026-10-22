@@ -222,7 +222,6 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |
 | `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |
-| `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_types` | RunPod clouds to try, a list of `COMMUNITY` and `SECURE` in order; omit it for both | `[COMMUNITY, SECURE]` |
 | `runpod.gpu_type_priority` | GPU candidate ordering: `custom` uses the listed order; `availability` is accepted only with one GPU in the list (refused when workspace.yaml loads), because Kura tries each candidate in turn and cannot keep RunPod's availability order | `custom` |

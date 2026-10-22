@@ -77,9 +77,9 @@ stop Pod
   RunPod ships.
 - `--job-timeout 0`: wait until remote exit.
 - `runpod.storage_mode: upload` is the only mode (omitting it means the same):
-  no Network Volume by default, and every run's inputs arrive over SSH before
-  the trainer starts. Manifest-v2 runs send only the verified selected-file
-  transfer. A Pod-side verification failure writes
+  every Pod is disposable and created without a volume, and every run's
+  inputs arrive over SSH before the trainer starts. Manifest-v2 runs send only
+  the verified selected-file transfer. A Pod-side verification failure writes
   `realizations/<id>.runpod-input.json` with `status: failed`, never starts the
   trainer, and the normal download-then-stop path still runs. Launch pins the
   proven manifest in `realizations/<id>.transfer-manifest.json`; the Pod
@@ -123,8 +123,8 @@ stop Pod
   maximum lease, and cost ceiling.
 - The cost ceiling (`cost_ceiling` in `kura run plan`, `Cost ceiling:` in the
   launch confirmation) is the most the Pod's GPU time can bill before the lease
-  it is created with deletes it (container and volume disk are billed
-  separately and are not in it): the lease times the highest current hourly quote
+  it is created with deletes it (the container disk is billed
+  separately and is not in it): the lease times the highest current hourly quote
   among the requested GPU types, for the configured GPU count. It is "about"
   because a quote may change before the Pod starts. The plan shows it for the
   default 12h lease; `kura run execute --max-lease` sets the lease and the

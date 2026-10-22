@@ -1467,8 +1467,7 @@ def _remote_log_offset(run_dir: Path) -> tuple[int, str] | None:
     except (OSError, json.JSONDecodeError):
         cursor = {}
     if not isinstance(cursor, dict) or cursor.get("realization_id") != realization_id:
-        # A new Pod's log starts empty. A relaunch on a Network Volume appends to the old
-        # file instead, and reading it again from the start repeats text rather than losing it.
+        # A new Pod's log starts empty, so another realization reads it from the start.
         return 0, realization_id
     offset = cursor.get("remote_bytes")
     return (offset if isinstance(offset, int) and offset >= 0 else 0), realization_id

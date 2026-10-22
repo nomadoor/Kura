@@ -170,6 +170,26 @@ class SurfaceContractTests(unittest.TestCase):
         self.assertEqual(migrated["docker"], {"min_free_gb": 50})
         self.assertTrue(any("docker.build_cache_limit_gb" in note for note in notes))
 
+    def test_a_runpod_volume_size_is_refused_and_migrated(self) -> None:
+        from kura.workspace import migrate_workspace_config
+
+        for config, dotted in (
+            ({"runpod": {"volume_in_gb": 0}}, "runpod.volume_in_gb"),
+            ({"comfyui": {"runpod": {"volume_in_gb": 20}}}, "comfyui.runpod.volume_in_gb"),
+        ):
+            with self.subTest(key=dotted):
+                with self.assertRaisesRegex(ValueError, rf"obsolete setting.*{dotted.replace('.', chr(92) + '.')} .*cannot collect from a stopped Pod.*disposable"):
+                    validate_workspace_config(config)
+        migrated, notes = migrate_workspace_config({
+            "schema_version": 2,
+            "runpod": {"container_disk_gb": 150, "volume_in_gb": 0},
+            "comfyui": {"runpod": {"container_disk_gb": 80, "volume_in_gb": 20}},
+        })
+        self.assertEqual(migrated["runpod"], {"container_disk_gb": 150})
+        self.assertEqual(migrated["comfyui"]["runpod"], {"container_disk_gb": 80})
+        for dotted in ("runpod.volume_in_gb", "comfyui.runpod.volume_in_gb"):
+            self.assertTrue(any(note.startswith(f"dropped {dotted}") for note in notes), notes)
+
     def test_the_removed_runpod_storage_modes_are_refused_and_migrated(self) -> None:
         from kura.workspace import migrate_workspace_config
 
