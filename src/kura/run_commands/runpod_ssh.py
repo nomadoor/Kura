@@ -34,7 +34,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import recorded_output_paths
 from kura.executors import _apply_stdout_progress, _redact_secret_text
-from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, format_cost_ceiling, pod_cost_ceiling
+from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, format_cost_ceiling, pod_cost_ceiling, pod_may_exist
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -2382,7 +2382,7 @@ def change_runpod_lease(run_dir: Path, duration_sec: int, *, yes: bool, input_st
     pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else None
     if realization.get("executor") != "runpod" or not isinstance(status.get("pod_id"), str) or pod is None:
         raise ValueError("this run has no RunPod Pod to change the lease of")
-    if status.get("pod_stopped_at") or status.get("pod_missing_at"):
+    if not pod_may_exist(status):
         raise ValueError("this run's Pod is already stopped")
     details = _runpod_ssh_details(run_dir, timeout_sec=120, interval_sec=5)
     path = shlex.quote(LEASE_DEADLINE_PATH)

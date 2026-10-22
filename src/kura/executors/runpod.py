@@ -29,7 +29,7 @@ from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT
 from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
-from kura.executors.common import create_intent_executor, host_time
+from kura.executors.common import create_intent_executor, host_time, in_capacity_wait
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -761,7 +761,10 @@ def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
 
     Never creates or deletes a Pod. A Pod found is recorded as interrupted with
     its id, so `kura run stop` deletes it; finding none records the launch as
-    failed. Returns one line per settled intent for the user.
+    failed, unless the run was waiting for capacity (`in_capacity_wait`): that
+    intent came from a refused create in the wait, so the run stays in its wait
+    and the confirmed launch continues it, as it does when no intent was written.
+    Returns one line per settled intent for the user.
     """
     intents = unresolved_create_intents(run_dir, "runpod")
     if not intents:
@@ -787,7 +790,11 @@ def resolve_runpod_create_intents(run_dir: Path) -> list[str]:
             **({"controlled_by": intent["controlled_by"]} if isinstance(intent.get("controlled_by"), dict) else {}),
             **({"purpose": intent["purpose"]} if isinstance(intent.get("purpose"), str) else {}), **kura_provenance(),
         }
-        if not pods:
+        if not pods and in_capacity_wait(_load_status(run_dir)):
+            realization = {**base, "state": "queued", "pod": None}
+            lines.append(f"no Pod named {pod_name} exists, so nothing is billing; the run was waiting for capacity, so its capacity wait "
+                         f"continues when the job runner next follows it (`kura run execute {run_dir.name}`)")
+        elif not pods:
             realization = {**base, "state": "launch_failed", "attempted_at": intent.get("requested_at"), "pod": None,
                            "error": f"RunPod has no Pod named {pod_name}: it was never created, or it was already deleted"}
             lines.append(f"no Pod named {pod_name} exists, so nothing is billing; the launch is recorded as failed (a render run needs compiling again before its next launch)")
@@ -1771,13 +1778,18 @@ def _duplicate_pod_ids(run_dir: Path, status: dict[str, Any]) -> list[str]:
     return [item for item in duplicates if isinstance(item, str) and item != status.get("pod_id")]
 
 
+def pod_may_exist(status: dict[str, Any]) -> bool:
+    """Whether the run's recorded Pod may still exist: one is recorded, no stop deleted it, and RunPod
+    has not reported it gone. The one test every caller uses; `pods_left` adds a recovery's duplicates."""
+    return isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at")
+
+
 def pods_left(run_dir: Path, status: dict[str, Any]) -> list[str]:
-    """The run's recorded Pods that may still exist and bill: its Pod unless a stop deleted it or
-    RunPod reported it gone, and every duplicate until a stop deleted them all with it."""
+    """The run's recorded Pods that may still exist and bill: its Pod while `pod_may_exist`, and every
+    duplicate until a stop deleted them all with it."""
     if status.get("pod_stopped_at"):
         return []
-    pod_id = status.get("pod_id")
-    left = [pod_id] if isinstance(pod_id, str) and not status.get("pod_missing_at") else []
+    left = [status["pod_id"]] if pod_may_exist(status) else []
     return left + _duplicate_pod_ids(run_dir, status)
 
 
@@ -1832,12 +1844,10 @@ def stop_runpod(run_dir: Path) -> dict[str, Any]:
     # name later, and its Pod is never deleted here.
     pod_names = _run_pod_names(run_dir)
     # Only once the records agree that no launch left a Pod is a capacity wait's status believed.
-    if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
+    if in_capacity_wait(status):
         raise ValueError(
-            "run is waiting for RunPod capacity and no Pod exists to stop; "
-            "interrupt the active launch controller with Ctrl+C; if no controller remains, "
-            f"run `kura doctor runpod`, then `kura run execute {run_dir.name}`, which follows the wait "
-            "or starts it again"
+            "run is waiting for RunPod capacity, so no Pod exists to delete; the stop stays requested, and the job "
+            "runner ends the wait without creating a Pod when it next follows the run (`kura runner start`)"
         )
     api_key = runpod_api_key("needed to stop a RunPod run")
     pod_id = status.get("pod_id")

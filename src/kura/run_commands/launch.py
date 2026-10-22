@@ -15,7 +15,7 @@ from typing import Any
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.yamlio import YAMLError
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
-from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
+from kura.executors.runpod import confirm_runpod_billing, pod_may_exist, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -61,6 +61,10 @@ def run_remote(run_id: str, **kwargs: Any) -> int:
         if not run_dir.is_dir():
             raise ValueError(f"run does not exist: {run_id}")
         with _run_operation_lock(run_dir, "controller", blocking=False):
+            # Checked again under the controller lock: the run may have changed since execute looked,
+            # and a stale decision must not follow or relaunch. The runner decides this in its follower.
+            if kwargs.get("reattach") and not _running_remote_job(run_id):
+                raise ValueError(f"run {run_id} is no longer running a job to follow; check `kura run status {run_id}`")
             return _run_remote_locked(run_id, **kwargs)
     except _OperationBusy:
         print(f"cannot run remote job: another `kura run execute` is already controlling {run_id}; let it finish or stop it first", file=sys.stderr)
@@ -113,12 +117,8 @@ def _run_remote_locked(
         wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity, recorded=True)
         capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval, recorded=True)
         if reattach:
-            # Checked again under the controller lock: the run may have changed
-            # since execute looked, and a stale decision must not follow or relaunch.
-            if not _running_remote_job(run_id):
-                raise ValueError(f"run {run_id} is no longer running a job to follow; check `kura run status {run_id}`")
-            # An earlier controller started this job and died; the job and its
-            # Pod-side timers kept running, so only following and collecting remain.
+            # The caller decided, under the controller lock, that an earlier controller started this
+            # job and died; the job and its Pod-side timers kept running, so only following and collecting remain.
             launched = True
             print(f"run {run_id} is already running on its Pod; following it and collecting its outputs", file=sys.stderr)
             exit_code = follow_running_runpod_job(run_dir, ssh_timeout_sec=upload_timeout, job_timeout_sec=job_timeout, notify_channels=notify_channels)
@@ -246,7 +246,7 @@ def _running_remote_job(run_id: str) -> bool:
     if not (run_dir / "status.json").is_file():
         return False
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    if status.get("state") != "running" or not isinstance(status.get("pod_id"), str) or status.get("pod_stopped_at"):
+    if status.get("state") != "running" or not pod_may_exist(status):
         return False
     try:
         status = reconcile_runpod(run_dir, source="automatic")

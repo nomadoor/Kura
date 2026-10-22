@@ -29,7 +29,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, runpod_cost_ceiling, unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, pod_may_exist, runpod_cost_ceiling, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_data_location
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -1909,8 +1909,7 @@ def _uncollected_pod_work(run_dir: Path) -> str | None:
         return None
     if unresolved_create_intents(run_dir):
         return None  # the stop itself reports that `kura run reconcile` comes first
-    if (realization.get("executor") != "runpod" or not isinstance(status.get("pod_id"), str)
-            or status.get("pod_stopped_at") or status.get("pod_missing_at") or status.get("downloaded_run")):
+    if realization.get("executor") != "runpod" or not pod_may_exist(status) or status.get("downloaded_run"):
         return None
     if status.get("remote_state"):  # recorded only once the remote job has exited
         return (f"its job has ended and its outputs are not collected; `kura run execute {run_dir.name}` collects them "

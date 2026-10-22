@@ -973,6 +973,72 @@ class RunPodFollowerTests(unittest.TestCase):
             self.assertIsNone(runner.request_outcome(request))
             self.assertTrue(runner.run_unfinished(run_dir))
 
+    def test_a_pod_runpod_no_longer_runs_is_deleted_not_followed(self) -> None:
+        # The follower's one look at RunPod decides: a Pod that exists but no longer runs ends the run as
+        # recorded and is deleted, instead of a second check refusing the reattach and a retry deleting it.
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+
+            def exited(run_dir_arg, *_args, **_kwargs):
+                _status(run_dir_arg, **{**_status_as_recorded(run_dir_arg), "state": "unknown"})
+                return _status_as_recorded(run_dir_arg)
+
+            def stopped(run_dir_arg):
+                _status(run_dir_arg, **{**_status_as_recorded(run_dir_arg), "pod_stopped_at": "t"})
+                return {}
+
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=exited), \
+                 patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
+                 patch("kura.run_commands.launch._run_remote_locked") as remote:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            remote.assert_not_called()
+            stop.assert_called_once()
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "unknown")
+            self.assertFalse(runner.run_unfinished(run_dir))
+
+    def test_a_capacity_wait_cut_short_continues_whether_or_not_it_wrote_a_create_intent(self) -> None:
+        # The follower can die before or after a refused create in the wait wrote the create intent. Either
+        # way no Pod exists (the lookup by name finds none), so the confirmed launch continues the wait.
+        from kura.executors.common import can_start, unresolved_create_intents
+
+        wait = {"started_at": "2026-10-07T00:00:00+00:00", "attempts": 3}
+        for order in ("before the intent", "after the intent"):
+            with self.subTest(order=order), _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+                request = _runpod_request(run_dir)
+                runner.claim_request(request, 1)
+                _status(run_dir, state="queued", host="runpod", capacity_wait=wait)
+                if order == "after the intent":
+                    (run_dir / "realizations" / "r1.create-intent.json").write_text(json.dumps({
+                        "kind": "pod_create_intent", "executor": "runpod", "realization_id": "r1", "pod_name": "kura-example-r1",
+                        "requested_at": "2026-10-07T00:01:00+00:00", "controlled_by": {"request": request.name}}), encoding="utf-8")
+                with patch("kura.executors.runpod._discover_pods", return_value=[]), \
+                     patch("kura.run_commands.launch._run_remote_locked", return_value=0) as remote:
+                    runner.work(root, "example", request.name)
+                remote.assert_called_once()
+                self.assertFalse(remote.call_args.kwargs["reattach"])
+                self.assertIsNone(runner.request_outcome(request))
+                status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                self.assertEqual((status["state"], status["capacity_wait"]), ("queued", wait))
+                self.assertTrue(can_start(status))
+                self.assertEqual(unresolved_create_intents(run_dir), [])
+                self.assertTrue(runner.run_unfinished(run_dir))
+
+    def test_a_continued_wait_whose_launch_fails_ends_the_request_as_any_failed_launch(self) -> None:
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _status(run_dir, state="queued", host="runpod", capacity_wait={"attempts": 1})
+            (run_dir / "realizations" / "r1.create-intent.json").write_text(json.dumps({
+                "kind": "pod_create_intent", "executor": "runpod", "realization_id": "r1", "pod_name": "kura-example-r1",
+                "requested_at": "2026-10-07T00:01:00+00:00", "controlled_by": {"request": request.name}}), encoding="utf-8")
+            with patch("kura.executors.runpod._discover_pods", return_value=[]), \
+                 patch("kura.run_commands.launch._run_remote_locked", return_value=1):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertEqual(runner.request_outcome(request)["kind"], "launch_failed")
+
     def test_a_collected_run_whose_pod_delete_failed_keeps_how_it_ended(self) -> None:
         # The controller collected and its stop failed: the follower retries the delete, never the collection.
         with _workspace() as (root, run_dir):

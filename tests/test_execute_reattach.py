@@ -110,6 +110,19 @@ class ExecuteReattachTests(unittest.TestCase):
         stage.assert_not_called()
         self.assertIn("no longer running", stderr.getvalue())
 
+    def test_the_runner_follower_reattaches_without_deciding_again(self) -> None:
+        # The runner's `_continue_runpod` decided to follow; the controller it calls trusts that decision.
+        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
+            with patch.object(launch, "reconcile_runpod", side_effect=AssertionError("decided twice")), \
+                    patch.object(launch, "follow_running_runpod_job", return_value=0) as follow, \
+                    patch.object(launch, "download_with_retries", return_value=0), patch.object(launch, "stop_runpod", return_value={}), \
+                    patch.object(launch, "format_run_completion", return_value="done"), patch.object(launch, "_notify"), \
+                    redirect_stderr(io.StringIO()), patch("sys.stdout", io.StringIO()):
+                code = launch._run_remote_locked("example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0,
+                                                 reattach=True, controlled_by={"request": "r.launch.json"})
+        self.assertEqual(code, 0)
+        follow.assert_called_once()
+
     def test_remote_on_a_missing_run_is_an_error_not_a_traceback(self) -> None:
         with _runpod_run({"state": "compiled"}):
             stderr = io.StringIO()

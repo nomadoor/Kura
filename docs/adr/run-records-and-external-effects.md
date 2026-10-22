@@ -6,6 +6,9 @@ Date: 2026-10-04
 
 Updated: 2026-10-08 — the status projection runs in shadow mode first.
 
+Updated: 2026-10-23 — a capacity wait whose create intent finds no Pod by name
+continues, as one without an intent does (decision 3).
+
 Updated: 2026-10-07 — the job runner deletes a Pod of its own launch whose job
 never started, and continues a confirmed RunPod launch that created nothing yet.
 
@@ -120,7 +123,11 @@ the runner died before acting; nothing external exists, so the next runner, or
 launched, and the request can be written again. A RunPod request is the
 exception (2026-10-07): its billing was confirmed, and with no create intent no
 Pod exists, so the next runner continues that launch, including a wait for
-capacity. Claims rely on exclusive create on a local file system,
+capacity. A wait cut short after a refused create wrote its intent continues
+the same way once the lookup by name finds no Pod (2026-10-23): the intent is
+settled as a launch that is still waiting (`queued`, no Pod) instead of a
+failed one, so how a wait ends no longer depends on whether the runner died
+before or after its first create. Claims rely on exclusive create on a local file system,
 which is where the runner ADR and `windows-execution-model.md` place the
 workspace; network shares are not supported.
 

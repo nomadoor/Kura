@@ -83,6 +83,47 @@ class CreateIntentRecoveryTests(unittest.TestCase):
             self.assertEqual(_status(run_dir)["state"], "launch_failed")
             self.assertNotIn("pod_id", _status(run_dir))
 
+    def test_no_pod_found_for_a_capacity_wait_lets_the_wait_continue(self) -> None:
+        # The intent was written by a refused create inside a capacity wait; nothing was created, so the
+        # confirmed launch is not over: the run stays in its wait, and a launch may continue it.
+        from kura.executors.common import can_start
+
+        wait = {"started_at": "2026-10-04T10:00:00+09:00", "attempts": 2}
+        with _crashed_launch() as run_dir:
+            (run_dir / "status.json").write_text(json.dumps({"state": "queued", "host": "runpod", "capacity_wait": wait}), encoding="utf-8")
+            with patch("kura.executors.runpod._runpod_pods_named", return_value=[]):
+                lines = resolve_runpod_create_intents(run_dir)
+            self.assertIn("capacity wait continues", lines[0])
+            self.assertEqual(unresolved_create_intents(run_dir), [])
+            status = _status(run_dir)
+            self.assertEqual((status["state"], status["capacity_wait"]), ("queued", wait))
+            self.assertTrue(can_start(status))
+            realization = json.loads((run_dir / "realizations" / f"{RID}.json").read_text(encoding="utf-8"))
+            self.assertEqual((realization["state"], realization["pod"]), ("queued", None))
+
+    def test_a_continued_wait_is_stopped_through_the_runner_without_creating_anything(self) -> None:
+        from kura import runner
+
+        with _crashed_launch() as run_dir:
+            request = runner.write_launch_request(run_dir, executor="runpod", extra={
+                "options": {"max_lease": "3h"}, "runpod_config": CONFIG, "billing_confirmed_at": "2026-10-04T00:00:00+00:00"})
+            runner.claim_request(request, 1)
+            intent = run_dir / "realizations" / f"{RID}.create-intent.json"
+            intent.write_text(json.dumps({**json.loads(intent.read_text(encoding="utf-8")), "controlled_by": {"request": request.name}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "queued", "host": "runpod", "capacity_wait": {"attempts": 2}}), encoding="utf-8")
+            with patch("kura.executors.runpod._runpod_pods_named", return_value=[]):
+                resolve_runpod_create_intents(run_dir)
+            stderr = io.StringIO()
+            with patch("kura.executors.runpod._runpod_request") as api, patch("sys.stderr", stderr), patch("sys.stdout", io.StringIO()):
+                self.assertEqual(stop_run("example", yes=True), 1)
+                api.assert_not_called()
+            self.assertIn("no Pod exists", stderr.getvalue())
+            self.assertIsNotNone(runner.stop_request(run_dir))
+            with patch("kura.run_commands.launch._run_remote_locked") as remote:
+                self.assertEqual(runner.work(run_dir.parent.parent, "example", request.name), 0)
+            remote.assert_not_called()
+            self.assertEqual(runner.request_outcome(request)["kind"], "not_launched")
+
     def test_reconcile_settles_the_intent_first_even_without_a_realization(self) -> None:
         with _crashed_launch() as run_dir:
             stderr = io.StringIO()

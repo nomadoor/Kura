@@ -76,7 +76,9 @@ stop Pod
   stop refuse until `kura run reconcile` has looked for the Pod by name. A Pod
   it finds is recorded as `interrupted` and still bills until
   `kura run stop <run-id>` deletes it (with any duplicate); finding none
-  records the launch as failed. Tell the user which one happened.
+  records the launch as failed, except for a run that was waiting for
+  capacity: its wait continues when the runner next follows it, as it does
+  when the launch died before any create. Tell the user which one happened.
 - Pod-side deletion (shared by training and render Pods) uses the Pod-scoped `RUNPOD_API_KEY` from the init process
   and calls `podTerminate`, then `podStop`, with a non-Python User-Agent. Do not
   rely on the Pod's preinstalled `runpodctl`; its syntax follows the version
