@@ -196,10 +196,11 @@ execute` only confirms billing and follows. When the command ended, run
 `kura run execute <run-id>` again to follow; it never launches a second Pod.
 The runner deletes a Pod whose job never started (nothing can be collected
 there); when RunPod refuses that delete, it notifies once and keeps retrying
-until the Pod is gone. After three failed collections it marks the run
-`recovery_required` and notifies; then collect and stop by hand with the
-commands below. A job started before the runner existed is still followed
-in-process by `kura run execute`.
+until the Pod is gone. While the job still runs, losing the RunPod API or
+SSH is retried without limit. After three failed collections of a job that
+has exited, it marks the run `recovery_required` and notifies; then collect
+and stop by hand with the commands below. A job started before the runner
+existed is still followed in-process by `kura run execute`.
 
 ```sh
 kura run execute <run-id>
