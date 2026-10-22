@@ -300,6 +300,16 @@ def _is_wsl() -> bool:
 DOCKER_INFO_TIMEOUT_SEC = 30
 
 
+def docker_info_env() -> dict[str, str]:
+    """The environment every `docker info` runs with: this process's own, with no session bus to start."""
+    env = dict(os.environ)
+    # `docker info` runs each CLI plugin; Docker Desktop's docker-agent then runs dbus-launch
+    # when no session bus exists, leaving dbus-daemons behind. A real session bus is kept.
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        env["DBUS_SESSION_BUS_ADDRESS"] = "disabled:"
+    return env
+
+
 def docker_daemon_problem() -> str | None:
     """Why the Docker daemon cannot be used now, in Docker's own words; None when it answers.
 
@@ -312,7 +322,7 @@ def docker_daemon_problem() -> str | None:
         # Outside the workspace: a docker helper that outlives the timeout
         # would otherwise hold the directory open on Windows.
         info = subprocess.run(["docker", "info"], text=True, capture_output=True, check=False,
-                              timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir())
+                              timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir(), env=docker_info_env())
     except subprocess.TimeoutExpired:
         return f"`docker info` did not answer within {DOCKER_INFO_TIMEOUT_SEC} seconds; Docker may still be starting"
     except OSError as exc:
@@ -329,7 +339,7 @@ def docker_data_location() -> tuple[Path | None, str]:
     directory of the same name here would be another disk; ask only after the daemon answers."""
     try:
         info = subprocess.run(["docker", "info", "--format", "{{.DockerRootDir}}\t{{.OperatingSystem}}"], text=True, capture_output=True,
-                              check=False, timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir())
+                              check=False, timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir(), env=docker_info_env())
         context = subprocess.run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], text=True, capture_output=True,
                                  check=False, timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir())
     except (OSError, subprocess.TimeoutExpired) as exc:

@@ -62,5 +62,33 @@ class DockerDaemonProblemTests(unittest.TestCase):
         self.assertIs(doctor.docker_daemon_problem, docker.docker_daemon_problem)
 
 
+class DockerInfoEnvTests(unittest.TestCase):
+    """`docker info` runs Docker Desktop's CLI plugins, one of which starts a session bus it never stops."""
+
+    def test_no_session_bus_is_started_when_none_exists(self) -> None:
+        for value in (None, ""):
+            environ = {"PATH": "/usr/bin"} if value is None else {"PATH": "/usr/bin", "DBUS_SESSION_BUS_ADDRESS": value}
+            with self.subTest(value=value), patch.dict("os.environ", environ, clear=True):
+                env = docker.docker_info_env()
+                self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "disabled:")
+                self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_a_real_session_bus_is_kept(self) -> None:
+        with patch.dict("os.environ", {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"}, clear=True):
+            self.assertEqual(docker.docker_info_env()["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
+
+    def test_every_docker_info_call_gets_that_env(self) -> None:
+        with patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=True):
+            expected = docker.docker_info_env()
+            answered = subprocess.CompletedProcess([], 0, "", "")
+            with _ON_PATH, patch("kura.executors.docker.subprocess.run", return_value=answered) as run:
+                docker.docker_daemon_problem()
+                docker.docker_data_location()
+        info_calls = [call for call in run.call_args_list if call.args[0][:2] == ["docker", "info"]]
+        self.assertEqual(len(info_calls), 2)
+        for call in info_calls:
+            self.assertEqual(call.kwargs.get("env"), expected)
+
+
 if __name__ == "__main__":
     unittest.main()
