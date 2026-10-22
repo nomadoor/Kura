@@ -970,6 +970,7 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
             if realization is None:
                 if _sibling(request, ".stop.json").exists():
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+                    _end_unlaunched_wait(run_dir, "interrupted", "stopped by `kura run stop` while it waited for capacity; no Pod was created")
                     return 0
                 # No Pod exists for this request (none recorded yet, or its capacity wait goes on), so the confirmed launch continues (run-records ADR).
                 code: int | None = _remote(run_dir, request, details, reattach=False)
@@ -1154,6 +1155,7 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
             return 1
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", exit_code=code,
                                 error=f"the launch failed before it recorded a Pod; see runs/{run_dir.name}/logs/runner.log")
+        _end_unlaunched_wait(run_dir, "launch_failed", "the continued capacity wait failed before it created a Pod")
         return 0
     if run_finished(status):
         # The RunPod controller already notified completion with the request's channels.
@@ -1161,6 +1163,15 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     if code and isinstance(status.get("remote_exit_code"), int):
         _collection_failed(run_dir, request, details)
     return 1
+
+
+def _end_unlaunched_wait(run_dir: Path, state: str, reason: str) -> None:
+    """End the capacity wait a request settled without a launch leaves behind; nothing else would, and
+    status would keep saying the run waits for a GPU no follower looks for."""
+    from kura.executors.common import end_run, in_capacity_wait
+
+    if in_capacity_wait(_status(run_dir)):
+        end_run(run_dir, state, reason=reason)
 
 
 def _stop_runpod_on_request(run_dir: Path, request: Path, details: dict[str, Any]) -> bool:

@@ -123,6 +123,8 @@ class CreateIntentRecoveryTests(unittest.TestCase):
                 self.assertEqual(runner.work(run_dir.parent.parent, "example", request.name), 0)
             remote.assert_not_called()
             self.assertEqual(runner.request_outcome(request)["kind"], "not_launched")
+            self.assertEqual(_status(run_dir)["state"], "interrupted")
+            self.assertFalse(runner.run_unfinished(run_dir))
 
     def test_reconcile_settles_the_intent_first_even_without_a_realization(self) -> None:
         with _crashed_launch() as run_dir:

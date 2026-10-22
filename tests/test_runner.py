@@ -1038,6 +1038,8 @@ class RunPodFollowerTests(unittest.TestCase):
                  patch("kura.run_commands.launch._run_remote_locked", return_value=1):
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             self.assertEqual(runner.request_outcome(request)["kind"], "launch_failed")
+            # The run no longer says it waits for a GPU nobody looks for.
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "launch_failed")
 
     def test_a_collected_run_whose_pod_delete_failed_keeps_how_it_ended(self) -> None:
         # The controller collected and its stop failed: the follower retries the delete, never the collection.
