@@ -35,7 +35,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 from kura.artifact_publication import recorded_output_paths
 from kura.backends import trainer_cache_outputs
 from kura.executors import _apply_stdout_progress, _redact_secret_text
-from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_pod_or_none, format_cost_ceiling, pod_cost_ceiling, pod_may_exist, runpod_api_key, runpod_key_refused, runpod_ssh_endpoint
+from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_pod_or_none, format_cost_ceiling, pod_cost_ceiling, pod_may_exist, runpod_api_key, runpod_key_refused, runpod_pod_runtime, runpod_ssh_endpoint
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -1266,27 +1266,34 @@ def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 
     if not isinstance(pod_id, str):
         raise ValueError("run has no RunPod pod ID")
     api_key = runpod_api_key("needed to reach a RunPod Pod over SSH")
-    key = str(runpod_ssh_key()[0])
+    key = str(runpod_ssh_key(create=False)[0])
     deadline = time.monotonic() + timeout_sec
     last_error = "RunPod has not reported the Pod's SSH address yet"
     while time.monotonic() < deadline:
+        lookup_timeout = max(interval_sec * 3, 5)
         try:
-            pod = _runpod_pod_or_none(pod_id, api_key, timeout=max(interval_sec * 3, 5))
+            pod = runpod_pod_runtime(pod_id, api_key, timeout=lookup_timeout)
+            # Whether a Pod RunPod did not return is gone is the one owner's decision.
+            gone = pod is None and _runpod_pod_or_none(pod_id, api_key, timeout=lookup_timeout) is None
         except ValueError as exc:
             if runpod_key_refused(exc):
                 raise
             last_error = _redact_secret_text(str(exc))
         else:
-            if pod is None:
+            if gone:
                 raise ValueError(f"Pod {pod_id} no longer exists (RunPod reports it not found)")
+            pod = pod or {}
             endpoint = runpod_ssh_endpoint(pod)
             if endpoint is not None:
                 # The container start time splits the Pod startup wait into allocation
-                # plus image pull, and boot to SSH.
+                # plus image pull, and boot to SSH. RunPod reports only the uptime, so the
+                # start is this host's clock minus it (a few seconds' error at most).
                 uptime = (pod.get("runtime") or {}).get("uptimeInSeconds")
                 started = (datetime.now().astimezone() - timedelta(seconds=uptime)).isoformat(timespec="seconds") if isinstance(uptime, int) and uptime >= 0 else None
                 return {"pod_id": pod_id, "ip": endpoint[0], "port": endpoint[1], "key": key, "container_started_at": started}
-            last_error = "the Pod has no public IP and SSH port mapping yet (a host without a public IP, `supportPublicIp`, never gets one)"
+            last_error = ("the Pod's container has not started yet (RunPod is still allocating it or pulling the image)"
+                          if not isinstance(pod.get("runtime"), dict) else
+                          "the Pod has no public IP and SSH port mapping (a host without a public IP, `supportPublicIp`, never gets one)")
         sleep_checking_stop(interval_sec)
     raise ValueError(f"pod SSH did not become ready before timeout: {last_error}")
 

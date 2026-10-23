@@ -170,7 +170,6 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
                 id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
                 volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange
                 machine { id dataCenterId gpuDisplayName location }
-                runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
               }
             }
             """
@@ -204,6 +203,25 @@ def _runpod_pod_or_none(pod_id: str, api_key: str, *, timeout: float = 30.0) -> 
         if exc.status_code == 404:
             return None
         raise
+
+
+def runpod_pod_runtime(pod_id: str, api_key: str, *, timeout: float = 30.0) -> dict[str, Any] | None:
+    """The Pod with its port mappings, for reaching it over SSH; None when RunPod returned no Pod.
+
+    Its own query, so the lookup every "is the Pod gone" decision reads
+    (`_runpod_pod_or_none`) never depends on these fields; whether a None means gone is
+    for that owner to say.
+    """
+    query = """
+    query getPodRuntime($podId: String!) {
+      pod(input: {podId: $podId}) {
+        id desiredStatus
+        runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
+      }
+    }
+    """
+    pod = _runpod_graphql(query, {"podId": pod_id}, api_key, timeout=timeout).get("pod")
+    return pod if isinstance(pod, dict) else None
 
 
 def runpod_ssh_endpoint(pod: dict[str, Any]) -> tuple[str, int] | None:

@@ -49,13 +49,22 @@ class KeyOwnerTests(unittest.TestCase):
             self.assertEqual(private.parent, Path(directory))
             self.assertTrue(first.startswith("ssh-ed25519 "))
 
-    def test_a_half_written_pair_is_made_again(self) -> None:
+    def test_a_lost_public_half_is_derived_again_and_the_private_key_kept(self) -> None:
+        # Live Pods trust only the existing key, so it is never replaced.
         with tempfile.TemporaryDirectory() as directory, \
                 patch("kura.secrets.user_secrets_path", return_value=Path(directory) / "secrets.env"):
             private, public = runpod_ssh_key()
+            before = (private.read_bytes(), public.read_text(encoding="utf-8").split()[:2])
             public.unlink()
-            self.assertEqual(runpod_ssh_key(), (private, public))
-            self.assertTrue(public.is_file())
+            self.assertEqual(runpod_ssh_key(create=False), (private, public))
+            self.assertEqual((private.read_bytes(), public.read_text(encoding="utf-8").split()[:2]), before)
+
+    def test_reaching_a_pod_never_makes_a_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("kura.secrets.user_secrets_path", return_value=Path(directory) / "secrets.env"):
+            with self.assertRaisesRegex(ValueError, "is missing, so the Pods created with it cannot be reached"):
+                runpod_ssh_key(create=False)
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     @posix_only("file modes")
     def test_the_private_key_is_readable_only_by_the_user(self) -> None:
@@ -133,26 +142,31 @@ class SshEndpointTests(unittest.TestCase):
         self.assertIsNone(runpod.runpod_ssh_endpoint(_pod([PRIVATE_22, PUBLIC_HTTP])))
         self.assertIsNone(runpod.runpod_ssh_endpoint({"id": "pod-1"}))
 
-    def test_the_pod_lookup_asks_runpod_for_the_port_mappings(self) -> None:
+    def test_only_the_ssh_lookup_asks_runpod_for_the_port_mappings(self) -> None:
+        mappings = "runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }"
         with patch("kura.executors.runpod._runpod_graphql", return_value={"pod": _pod([PUBLIC_22])}) as graphql:
+            self.assertEqual(runpod.runpod_pod_runtime("pod-1", "api-secret"), _pod([PUBLIC_22]))
             runpod._runpod_pod_or_none("pod-1", "api-secret")
-        query = graphql.call_args.args[0]
-        self.assertIn("runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }", query)
+        ssh_query, gone_query = (call.args[0] for call in graphql.call_args_list)
+        self.assertIn(mappings, ssh_query)
+        # The lookup every "is the Pod gone" decision reads never depends on these fields.
+        self.assertNotIn("runtime", gone_query)
 
 
 class SshDetailsTests(unittest.TestCase):
-    def _details(self, answers: list[Any], *, timeout_sec: int = 5) -> dict[str, Any]:
+    def _details(self, answers: list[Any], *, timeout_sec: int = 5, known: Any = None) -> dict[str, Any]:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
             run_dir.mkdir(parents=True)
             (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.run_commands.runpod_ssh.runpod_ssh_key", return_value=(Path("/keys/runpod_ssh_key"), Path("/keys/runpod_ssh_key.pub"))), \
-                    patch("kura.executors.runpod._runpod_request", side_effect=answers) as request, \
+                    patch("kura.run_commands.runpod_ssh.runpod_pod_runtime", side_effect=answers) as runtime, \
+                    patch("kura.run_commands.runpod_ssh._runpod_pod_or_none", return_value=known) as gone, \
                     patch("kura.run_commands.runpod_ssh.sleep_checking_stop"), \
                     patch("shutil.which", return_value=None):
                 details = _runpod_ssh_details(run_dir, timeout_sec=timeout_sec, interval_sec=0)
-            self.assertTrue(all(call.args[:2] == ("GET", "/pods/pod-1") for call in request.call_args_list))
+            self.assertTrue(all(call.args[:2] == ("pod-1", "api-secret") for call in [*runtime.call_args_list, *gone.call_args_list]))
             return details
 
     def test_the_public_ssh_address_and_kuras_key_are_used(self) -> None:
@@ -164,9 +178,18 @@ class SshDetailsTests(unittest.TestCase):
         details = self._details([_pod(None), ValueError("RunPod API is unreachable: timed out"), _pod([PRIVATE_22]), _pod([PUBLIC_22])])
         self.assertEqual(details["port"], 40022)
 
+    def test_a_pod_the_runtime_lookup_misses_but_runpod_still_knows_is_asked_again(self) -> None:
+        details = self._details([None, _pod([PUBLIC_22])], known={"id": "pod-1"})
+        self.assertEqual(details["port"], 40022)
+
     def test_a_pod_runpod_does_not_know_is_gone(self) -> None:
         with self.assertRaisesRegex(ValueError, "no longer exists"):
-            self._details([RunPodAPIError("RunPod Pod not found", status_code=404)])
+            self._details([None], known=None)
+
+    def test_a_pod_whose_container_never_starts_times_out_saying_so(self) -> None:
+        with patch("kura.run_commands.runpod_ssh.time.monotonic", side_effect=[0, 0, 0, 10]):
+            with self.assertRaisesRegex(ValueError, "container has not started yet"):
+                self._details([_pod(None), _pod(None)], timeout_sec=5)
 
     def test_a_refused_key_is_raised_at_once(self) -> None:
         with self.assertRaises(RunPodAPIError):

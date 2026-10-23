@@ -1552,8 +1552,8 @@ def _host_metrics() -> HostMetrics:
 def _runpod_host_metrics(workspace: Path, summary: RunSummary) -> HostMetrics:
     """Best-effort live telemetry for a running RunPod pod.
 
-    This is intentionally read-only: resolve SSH details through the existing
-    RunPod CLI path, then run nvidia-smi and read /proc/meminfo inside the Pod.
+    This is intentionally read-only: resolve SSH details through RunPod's API
+    and Kura's existing SSH key, then run nvidia-smi and read /proc/meminfo inside the Pod.
     Failures return empty metrics so monitor rendering never depends on remote
     telemetry being available.
     """
