@@ -14,6 +14,25 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: musubi-tuner-own-ssh-key-conformance-runpod-2026-10-23
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: d328ad9ec63e4d93bc83267e85912dc15bcea973e71f825a73e05670cbe6bff8
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    native_path:
+      architecture: wan
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-23'
+    artifact: smoke-evidence/2026-10-23-runpod-own-ssh-key.yaml
   - id: musubi-tuner-lifecycle-conformance-runpod-2026-10-23
     backend: musubi-tuner
     adapter_source:
