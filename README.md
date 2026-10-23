@@ -26,7 +26,7 @@ Kura is not a trainer itself. It manages the training tools [AI-Toolkit](https:/
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | Runs Kura | Always (the setup below installs it) |
 | Docker | Runs the training tools | When you train on your own PC. [Docker Desktop](https://docs.docker.com/get-started/get-docker/) on Windows and Mac, Docker Engine on Linux |
 | NVIDIA GPU | Trains | When you train on your own PC |
-| [RunPod](https://www.runpod.io/) account | Trains on cloud GPUs | When you use RunPod |
+| [RunPod](https://www.runpod.io/) account | Trains on cloud GPUs | When you use RunPod. Kura needs only its API key; there is nothing else to install or register |
 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Test-renders | When you test-render |
 
 If you train only on RunPod, you do not need a local GPU. Macs have no NVIDIA GPU, so training runs on RunPod.
@@ -149,7 +149,7 @@ A model has actually been trained through Kura only where its [model family card
 git pull
 ```
 
-That is all. Anything else needed is set up the next time you run `uv run kura ...`. Kura also manages the training tools' Docker images and pins them to versions it has verified. You never build them or choose versions yourself.
+Anything else needed is set up the next time you run `uv run kura ...`. If a command then refuses your `workspace.yaml` because it holds a setting Kura no longer reads, run `uv run kura workspace migrate` to see the change, then `uv run kura workspace migrate --yes` to apply it (the old file is kept as a backup). Kura also manages the training tools' Docker images and pins them to versions it has verified. You never build them or choose versions yourself.
 
 ## More
 

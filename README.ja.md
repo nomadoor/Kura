@@ -26,7 +26,7 @@ Kura 自体は学習ソフトではありません。[AI-Toolkit](https://github
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | Kura を動かす | 常に（下のセットアップで入ります） |
 | Docker | 学習ツールを動かす | 自分の PC で学習するとき。Windows と Mac は [Docker Desktop](https://docs.docker.com/get-started/get-docker/)、Linux は Docker Engine |
 | NVIDIA GPU | 学習する | 自分の PC で学習するとき |
-| [RunPod](https://www.runpod.io/) アカウント | クラウド GPU で学習する | RunPod を使うとき |
+| [RunPod](https://www.runpod.io/) アカウント | クラウド GPU で学習する | RunPod を使うとき。必要なのは API キーだけで、ほかに入れるものや登録するものはありません |
 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | 試し描きする | 試し描きするとき |
 
 RunPod だけで学習する場合は、手元に GPU は要りません。Mac には NVIDIA GPU がないので、学習は RunPod で行います。
@@ -149,7 +149,7 @@ Kura が学習を組み立てられる主なモデルは次のとおりです。
 git pull
 ```
 
-これだけです。必要なものは、次に `uv run kura ...` を実行したときに自動でそろいます。学習ツールの Docker イメージも Kura が管理していて、動作を確かめたバージョンに固定されています。自分でビルドしたり、バージョンを選んだりする必要はありません。
+必要なものは、次に `uv run kura ...` を実行したときに自動でそろいます。そのとき、Kura がもう読まない設定が `workspace.yaml` に残っていて拒否されたら、`uv run kura workspace migrate` で変更内容を確かめてから、`uv run kura workspace migrate --yes` で書き換えてください（元のファイルはバックアップとして残ります）。学習ツールの Docker イメージも Kura が管理していて、動作を確かめたバージョンに固定されています。自分でビルドしたり、バージョンを選んだりする必要はありません。
 
 ## もっと詳しく
 
