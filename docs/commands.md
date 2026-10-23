@@ -6,6 +6,9 @@ want and it runs these for you; this page is for when you want to look one up.
 This is a curated subset. Run `uv run kura --help` (or `uv run kura <command> --help`)
 for the complete, authoritative, up-to-date list of commands and options.
 
+Moving from a Kura clone to an installed Kura and a separate workspace:
+[moving-to-a-workspace.md](moving-to-a-workspace.md).
+
 ## Setup
 
 | Command | Purpose |
