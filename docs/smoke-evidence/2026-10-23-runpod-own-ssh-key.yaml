@@ -17,7 +17,7 @@ backends:
     runs: [20261023-1408_conf-musubi-one-control_2d71, 20261023-1413_conf-musubi-one-control-2_b9e0, 20261023-1417_conf-musubi-one-split_96f2, 20261023-1420_conf-musubi-one-resume_a6fc, 20261023-1425_conf-musubi-multi-fresh_80e3, 20261023-1428_conf-musubi-multi-split_30d4, 20261023-1433_conf-musubi-multi-resume_37a2]
     pods: 6 COMMUNITY and 1 SECURE (RTX 3090 x6, RTX A4500 x1); every one reached over SSH with Kura's key through a public 22/tcp mapping
     pod_minutes: about 28 across 7 Pods, about $0.12 GPU by kura run status
-render:
+render_run:
   run_id: 20261023-0850_pr358-runpod-render_6139
   image: nomadoor/kura-comfyui@sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4
   workflow: workflows/samples/anima/anima-base-v1.0_api.json, seed 1234
