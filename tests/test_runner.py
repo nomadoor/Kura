@@ -17,6 +17,7 @@ from unittest.mock import patch
 from kura import __version__, runner
 from kura.executors.common import StaleRunnerEpoch, _mutate_run_status, _run_operation_lock, run_finished
 from kura.fsio import file_lock
+from tests.user_config import isolate_user_config
 
 
 @contextmanager
@@ -45,6 +46,7 @@ _DOCKER_DATA = patch("kura.executors.docker.docker_data_location", return_value=
 
 
 def setUpModule() -> None:
+    isolate_user_config()
     # The disk watch reads this host's free space and asks Docker; its own tests are in test_disk_watch.
     _DISK_WATCH.start()
     _DOCKER_DATA.start()

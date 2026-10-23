@@ -14,6 +14,7 @@ from kura.cli import cmd_run_reconcile
 from kura.executors.runpod import resolve_runpod_create_intents, stop_runpod, unresolved_create_intents
 from kura.fsio import file_lock
 from kura.run_commands.plan import stop_run
+from tests.user_config import isolate_user_config
 
 RID = "20261004-101010-000001"
 NAME = f"kura-example-{RID}"
@@ -523,6 +524,10 @@ class UnconfirmedCreateTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "kura run reconcile"):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertEqual(_status(run_dir)["state"], "interrupted")
+
+
+def setUpModule() -> None:
+    isolate_user_config()
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ import argparse
 import getpass
 import os
 import re
+import shutil
+import subprocess
 import sys
 import urllib.request
 from functools import lru_cache
@@ -35,6 +37,41 @@ _loaded_from: dict[str, str] = {}
 
 def user_secrets_path() -> Path:
     return Path(platformdirs.user_config_dir("kura", appauthor=False, roaming=False)) / "secrets.env"
+
+
+RUNPOD_SSH_KEY_NAME = "runpod_ssh_key"
+
+
+def runpod_ssh_key() -> tuple[Path, Path]:
+    """The SSH key Kura reaches every RunPod Pod with: (private key, public key) paths.
+
+    One key per user, beside the user secrets file, created once with `ssh-keygen` on first
+    use and readable only by the user where the file system supports that. Every Pod gets
+    the public key in its env; the private key never leaves this directory (no workspace
+    file, record, image, or log holds it).
+    """
+    private = user_secrets_path().with_name(RUNPOD_SSH_KEY_NAME)
+    public = private.with_name(f"{RUNPOD_SSH_KEY_NAME}.pub")
+    if private.is_file() and public.is_file():
+        return private, public
+    private.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(private.with_name(f".{RUNPOD_SSH_KEY_NAME}.lock")):
+        if not (private.is_file() and public.is_file()):
+            if shutil.which("ssh-keygen") is None:
+                raise ValueError("ssh-keygen is not installed; Kura reaches RunPod Pods over SSH, so install the OpenSSH client (ssh, scp, ssh-keygen)")
+            # A half-written pair (a crash between the two files) is made again whole.
+            private.unlink(missing_ok=True)
+            public.unlink(missing_ok=True)
+            made = subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "kura-runpod", "-f", str(private)],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False,
+            )
+            if made.returncode or not (private.is_file() and public.is_file()):
+                detail = (made.stderr or made.stdout).strip()
+                raise ValueError(f"ssh-keygen could not create Kura's RunPod SSH key at {private} (exit {made.returncode}{': ' + detail if detail else ''})")
+            if os.name != "nt":
+                os.chmod(private, 0o600)
+    return private, public
 
 
 def workspace_secrets_path() -> Path:

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from kura.executors import runpod
 from kura.executors.runpod import RunPodAPIError, unresolved_create_intents
+from tests.user_config import isolate_user_config
 
 # Two GPU candidates, so a loop that treats a failure as refused tries a second create.
 CONFIG = {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40", "NVIDIA L40S"], "gpu_type_priority": "custom", "cloud_types": ["COMMUNITY"]}
@@ -210,6 +211,10 @@ class DeleteByNameTests(unittest.TestCase):
                 self.assertEqual(record["targets"], [{"pod_id": "pod-1", "result": "deleted"}])
                 # Not recorded as stopped, so the stop is tried again and looks again.
                 self.assertNotIn("pod_stopped_at", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
+
+
+def setUpModule() -> None:
+    isolate_user_config()
 
 
 if __name__ == "__main__":

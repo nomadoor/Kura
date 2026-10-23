@@ -19,6 +19,8 @@ from unittest.mock import patch
 
 from kura.executors import runpod
 from kura.executors.runpod import RunPodAPIError
+from kura.secrets import runpod_ssh_key
+from tests.user_config import isolate_user_config
 
 GOLDEN = Path(__file__).with_name("runpod_create_golden.json")
 RID = "20261023-100000-000001"
@@ -143,10 +145,33 @@ class OneCreateOwnerTests(unittest.TestCase):
                 create.assert_called_once()
 
 
+# What every Pod ran to let SSH in before Kura sent its own key: only the account keys in PUBLIC_KEY.
+ACCOUNT_KEYS_ONLY = r'''
+if [ -n "${PUBLIC_KEY:-}" ]; then
+  printf '%s\n' "$PUBLIC_KEY" | grep '^ssh-' > /root/.ssh/authorized_keys || true
+  chmod 600 /root/.ssh/authorized_keys
+fi
+'''.lstrip("\n")
+KURA_KEY_AND_ACCOUNT_KEYS = r'''
+printf '%s\n' "${KURA_SSH_PUBLIC_KEY:-}" "${PUBLIC_KEY:-}" | grep '^ssh-' > /root/.ssh/authorized_keys || true
+chmod 600 /root/.ssh/authorized_keys
+'''.lstrip("\n")
+
+
+def _with_kura_ssh_key(request: dict[str, Any]) -> None:
+    """Kura sends its own SSH public key with every Pod and lets it in beside the account keys."""
+    request["env"] = {**request["env"], "KURA_SSH_PUBLIC_KEY": runpod_ssh_key()[1].read_text(encoding="utf-8").strip()}
+    script = request["dockerStartCmd"][2]
+    assert script.count(ACCOUNT_KEYS_ONLY) == 1
+    request["dockerStartCmd"][2] = script.replace(ACCOUNT_KEYS_ONLY, KURA_KEY_AND_ACCOUNT_KEYS)
+
+
 def changed(case: str, before: dict[str, Any]) -> dict[str, Any]:
     """The golden capture with what the one owner changed on purpose: each was a difference
     between the two loops that training and render do not really need."""
     realization = before["realization"]
+    for request in [*before["sent"], before["intent"]["request"], realization["request"]]:
+        _with_kura_ssh_key(request)
     if case == "render/created":
         # The render loop never recorded when its Pod was created.
         before["phases"] = [*before["phases"], "pod_created"]
@@ -159,6 +184,10 @@ def changed(case: str, before: dict[str, Any]) -> dict[str, Any]:
         # The launch's facts are recorded whatever its outcome.
         realization["transfer"] = {"archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}
     return before
+
+
+def setUpModule() -> None:
+    isolate_user_config()
 
 
 if __name__ == "__main__":

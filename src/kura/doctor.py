@@ -24,6 +24,7 @@ from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
 from kura.secrets import declared_secret, is_secret_name
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_daemon_problem, docker_data_location
+from kura.executors.runpod import runpod_network_volumes, runpod_pods
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
@@ -675,61 +676,47 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     except (OSError, ValueError, YAMLError) as exc:
         print(f"runpod: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    api_key_present = bool(declared_secret("RUNPOD_API_KEY"))
+    api_key = declared_secret("RUNPOD_API_KEY")
     checks: dict[str, Any] = {
-        "runpodctl_command": bool(shutil.which("runpodctl")),
-        "api_key": api_key_present,
+        "api_key": bool(api_key),
         "pod_list": False,
         "pods_empty": None,
-        "network_volume_list": False,
+        "network_volume_list": None,
         "network_volumes_empty": None,
         "images_pinned": True,
     }
-    diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "config": {key: value for key, value in config.items() if not is_secret_name(key)}}
+    diagnostics: dict[str, Any] = {"config": {key: value for key, value in config.items() if not is_secret_name(key)}}
     images = [effective_image(workspace_config, name) for name in image_names()]
     mutable_images = {image["name"]: image["reference"] for image in images if mutable_override_warning(image)}
     checks["images_pinned"] = not mutable_images
     if mutable_images:
         diagnostics["mutable_images"] = mutable_images
-    if checks["runpodctl_command"]:
-        version = subprocess.run(["runpodctl", "version"], text=True, capture_output=True, check=False)
-        diagnostics["runpodctl_version"] = _redact_secret_text((version.stdout or version.stderr).strip())
-    if checks["runpodctl_command"] and api_key_present:
+    if api_key:
+        # Kura talks to RunPod only through its API, with RUNPOD_API_KEY; no local RunPod CLI is needed.
         try:
-            pods = subprocess.run(["runpodctl", "pod", "list"], text=True, capture_output=True, check=False)
-            checks["pod_list"] = pods.returncode == 0
-            diagnostics["pod_list_returncode"] = pods.returncode
-            diagnostics["pod_list_stdout"] = _redact_secret_text(pods.stdout.strip())
-            diagnostics["pod_list_stderr"] = _redact_secret_text(pods.stderr.strip())
-            if pods.returncode == 0:
-                all_pods = json.loads(pods.stdout)
-                diagnostics["pods"] = _redact_secrets(all_pods)
-                checks["pods_empty"] = all_pods == []
-        except Exception as exc:
+            pods = runpod_pods(api_key)
+            checks["pod_list"] = True
+            checks["pods_empty"] = pods == []
+            diagnostics["pods"] = _redact_secrets(pods)
+        except Exception as exc:  # read-only doctor; keep diagnosis broad.
             diagnostics["pods_error"] = _redact_secret_text(str(exc))
         try:
-            volumes_result = subprocess.run(["runpodctl", "network-volume", "list"], text=True, capture_output=True, check=False)
-            checks["network_volume_list"] = volumes_result.returncode == 0
-            diagnostics["network_volume_list_returncode"] = volumes_result.returncode
-            diagnostics["network_volume_list_stderr"] = _redact_secret_text(volumes_result.stderr.strip())
-            if volumes_result.returncode == 0:
-                volumes = json.loads(volumes_result.stdout)
-                diagnostics["network_volumes"] = _redact_secrets(volumes)
-                checks["network_volumes_empty"] = volumes == []
-            else:
-                diagnostics["network_volumes_error"] = diagnostics["network_volume_list_stderr"] or "runpodctl network-volume list failed"
-        except Exception as exc:  # read-only doctor; keep diagnosis broad.
-            diagnostics["network_volumes_error"] = _redact_secret_text(str(exc))
-    ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["pods_empty"] is not False and checks["network_volume_list"] and checks["network_volumes_empty"] is True)
+            volumes = runpod_network_volumes(api_key)
+            checks["network_volume_list"] = True
+            checks["network_volumes_empty"] = volumes == []
+            diagnostics["network_volumes"] = _redact_secrets(volumes)
+        except Exception as exc:  # a listing RunPod refuses is reported, never a doctor failure
+            diagnostics["network_volumes_error"] = "could not list network volumes: " + _redact_secret_text(str(exc))
+    ok = bool(checks["api_key"] and checks["pod_list"] and checks["pods_empty"] is not False and checks["network_volumes_empty"] is not False)
     if ok and mutable_images:
-        diagnosis = "RunPod CLI/API are ready, but images.<name> overrides with mutable tags should be pinned before reproducible runs."
+        diagnosis = "The RunPod API is ready, but images.<name> overrides with mutable tags should be pinned before reproducible runs."
     elif ok:
-        diagnosis = "RunPod CLI/API are ready."
+        diagnosis = "The RunPod API is ready."
     elif checks["pods_empty"] is False:
         diagnosis = "RunPod has Pods remaining; delete stopped/exited Pods if they should not persist."
     elif checks["network_volumes_empty"] is False:
         diagnosis = "RunPod has Network Volumes remaining; delete volumes that should not persist."
-    elif _looks_like_process_permission_denial(diagnostics.get("pods_error")) or _looks_like_process_permission_denial(diagnostics.get("pod_list_stderr")):
+    elif _looks_like_process_permission_denial(diagnostics.get("pods_error")):
         diagnosis = "This process could not reach the RunPod API because the OS denied the connection before RunPod responded. The same Kura command may work outside this process's permission context. See external-access.md, shipped with Kura as .kura/reference/external-access.md."
     else:
         diagnosis = "RunPod is not fully ready; inspect checks and diagnostics."

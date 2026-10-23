@@ -32,6 +32,7 @@ from kura.executors.runpod import stage_runpod
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.platform_support import DATASET_IO, posix_only, small_local_reserve
+from tests.user_config import isolate_user_config
 
 
 class _CompiledRunFixture:
@@ -1103,6 +1104,10 @@ class RunEventReaderTests(unittest.TestCase):
             self.assertTrue(_event_exists(
                 run_dir, event="dataset_input_postflight", realization_id="r", record="realizations/r.json",
             ))
+
+
+def setUpModule() -> None:
+    isolate_user_config()
 
 
 if __name__ == "__main__":

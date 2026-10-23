@@ -19,11 +19,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
-from kura.secrets import container_secret_env
+from kura.secrets import container_secret_env, runpod_ssh_key
 from kura.yamlio import YAMLError
 from kura.storage import ensure_free_bytes
 from kura.container_scripts import script_source
@@ -35,7 +35,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 from kura.artifact_publication import recorded_output_paths
 from kura.backends import trainer_cache_outputs
 from kura.executors import _apply_stdout_progress, _redact_secret_text
-from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, format_cost_ceiling, pod_cost_ceiling, pod_may_exist
+from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_pod_or_none, format_cost_ceiling, pod_cost_ceiling, pod_may_exist, runpod_api_key, runpod_key_refused, runpod_ssh_endpoint
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -257,14 +257,7 @@ PY
         if packed.returncode:
             raise ValueError(f"remote delta archive packing failed with exit code {packed.returncode}")
         copied = _run_bounded(
-            [
-                "scp",
-                *_ssh_transport_options(details),
-                "-P", str(details["port"]),
-                "-i", str(details["key"]),
-                f"root@{details['ip']}:{remote_archive}",
-                str(local_archive),
-            ],
+            [*_scp_base(details), _pod_path(details, remote_archive), str(local_archive)],
             context="scp delta snapshot",
         )
         if copied.returncode:
@@ -606,8 +599,6 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
                 return _collected_exit_code(run_dir)
             raise ValueError("downloaded run snapshot is missing remote-exit; use --force to retry or inspect the Pod before stopping it")
-        if not shutil.which("runpodctl"):
-            raise ValueError("runpodctl is not installed locally; install it before downloading")
         config = _workspace_config()
         reserve = local_reserve_bytes(run_dir, config)
         details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
@@ -977,14 +968,7 @@ def _pull_remote_training_state_items(
         partial.mkdir()
         try:
             result = _run_bounded(
-                [
-                    "scp", "-r",
-                    *_ssh_transport_options(details),
-                    "-P", str(details["port"]),
-                    "-i", str(details["key"]),
-                    f"root@{details['ip']}:{remote_path}/.",
-                    str(partial),
-                ],
+                [*_scp_base(details), "-r", _pod_path(details, f"{remote_path}/."), str(partial)],
                 context="scp training-state pull",
                 text=True,
                 capture_output=True,
@@ -1072,14 +1056,7 @@ def _pull_remote_output_items(
         partial_path = local_path.with_name(f".{local_path.name}.partial")
         partial_path.unlink(missing_ok=True)
         try:
-            result = _run_bounded([
-                "scp",
-                *_ssh_transport_options(details),
-                "-P", str(details["port"]),
-                "-i", str(details["key"]),
-                f"root@{details['ip']}:{remote_path}",
-                str(partial_path),
-            ], context="scp output pull")
+            result = _run_bounded([*_scp_base(details), _pod_path(details, remote_path), str(partial_path)], context="scp output pull")
             if result.returncode:
                 raise ValueError(f"scp output pull failed with exit code {result.returncode}: {name}")
             refreshed = _runpod_remote_outputs(details, workspace=workspace, run_id=run_dir.name)
@@ -1244,8 +1221,6 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
 def cmd_run_pull(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
-        if not shutil.which("runpodctl"):
-            raise ValueError("runpodctl is not installed locally; install it before pulling outputs")
         workspace = _runpod_workspace_for_run(run_dir)
         details = _runpod_ssh_details(run_dir, timeout_sec=args.ssh_timeout, interval_sec=2)
         items = _saves_of_this_run(run_dir, _runpod_remote_outputs(details, workspace=workspace, run_id=args.run_id))
@@ -1281,36 +1256,37 @@ def remote_job_pid(run_dir: Path, pid_path: str, *, timeout_sec: int = 120) -> s
 
 
 def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 10) -> dict[str, Any]:
+    """How to reach the run's Pod over SSH: its public SSH address and Kura's own key.
+
+    Waits up to `timeout_sec` for RunPod to report a public 22/tcp mapping. A Pod RunPod no
+    longer knows is gone, and a refused or missing RunPod API key is raised at once.
+    """
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     pod_id = status.get("pod_id")
     if not isinstance(pod_id, str):
         raise ValueError("run has no RunPod pod ID")
+    api_key = runpod_api_key("needed to reach a RunPod Pod over SSH")
+    key = str(runpod_ssh_key()[0])
     deadline = time.monotonic() + timeout_sec
-    last_error = ""
+    last_error = "RunPod has not reported the Pod's SSH address yet"
     while time.monotonic() < deadline:
         try:
-            result = subprocess.run(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, check=False, timeout=max(interval_sec * 3, 1))
-        except subprocess.TimeoutExpired:
-            last_error = "runpodctl pod get timed out"
-            time.sleep(interval_sec)
-            continue
-        if result.returncode:
-            last_error = _redact_secret_text(result.stderr.strip() or result.stdout.strip())
+            pod = _runpod_pod_or_none(pod_id, api_key, timeout=max(interval_sec * 3, 5))
+        except ValueError as exc:
+            if runpod_key_refused(exc):
+                raise
+            last_error = _redact_secret_text(str(exc))
         else:
-            try:
-                pod = json.loads(result.stdout)
-            except json.JSONDecodeError as exc:
-                last_error = _safe_error(exc)
-            else:
-                ssh = pod.get("ssh") if isinstance(pod.get("ssh"), dict) else {}
-                ip, port = ssh.get("ip"), ssh.get("port")
-                key = ssh.get("ssh_key", {}).get("path") if isinstance(ssh.get("ssh_key"), dict) else None
-                if isinstance(ip, str) and isinstance(port, int) and isinstance(key, str):
-                    # When RunPod reports it, the container start time splits the
-                    # Pod startup wait into allocation plus image pull, and boot to SSH.
-                    started = pod.get("lastStartedAt")
-                    return {"pod_id": pod_id, "ip": ip, "port": port, "key": key, "container_started_at": started if isinstance(started, str) and started else None}
-                last_error = str(ssh.get("error") or "pod SSH is not ready")
+            if pod is None:
+                raise ValueError(f"Pod {pod_id} no longer exists (RunPod reports it not found)")
+            endpoint = runpod_ssh_endpoint(pod)
+            if endpoint is not None:
+                # The container start time splits the Pod startup wait into allocation
+                # plus image pull, and boot to SSH.
+                uptime = (pod.get("runtime") or {}).get("uptimeInSeconds")
+                started = (datetime.now().astimezone() - timedelta(seconds=uptime)).isoformat(timespec="seconds") if isinstance(uptime, int) and uptime >= 0 else None
+                return {"pod_id": pod_id, "ip": endpoint[0], "port": endpoint[1], "key": key, "container_started_at": started}
+            last_error = "the Pod has no public IP and SSH port mapping yet (a host without a public IP, `supportPublicIp`, never gets one)"
         sleep_checking_stop(interval_sec)
     raise ValueError(f"pod SSH did not become ready before timeout: {last_error}")
 
@@ -1406,17 +1382,22 @@ def _ssh_base(details: dict[str, Any]) -> list[str]:
     ]
 
 
-def _scp_to_runpod(details: dict[str, Any], source: Path, target: str) -> None:
-    command = [
+def _scp_base(details: dict[str, Any]) -> list[str]:
+    """Every scp to or from a Pod starts here; the caller adds its own options and the two paths."""
+    return [
         "scp",
-        "-o", "BatchMode=yes",
         *_ssh_transport_options(details),
-        "-o", "ConnectTimeout=20",
         "-P", str(details["port"]),
         "-i", str(details["key"]),
-        str(source),
-        f"root@{details['ip']}:{target}",
     ]
+
+
+def _pod_path(details: dict[str, Any], path: str) -> str:
+    return f"root@{details['ip']}:{path}"
+
+
+def _scp_to_runpod(details: dict[str, Any], source: Path, target: str) -> None:
+    command = [*_scp_base(details), "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", str(source), _pod_path(details, target)]
     try:
         result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=600)
     except subprocess.TimeoutExpired as exc:
@@ -1785,8 +1766,8 @@ def record_pod_lease_deadline(run_dir: Path, details: dict[str, Any]) -> None:
         lines = [line for line in result.stderr.splitlines() if line.strip()]
         detail = _redact_secret_text(lines[-1].strip()) if lines else "no message"
         raise ValueError(
-            f"cannot reach the Pod over SSH (ssh exited {result.returncode}: {detail}); check that your RunPod account "
-            "has this machine's SSH public key (RunPod settings, SSH Public Keys; `runpodctl ssh add-key`)"
+            f"cannot reach the Pod over SSH (ssh exited {result.returncode}: {detail}); Kura's own SSH key is sent with "
+            "every Pod, so this is a network or Pod problem; the Pod is deleted"
         )
     value = result.stdout.strip()
     if not value.isdigit():
@@ -2198,15 +2179,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     if prepared.returncode:
         raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
     for local, remote in uploads:
-        scp = [
-            "scp",
-            *_ssh_transport_options(details),
-            "-P", str(details["port"]),
-            "-i", str(details["key"]),
-            str(local),
-            f"root@{details['ip']}:{remote}",
-        ]
-        uploaded = _run_bounded(scp, context="scp upload")
+        uploaded = _run_bounded([*_scp_base(details), str(local), _pod_path(details, remote)], context="scp upload")
         if uploaded.returncode:
             raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
     record_launch_phase(run_dir, realization_id, "upload_finished")

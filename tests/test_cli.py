@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.backend_fixtures import with_required
 from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only, small_local_reserve
+from tests.user_config import isolate_user_config
 
 
 
@@ -85,6 +86,7 @@ _READINESS_OFF = patch("kura.init_templates.readiness_gaps", return_value=[])
 
 
 def setUpModule() -> None:
+    isolate_user_config()
     _SSH_REUSE_OFF.start()
     _RUNPOD_MARKS_OFF.start()
     _READINESS_OFF.start()
@@ -7008,8 +7010,7 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
                      patch("kura.run_commands.runpod_ssh._start_ssh_master"), \
                      patch("kura.run_commands.runpod_ssh._touch_runpod_mark", return_value=True) as touch, \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=ValueError("remote manifest unreadable")), \
@@ -7048,8 +7049,7 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
                      patch("kura.run_commands.runpod_ssh._start_ssh_master"), \
                      patch("kura.run_commands.runpod_ssh.RUNPOD_COLLECTING_REFRESH_SEC", 0.05), \
                      patch("kura.run_commands.runpod_ssh._touch_runpod_mark", side_effect=touch), \
@@ -8771,8 +8771,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                     _runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=3600)
             message = str(caught.exception)
             self.assertIn("cannot reach the Pod over SSH (ssh exited 255: root@1.2.3.4: Permission denied (publickey).)", message)
-            self.assertIn("SSH Public Keys", message)
-            self.assertIn("runpodctl ssh add-key", message)
+            self.assertIn("Kura's own SSH key is sent with every Pod", message)
+            self.assertNotIn("runpodctl", message)
             self.assertNotIn("lease deadline", message)
             self.assertFalse(any("nohup sh" in " ".join(map(str, call.args[0])) for call in run.call_args_list))
             self.assertEqual(list((run_dir / "realizations").glob("r1.lease-*.json")), [])
@@ -8891,24 +8891,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=subprocess.TimeoutExpired(["scp"], 600)):
                 with self.assertRaisesRegex(ValueError, "scp upload timed out"):
                     _scp_to_runpod(details, source, "/workspace/workflow.json")
-
-    def test_runpod_ssh_details_retries_after_pod_get_timeout(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "runs" / "example"
-            run_dir.mkdir(parents=True)
-            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1"}), encoding="utf-8")
-            pod = {"ssh": {"ip": "127.0.0.1", "port": 22, "ssh_key": {"path": "/tmp/key"}}}
-            with patch(
-                "kura.run_commands.runpod_ssh.subprocess.run",
-                side_effect=[
-                    subprocess.TimeoutExpired(["runpodctl", "pod", "get", "pod-1"], 1),
-                    subprocess.CompletedProcess(["runpodctl"], 0, json.dumps(pod), ""),
-                ],
-            ) as run:
-                details = _runpod_ssh_details(run_dir, timeout_sec=5, interval_sec=0)
-
-            self.assertEqual(details["pod_id"], "pod-1")
-            self.assertEqual(run.call_args.kwargs["timeout"], 1)
 
     def test_reconcile_runpod_exited_is_unknown_without_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9241,8 +9223,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
                      patch("kura.run_commands.runpod_ssh.ensure_free_bytes") as ensure_free:
@@ -9314,8 +9295,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[first, changed]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
                      patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
@@ -9363,8 +9343,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
                      patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
@@ -9416,8 +9395,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
                      patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
@@ -9674,9 +9652,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             real_run = subprocess.run
 
             def fake_run(command: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-                if command[:3] == ["runpodctl", "pod", "get"]:
-                    pod = {"ssh": {"ip": "127.0.0.1", "port": 22, "ssh_key": {"path": "/tmp/key"}}}
-                    return subprocess.CompletedProcess(command, 0, json.dumps(pod), "")
                 if command and command[0] == "ssh":
                     return subprocess.CompletedProcess(command, 0, "", "")
                 if command and command[0] == "scp":
@@ -9694,90 +9669,77 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.shutil.which", return_value="/usr/bin/runpodctl"), \
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}), \
                      patch("kura.cli.subprocess.run", side_effect=fake_run):
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 1)
 
-    def test_doctor_runpod_fails_when_network_volumes_remain(self) -> None:
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            if command == ["runpodctl", "version"]:
-                return subprocess.CompletedProcess(command, 0, "runpodctl test", "")
-            if command == ["runpodctl", "pod", "list"]:
-                return subprocess.CompletedProcess(command, 0, "[]", "")
-            if command == ["runpodctl", "network-volume", "list"]:
-                return subprocess.CompletedProcess(command, 0, '[{"id":"volume-1"}]', "")
-            raise AssertionError(command)
-
+    def _doctor_runpod(self, graphql: Any) -> tuple[int, dict[str, Any]]:
+        """`kura doctor runpod` with RunPod's API answered by `graphql` and no RunPod CLI on PATH."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
+                real_which = shutil.which
                 with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
-                     patch("kura.doctor.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.doctor.subprocess.run", side_effect=fake_run):
-                    code = cmd_doctor_runpod(argparse.Namespace())
-            finally:
-                os.chdir(previous)
-            self.assertEqual(code, 1)
-
-    def test_doctor_runpod_fails_when_network_volume_check_is_unknown(self) -> None:
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            if command == ["runpodctl", "version"]:
-                return subprocess.CompletedProcess(command, 0, "runpodctl test", "")
-            if command == ["runpodctl", "pod", "list"]:
-                return subprocess.CompletedProcess(command, 0, "[]", "")
-            if command == ["runpodctl", "network-volume", "list"]:
-                return subprocess.CompletedProcess(command, 1, "", "network volume endpoint unavailable")
-            raise AssertionError(command)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
-                     patch("kura.doctor.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.doctor.subprocess.run", side_effect=fake_run), \
+                     patch("shutil.which", side_effect=lambda name, *a, **k: None if name == "runpodctl" else real_which(name, *a, **k)), \
+                     patch("kura.executors.runpod._runpod_graphql", side_effect=graphql), \
                      patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
                     code = cmd_doctor_runpod(argparse.Namespace())
             finally:
                 os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 1)
-            self.assertIsNone(payload["checks"]["network_volumes_empty"])
-            self.assertIn("network_volumes_error", payload["diagnostics"])
+        return code, json.loads(stdout.getvalue())
+
+    @staticmethod
+    def _account(pods: Any, volumes: Any) -> Any:
+        def graphql(query: str, variables: dict[str, Any], api_key: str, **_: object) -> dict[str, Any]:
+            assert api_key == "api-secret"
+            if "networkVolumes" in query:
+                if isinstance(volumes, Exception):
+                    raise volumes
+                return {"myself": {"networkVolumes": volumes}}
+            if "pods" in query:
+                if isinstance(pods, Exception):
+                    raise pods
+                return {"myself": {"pods": pods}}
+            raise AssertionError(query)
+        return graphql
+
+    def test_doctor_runpod_needs_only_the_api_key(self) -> None:
+        code, payload = self._doctor_runpod(self._account([], []))
+        self.assertEqual(code, 0)
+        self.assertNotIn("runpodctl_command", payload["checks"])
+        self.assertTrue(payload["checks"]["pod_list"])
+        self.assertTrue(payload["checks"]["network_volumes_empty"])
+
+    def test_doctor_runpod_fails_when_pods_remain(self) -> None:
+        code, payload = self._doctor_runpod(self._account([{"id": "pod-1", "name": "kura-x"}], []))
+        self.assertEqual(code, 1)
+        self.assertFalse(payload["checks"]["pods_empty"])
+
+    def test_doctor_runpod_fails_when_network_volumes_remain(self) -> None:
+        code, payload = self._doctor_runpod(self._account([], [{"id": "volume-1", "name": "v"}]))
+        self.assertEqual(code, 1)
+        self.assertFalse(payload["checks"]["network_volumes_empty"])
+
+    def test_doctor_runpod_reports_a_network_volume_listing_it_could_not_read_without_failing(self) -> None:
+        code, payload = self._doctor_runpod(self._account([], RunPodAPIError("RunPod GraphQL failed: Cannot query field", status_code=400)))
+        self.assertEqual(code, 0)
+        self.assertIsNone(payload["checks"]["network_volumes_empty"])
+        self.assertIn("could not list network volumes", payload["diagnostics"]["network_volumes_error"])
 
     def test_doctor_runpod_labels_process_permission_denial_without_blame(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-                    if command == ["runpodctl", "version"]:
-                        return subprocess.CompletedProcess(command, 0, "runpodctl test", "")
-                    raise OSError("Operation not permitted")
-
-                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
-                     patch("kura.doctor.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.doctor.subprocess.run", side_effect=fake_run), \
-                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                    code = cmd_doctor_runpod(argparse.Namespace())
-            finally:
-                os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 1)
-            self.assertIn("This process could not reach", payload["diagnosis"])
-            self.assertIn("may work outside", payload["diagnosis"])
-            self.assertNotIn("Codex", payload["diagnosis"])
-            self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
+        denied = ValueError("RunPod API is unreachable: [Errno 1] Operation not permitted")
+        code, payload = self._doctor_runpod(self._account(denied, denied))
+        self.assertEqual(code, 1)
+        self.assertIn("This process could not reach", payload["diagnosis"])
+        self.assertIn("may work outside", payload["diagnosis"])
+        self.assertNotIn("Codex", payload["diagnosis"])
+        self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
 
     def test_doctor_comfyui_handles_unreachable_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
