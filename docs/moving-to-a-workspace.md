@@ -145,3 +145,26 @@ within one drive is instant; across drives it copies).
   longer need it. If you work on Kura itself, keep a clone for that only and
   do not train in it.
 - To update Kura from now on, run `uv tool upgrade kura` instead of `git pull`.
+
+## If you develop Kura
+
+Keep the clone for Kura's source only, and train in a separate workspace.
+
+1. Install the clone as an editable tool, so `kura` in any workspace runs the
+   clone's code:
+
+   ```sh
+   uv tool install --editable ~/Kura
+   ```
+
+   Runs then record the clone and its commit as their Kura source, and
+   `kura image build`, `inspect`, and `publish` work (they refuse on a
+   non-editable install).
+2. Change and test Kura in the clone as [AGENTS.md](../AGENTS.md) describes
+   (`uv run …` there).
+3. Try a change in your workspace with the installed `kura`. When a change
+   retires a `workspace.yaml` setting, `kura workspace migrate` shows the edit
+   and `kura workspace migrate --yes` applies it; run records are never
+   rewritten.
+4. To go back to the released Kura, run
+   `uv tool install --force git+https://github.com/nomadoor/Kura`.
