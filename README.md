@@ -3,161 +3,78 @@
 [![日本語 README](https://img.shields.io/badge/README-日本語-blue)](README.ja.md)
 [![Krea 2 LoRA guide](https://img.shields.io/badge/Guide-Krea_2_LoRA-blue)](https://comfyui.nomadoor.net/en/notes/kura-krea2-lora-training/)
 
-Kura is a workspace for training LoRAs together with an AI agent.
+Kura is a harness for training LoRAs with an AI agent.
 
-You decide only what you want to make and which data to use. The agent can work out the settings, run the training, and test-render in ComfyUI to compare the results.
+The training itself is done by [AI-Toolkit](https://github.com/ostris/ai-toolkit), [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner), and [sd-scripts](https://github.com/kohya-ss/sd-scripts). Kura starts them safely, watches the training, and keeps a record of it.
+
+A LoRA rarely comes out right the first time. Kura is a tool for running experiment after experiment.
 
 <img width="1905" height="1154" alt="kuramonitor" src="https://github.com/user-attachments/assets/89d09a7e-d5da-4496-86ee-aa14cda30058" />
 
-## What Kura does
+## Features
 
-Kura is not a trainer itself. It manages the training tools [AI-Toolkit](https://github.com/ostris/ai-toolkit), [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner), and [sd-scripts](https://github.com/kohya-ss/sd-scripts) so an agent can use them safely while keeping a record of everything.
-
-- **Trains on exactly the data you gave it**: only the files listed in the dataset are used for training. Old files or draft images left in the folder never slip in unnoticed.
-- **Starts from the training tool's own settings**: Kura adds no settings of its own. AI-Toolkit fills each model's detailed settings with its own recommended values; on Musubi Tuner and sd-scripts you or the agent write the few values that decide training quality (learning rate, rank, optimizer, and similar), and every other setting is the training tool's own default.
-- **Goes from training to test renders in one flow**: test-render the LoRA you trained in your own ComfyUI workflow and compare results under different conditions.
-- **Runs on your PC or in the cloud**: train on your own GPU or on a [RunPod](https://www.runpod.io/) cloud GPU with the same steps.
-- **Keeps everything as files**: settings, the data used, logs, and outputs all stay in the workspace as plain files. You can inspect them later or run the same training again.
+- Settings, data, logs, and outputs all stay as files
+- The same steps train on your own PC or on RunPod
+- A RunPod Pod is deleted once its outputs are collected, and deletes itself if your PC goes down (after 12 hours at most; `--max-lease` changes it)
+- Training can resume from a saved state
+- A trained LoRA can be test-rendered and compared in ComfyUI right away
 
 ## What you need
 
-| What | Why | When |
-| --- | --- | --- |
-| [uv](https://docs.astral.sh/uv/getting-started/installation/) | Runs Kura | Always (the setup below installs it) |
-| Docker | Runs the training tools | When you train on your own PC. [Docker Desktop](https://docs.docker.com/get-started/get-docker/) on Windows and Mac, Docker Engine on Linux |
-| NVIDIA GPU | Trains | When you train on your own PC |
-| [RunPod](https://www.runpod.io/) account | Trains on cloud GPUs | When you use RunPod. Kura needs only its API key; there is nothing else to install or register |
-| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Test-renders | When you test-render |
-
-If you train only on RunPod, you do not need a local GPU. Macs have no NVIDIA GPU, so training runs on RunPod.
-
-## Using Kura on Windows
-
-On Windows, Kura runs inside WSL2 (Ubuntu running inside Windows). Kura cannot run directly on Windows.
-
-1. **Install WSL2 and Ubuntu**: open PowerShell as administrator, run `wsl --install`, and restart your PC. In the Ubuntu window that opens after the restart, choose a user name and password. Skip this if you already use Ubuntu on WSL.
-2. **Install Docker Desktop**: install and start [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then turn on Ubuntu under Settings → Resources → WSL integration.
-3. **Update your NVIDIA driver**: if you train on your own PC, install the latest NVIDIA driver on Windows.
-
-Do all of the setup and every later step in the Ubuntu terminal. Keep the Kura folder under your Ubuntu home (`~/`), not under `/mnt/c`. Training reads files under `/mnt/c` more slowly.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- An AI agent (Claude Code, Codex, or similar)
+- To train on your own PC: Docker and an NVIDIA GPU
+- To train on RunPod: a RunPod API key
+- To test-render: [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 
 ## Setup
 
 ```sh
-# 1. Install uv (only if you don't have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Get Kura and prepare it
-git clone https://github.com/nomadoor/Kura.git
-cd Kura
-uv sync          # install Kura and what it needs
-uv run kura init # create the working folders and default settings
-
-# 3. Create the secrets file
-cp .env.example .env.local
+uv tool install git+https://github.com/nomadoor/Kura
 ```
 
-Put only what you use into `.env.local`. The file stays out of Git, and Kura reads it automatically.
-
-| Variable | When you need it |
-| --- | --- |
-| `RUNPOD_API_KEY` | You train on RunPod |
-| `HF_TOKEN` | You use a model that needs access approval (such as FLUX.1-dev) |
-| `KURA_NTFY_TOPIC` | You want a finish notification on your phone or PC (optional) |
-
-To check that you are ready:
+`kura init` makes the current folder a workspace. Datasets, training results, and downloaded models (tens of GB) go there. Do not run it straight in your home folder: make a folder for Kura, move into it, and run it there. Pick a disk with plenty of free space.
 
 ```sh
-uv run kura doctor docker   # Docker and the GPU work (training on your own PC)
-uv run kura doctor runpod   # the RunPod settings are correct (using RunPod)
+mkdir ~/kura && cd ~/kura
+kura init
 ```
 
-## How to use it
-
-### The flow
-
-Start an AI agent (Claude Code, Codex, and so on) in the Kura folder and talk to it. The agent reads Kura's rules (`AGENTS.md`) before it starts.
-
-1. 🧑 Put images and captions (a `.txt` with the same name as each image) in `datasets/<name>/`
-2. 🧑 Say what you want. For example: "I want a Krea 2 character LoRA from this dataset." You can also specify details such as the rank or learning rate
-3. 🤖 Checks the data and writes the list of files to train on (`dataset.yaml` and `items.jsonl`) and the training settings
-4. 🤖 Shows a plan that covers the settings, where to train (your PC or RunPod), and the expected time and cost
-5. 🧑 Reviews the plan and approves it, or says what to change
-6. 🤖 Runs the training and reports the result when it finishes
-7. 🤖 Test-renders in ComfyUI, lining up saved checkpoints and different conditions for comparison
-8. 🧑 Looks at the results and decides whether to stop or keep training (continuing from a saved state is supported)
-
-> 💡 For how to put a dataset together, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) may help. It is written for SDXL, but the approach is the same.
-
-### Where to train: your PC or RunPod
-
-- **Your PC**: training runs in Docker. A model is downloaded once and reused afterwards.
-- **RunPod**: Kura sends only the files the training needs, trains, collects the outputs, and then **stops the Pod automatically**. If the GPU you want is not available, you choose in the plan whether to use another GPU or wait for it (no charge while waiting). Even if your PC goes down, a Pod whose outputs were not collected stops itself after the longer of 2 hours and the training time, and any Pod stops itself once it reaches its maximum running time (`--max-lease`, 12 hours by default).
-
-The agent suggests where to train based on GPU size and cost, and you decide in the plan.
-
-### Test-rendering in ComfyUI
-
-Test renders use ComfyUI and **API-format** workflows placed in `workflows/`.
-
-- Start ComfyUI at `http://127.0.0.1:8188`.
-- Export a workflow with "File → Export (API)" in ComfyUI and put it in `workflows/`. For details, see [Using ComfyUI from an AI agent](https://comfyui.nomadoor.net/en/data-utilities/ai-agent-api/).
-- If you have no local GPU, you can also render on a disposable ComfyUI on RunPod.
-
-### Watching progress
-
-You can watch training from another terminal. This screen is only for watching; it does not start or stop training.
+If you need them, register your API keys.
 
 ```sh
-uv run kura monitor             # list every training run
-uv run kura run watch <run-id>  # one run in detail
+kura secrets set RUNPOD_API_KEY
+kura secrets set HF_TOKEN
 ```
 
-## Where files go and cleaning up
+## Usage
 
-| Location | Contents |
-| --- | --- |
-| `datasets/<name>/` | Your datasets |
-| `runs/<run-id>/outputs/` | The LoRAs you trained |
-| `artifacts/training-state/` | Saved state for continuing training |
-| `cache/huggingface/` | Downloaded models (tens of GB); `docker.hf_cache` in `workspace.yaml` can put them on another drive |
+Start your AI agent in the workspace and tell it what LoRA you want. The agent shows a plan, and training starts once you approve it.
 
-None of these go into Git. If disk space is a concern, you can look first without changing anything:
+You can watch training from another terminal.
 
 ```sh
-uv run kura doctor disk    # what uses how much space (read-only)
-uv run kura cleanup plan   # what can be freed, and what each item costs to get back (read-only)
+kura monitor
 ```
 
-`kura cleanup plan` groups what can be freed by what deleting it costs: temporary data (nothing), models and old images (downloaded again when needed), and resume data (that run can no longer be continued; its LoRAs stay). `kura cleanup` with no option frees the temporary data, each option removes only the items it names, and nothing happens until you add `--yes`. Your trained LoRAs, samples, and datasets are never removed unless you name the run (see the [command reference](docs/commands.md)). An agent does this for you: it shows the list, asks once, and applies it.
-
-## Supported models
-
-The main ones Kura can set up training for are below.
-
-| Training tool | Main models |
-| --- | --- |
-| sd-scripts | SD 1.5, SDXL, FLUX.1, Anima (LoRA / ControlNet-LLLite) |
-| Musubi Tuner | Wan, FLUX.2, Krea 2, Qwen-Image, Z-Image, FLUX.1 Kontext, HiDream-O1, Ideogram 4, HunyuanVideo, FramePack, Kandinsky 5, MiniMax-H3, and more |
-| AI-Toolkit | SD 1.5, SDXL, FLUX.1 / Kontext / Flex.2, Chroma, Qwen-Image, FLUX.2, Krea 2, Z-Image, HiDream, Anima, MiniMax-H3, and more |
-
-A model has actually been trained through Kura only where its [model family card](src/kura/shipped/knowledge/model-families/) or a record in the [real-run evidence ledger](docs/backend-smoke-evidence.yaml) says so; each record states when it ran and with which Kura adapter source and trainer image. Neither promises a good LoRA from any data or settings.
-
-## Updating Kura
+## Updating
 
 ```sh
-git pull
+uv tool upgrade kura
 ```
 
-Anything else needed is set up the next time you run `uv run kura ...`. If a command then refuses your `workspace.yaml` because it holds a setting Kura no longer reads, run `uv run kura workspace migrate` to see the change, then `uv run kura workspace migrate --yes` to apply it (the old file is kept as a backup). Kura also manages the training tools' Docker images and pins them to versions it has verified. You never build them or choose versions yourself.
+## Windows
+
+Use Kura inside Ubuntu on WSL2.
+
+1. In PowerShell (as administrator), run `wsl --install` and restart
+2. Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/) and turn on Ubuntu under Settings → Resources → WSL integration
+3. Work in the Ubuntu terminal from then on, and make the workspace under `~/`, not under `/mnt/c`
 
 ## More
 
-- [Training a Krea 2 LoRA with Kura](https://comfyui.nomadoor.net/en/notes/kura-krea2-lora-training/): a worked example from preparing data to comparing in ComfyUI
-- [docs/commands.md](docs/commands.md): command reference
-- [src/kura/shipped/knowledge/model-families/](src/kura/shipped/knowledge/model-families/) and [docs/backend-smoke-evidence.yaml](docs/backend-smoke-evidence.yaml): what has actually run
-- [docs/agent-first-cli.md](docs/agent-first-cli.md): what the agent writes and what Kura guarantees
-- [AGENTS.md](AGENTS.md): rules for AI agents
+- [Training a Krea 2 LoRA with Kura](https://comfyui.nomadoor.net/en/notes/kura-krea2-lora-training/)
+- [Command reference](docs/commands.md)
 
 ## License
 
