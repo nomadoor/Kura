@@ -1773,14 +1773,23 @@ def record_pod_lease_deadline(run_dir: Path, details: dict[str, Any]) -> None:
     The Pod's start command arms the only lease guard. A Pod that holds no
     deadline did not run that start command (an image whose entrypoint ignores
     it), so it has no lease at all: the launch fails here, before anything
-    starts, and the Pod is deleted.
+    starts, and the Pod is deleted. A Pod that ssh cannot reach is refused the
+    same way, with ssh's reason instead.
     """
     try:
         result = subprocess.run([*_ssh_base(details), f"cat {shlex.quote(LEASE_DEADLINE_PATH)} 2>/dev/null || true"], text=True, capture_output=True, check=False, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError(f"could not read the Pod's lease deadline: {exc}") from exc
+    if result.returncode:
+        # The remote command cannot fail (`|| true`), so a non-zero exit is ssh's own: the Pod was never asked.
+        lines = [line for line in result.stderr.splitlines() if line.strip()]
+        detail = _redact_secret_text(lines[-1].strip()) if lines else "no message"
+        raise ValueError(
+            f"cannot reach the Pod over SSH (ssh exited {result.returncode}: {detail}); check that your RunPod account "
+            "has this machine's SSH public key (RunPod settings, SSH Public Keys; `runpodctl ssh add-key`)"
+        )
     value = result.stdout.strip()
-    if result.returncode or not value.isdigit():
+    if not value.isdigit():
         raise ValueError(
             "the Pod holds no lease deadline, so it did not run Kura's start command and nothing would delete it; "
             "use an image that runs the command it is given (no entrypoint that ignores it)"

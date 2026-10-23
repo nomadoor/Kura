@@ -8743,6 +8743,39 @@ class RunPodLifecycleTests(unittest.TestCase):
                     _runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=3600)
             self.assertFalse(any("nohup sh" in " ".join(map(str, call.args[0])) for call in run.call_args_list))
 
+    def test_runpod_training_refuses_a_pod_it_cannot_reach_over_ssh_with_an_ssh_reason(self) -> None:
+        # SSH itself failing (no public key on the RunPod account) says so, instead of blaming the image;
+        # it is still refused, so the controller deletes the Pod and nothing starts on it.
+        from kura.dataset_transfer import TransferRefused
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            refused = subprocess.CompletedProcess(["ssh"], 255, "", "Warning: Permanently added '[1.2.3.4]:22' (ED25519) to the list of known hosts.\nroot@1.2.3.4: Permission denied (publickey).\n")
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}), \
+                 patch("kura.cli.subprocess.run", return_value=refused) as run:
+                with self.assertRaises(TransferRefused) as caught:
+                    _runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=3600)
+            message = str(caught.exception)
+            self.assertIn("cannot reach the Pod over SSH (ssh exited 255: root@1.2.3.4: Permission denied (publickey).)", message)
+            self.assertIn("SSH Public Keys", message)
+            self.assertIn("runpodctl ssh add-key", message)
+            self.assertNotIn("lease deadline", message)
+            self.assertFalse(any("nohup sh" in " ".join(map(str, call.args[0])) for call in run.call_args_list))
+            self.assertEqual(list((run_dir / "realizations").glob("r1.lease-*.json")), [])
+
     def test_runpod_training_records_the_deadline_the_pod_holds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"

@@ -221,6 +221,10 @@ report the cause named in `logs/runner.log`, or collect by hand with
 user's billing decision. The runner notifies when the run finishes, on the
 channels `KURA_NOTIFY` names, else the ones the host can use (ntfy when
 `KURA_NTFY_TOPIC` is set), the same for a local run.
+A launch refused with "cannot reach the Pod over SSH" (the Pod is deleted)
+usually means the RunPod account has no SSH public key yet, as on a new
+account: register this machine's key (RunPod settings, SSH Public Keys, or
+`runpodctl ssh add-key --key-file <public key>`) before retrying.
 
 ```sh
 kura run execute <run-id>
