@@ -221,10 +221,14 @@ report the cause named in `logs/runner.log`, or collect by hand with
 user's billing decision. The runner notifies when the run finishes, on the
 channels `KURA_NOTIFY` names, else the ones the host can use (ntfy when
 `KURA_NTFY_TOPIC` is set), the same for a local run.
-A launch refused with "cannot reach the Pod over SSH" (the Pod is deleted)
-usually means the RunPod account has no SSH public key yet, as on a new
-account: register this machine's key (RunPod settings, SSH Public Keys, or
-`runpodctl ssh add-key --key-file <public key>`) before retrying.
+Kura needs only `RUNPOD_API_KEY` and the local OpenSSH client (`ssh`, `scp`,
+`ssh-keygen`); no RunPod CLI and no SSH key in the RunPod account. It creates
+its own SSH key once, beside the user secrets file, and sends the public half
+with every Pod. A launch refused with "cannot reach the Pod over SSH" (the Pod
+is deleted) is then a network or Pod problem: report ssh's reason. An SSH wait
+that ends with "no public IP and SSH port mapping" means the Pod landed on a
+host without a public IP (`runpod.support_public_ip: true` sends RunPod's
+`supportPublicIp` with the create request).
 
 ```sh
 kura run execute <run-id>

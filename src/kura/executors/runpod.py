@@ -26,7 +26,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT_MODELS_RECORD_SUFFIX
-from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, undeclared_secret_refusal
+from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, runpod_ssh_key, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
 from kura.executors.common import create_intent_executor, host_time, in_capacity_wait
@@ -203,6 +203,40 @@ def _runpod_pod_or_none(pod_id: str, api_key: str, *, timeout: float = 30.0) -> 
         if exc.status_code == 404:
             return None
         raise
+
+
+def runpod_pod_runtime(pod_id: str, api_key: str, *, timeout: float = 30.0) -> dict[str, Any] | None:
+    """The Pod with its port mappings, for reaching it over SSH; None when RunPod returned no Pod.
+
+    Its own query, so the lookup every "is the Pod gone" decision reads
+    (`_runpod_pod_or_none`) never depends on these fields; whether a None means gone is
+    for that owner to say.
+    """
+    query = """
+    query getPodRuntime($podId: String!) {
+      pod(input: {podId: $podId}) {
+        id desiredStatus
+        runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
+      }
+    }
+    """
+    pod = _runpod_graphql(query, {"podId": pod_id}, api_key, timeout=timeout).get("pod")
+    return pod if isinstance(pod, dict) else None
+
+
+def runpod_ssh_endpoint(pod: dict[str, Any]) -> tuple[str, int] | None:
+    """Where Kura reaches a Pod over SSH: the public address RunPod maps the Pod's 22/tcp to.
+
+    None while the Pod has no such mapping yet (no `runtime` while it starts, or a host
+    without a public IP).
+    """
+    runtime = pod.get("runtime")
+    ports = runtime.get("ports") if isinstance(runtime, dict) else None
+    for port in ports if isinstance(ports, list) else []:
+        if (isinstance(port, dict) and port.get("privatePort") == 22 and port.get("type") == "tcp" and port.get("isIpPublic") is True
+                and isinstance(port.get("ip"), str) and port["ip"] and isinstance(port.get("publicPort"), int)):
+            return port["ip"], port["publicPort"]
+    return None
 
 
 def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, min_cuda_version: str | None = None) -> dict[str, Any]:
@@ -635,7 +669,8 @@ def unstopped_recovered_pod(run_dir: Path) -> str | None:
     return ", ".join(pods_left(run_dir, status)) or None
 
 
-def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+def runpod_pods(api_key: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+    """Every Pod in the RunPod account."""
     query = """
     query myPods {
       myself {
@@ -652,7 +687,21 @@ def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> lis
     pods = myself.get("pods") if isinstance(myself.get("pods"), list) else None
     if pods is None:
         raise ValueError("RunPod did not return the account's Pods")
-    return [pod for pod in pods if isinstance(pod, dict) and pod.get("name") == name and isinstance(pod.get("id"), str)]
+    return [pod for pod in pods if isinstance(pod, dict)]
+
+
+def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+    return [pod for pod in runpod_pods(api_key, timeout=timeout) if pod.get("name") == name and isinstance(pod.get("id"), str)]
+
+
+def runpod_network_volumes(api_key: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+    """Every Network Volume in the RunPod account."""
+    data = _runpod_graphql("query myVolumes { myself { networkVolumes { id name } } }", {}, api_key, timeout=timeout)
+    myself = data.get("myself") if isinstance(data.get("myself"), dict) else {}
+    volumes = myself.get("networkVolumes")
+    if not isinstance(volumes, list):
+        raise ValueError("RunPod did not return the account's Network Volumes")
+    return [volume for volume in volumes if isinstance(volume, dict)]
 
 
 def _discover_pods(api_key: str, name: str, *, settle_sec: float = 5.0) -> list[dict[str, Any]]:
@@ -1174,6 +1223,30 @@ def pod_ports(ports: Any) -> list[str]:
     return listed if SSH_PORT in listed else [*listed, SSH_PORT]
 
 
+# The env name a Pod reads Kura's SSH public key from; a public key, never a secret.
+SSH_PUBLIC_KEY_ENV = "KURA_SSH_PUBLIC_KEY"
+
+
+def _pod_ssh_setup_shell() -> str:
+    """Start sshd on a Pod and let in Kura's own key, for every Pod Kura creates.
+
+    `authorized_keys` holds Kura's key (`KURA_SSH_PUBLIC_KEY`, sent by `_pod_create_request`)
+    and, when present, the account keys RunPod puts in `PUBLIC_KEY`, so a person keeps the
+    manual access RunPod gives them.
+    """
+    return r'''
+if ! command -v sshd >/dev/null 2>&1; then
+  apt-get update >> "$KURA_LOG_PATH" 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
+fi
+mkdir -p /run/sshd /root/.ssh
+chmod 700 /root/.ssh
+printf '%s\n' "${KURA_SSH_PUBLIC_KEY:-}" "${PUBLIC_KEY:-}" | grep '^ssh-' > /root/.ssh/authorized_keys || true
+chmod 600 /root/.ssh/authorized_keys
+/usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
+'''.strip()
+
+
 def _pod_create_request(
     run_dir: Path, realization_id: str, settings: dict[str, Any], *, image: str, env: dict[str, str], start_script: str, max_lease_sec: int,
 ) -> dict[str, Any]:
@@ -1186,6 +1259,8 @@ def _pod_create_request(
     secret_keys = [key for key in env if _is_secret(key)]
     if secret_keys:
         raise ValueError(undeclared_secret_refusal("RunPod pod env", secret_keys))
+    # Every Pod lets in Kura's own key, so reaching it needs nothing set up in the RunPod account.
+    env = {**env, SSH_PUBLIC_KEY_ENV: runpod_ssh_key()[1].read_text(encoding="utf-8").strip()}
     request: dict[str, Any] = {
         "name": _intent_pod_name(run_dir, realization_id, {}),
         "gpuCount": settings["gpu_count"],
@@ -1499,25 +1574,15 @@ def launch_runpod(
         spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
     )
     # Built first: the request refuses a secret in the Pod env before the stage is read.
-    request = _pod_create_request(run_dir, realization_id, settings, image=image, env=runtime_env, max_lease_sec=max_lease_sec, start_script=r'''
-set -u
-mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
-mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
-touch "$KURA_LOG_PATH"
-if ! command -v sshd >/dev/null 2>&1; then
-  apt-get update >> "$KURA_LOG_PATH" 2>&1
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
-fi
-mkdir -p /run/sshd /root/.ssh
-chmod 700 /root/.ssh
-if [ -n "${PUBLIC_KEY:-}" ]; then
-  printf '%s\n' "$PUBLIC_KEY" | grep '^ssh-' > /root/.ssh/authorized_keys || true
-  chmod 600 /root/.ssh/authorized_keys
-fi
-/usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
-echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"
-sleep infinity
-'''.strip())
+    request = _pod_create_request(run_dir, realization_id, settings, image=image, env=runtime_env, max_lease_sec=max_lease_sec, start_script="\n".join((
+        "set -u",
+        'mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"',
+        'mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"',
+        'touch "$KURA_LOG_PATH"',
+        _pod_ssh_setup_shell(),
+        'echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"',
+        "sleep infinity",
+    )))
     status = _load_status(run_dir)
     stage_ref = status.get("last_stage")
     if not isinstance(stage_ref, str):
@@ -1628,24 +1693,14 @@ def launch_runpod_session(
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     runtime_env = _runpod_session_env(workspace_path=settings["workspace_path"], run_id=run_dir.name)
-    request = _pod_create_request(run_dir, realization_id, settings, image=image, env=runtime_env, max_lease_sec=max_lease_sec, start_script=r'''
-set -u
-mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
-touch "$KURA_LOG_PATH"
-if ! command -v sshd >/dev/null 2>&1; then
-  apt-get update >> "$KURA_LOG_PATH" 2>&1
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
-fi
-mkdir -p /run/sshd /root/.ssh
-chmod 700 /root/.ssh
-if [ -n "${PUBLIC_KEY:-}" ]; then
-  printf '%s\n' "$PUBLIC_KEY" | grep '^ssh-' > /root/.ssh/authorized_keys || true
-  chmod 600 /root/.ssh/authorized_keys
-fi
-/usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
-echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
-sleep infinity
-'''.strip())
+    request = _pod_create_request(run_dir, realization_id, settings, image=image, env=runtime_env, max_lease_sec=max_lease_sec, start_script="\n".join((
+        "set -u",
+        'mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"',
+        'touch "$KURA_LOG_PATH"',
+        _pod_ssh_setup_shell(),
+        'echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"',
+        "sleep infinity",
+    )))
     facts = {"workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally"}
     return _create_pod(
         run_dir, realization_id=realization_id, request=request, settings=settings, config=config, facts=facts, purpose=purpose,

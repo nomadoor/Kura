@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from kura.status_projection import shadow_differences
 from tests.test_runpod_create_intent import CONFIG, CAPACITY_REFUSED, _crashed_launch, _status
+from tests.user_config import isolate_user_config
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "kura" / "executors"
 # Facts an earlier realization left in status; none of them is the new launch's.
@@ -82,6 +83,10 @@ class OneLaunchWriterTests(unittest.TestCase):
                 status = _status(run_dir)
                 self.assertEqual(shadow_differences(run_dir, status), {})
                 self.assertEqual(status.get("pod_id"), "pod-a" if pods else None)
+
+
+def setUpModule() -> None:
+    isolate_user_config()
 
 
 if __name__ == "__main__":
