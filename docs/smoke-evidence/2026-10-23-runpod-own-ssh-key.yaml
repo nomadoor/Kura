@@ -1,0 +1,38 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-23'
+executor: runpod
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --runpod --backend musubi-tuner --yes; then kura render launch <run> --yes
+campaign: >-
+  The RunPod pass on the branch of #362 (stacked on #358): one Pod-create owner that always opens 22/tcp,
+  and Kura's own SSH key sent with every Pod, with the SSH endpoint read from RunPod's GraphQL API.
+  No runpodctl was used; the RunPod account had no SSH key of this machine registered.
+schema_check:
+  pod_runtime_ports: "query pod { runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } } } accepted"
+  network_volumes: "query myself { networkVolumes { id name } } accepted"
+backends:
+  musubi-tuner:
+    runtime_image_digest: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    adapter_source: d328ad9ec63e4d93bc83267e85912dc15bcea973e71f825a73e05670cbe6bff8
+    runs: [20261023-1408_conf-musubi-one-control_2d71, 20261023-1413_conf-musubi-one-control-2_b9e0, 20261023-1417_conf-musubi-one-split_96f2, 20261023-1420_conf-musubi-one-resume_a6fc, 20261023-1425_conf-musubi-multi-fresh_80e3, 20261023-1428_conf-musubi-multi-split_30d4, 20261023-1433_conf-musubi-multi-resume_37a2]
+    pods: 6 COMMUNITY and 1 SECURE (RTX 3090 x6, RTX A4500 x1); every one reached over SSH with Kura's key through a public 22/tcp mapping
+    pod_minutes: about 28 across 7 Pods, about $0.12 GPU by kura run status
+render_run:
+  run_id: 20261023-0850_pr358-runpod-render_6139
+  image: nomadoor/kura-comfyui@sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4
+  workflow: workflows/samples/anima/anima-base-v1.0_api.json, seed 1234
+  gpu: A40 (SECURE, $0.59/h)
+  outcome: completed, 1 image collected; Pod stopped about 4 minutes after creation
+pods_left: none (kura doctor runpod lists no Pods and no network volumes)
+results:
+  P1: pass
+  P2: pass
+  P3: pass; Musubi Tuner controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass
+  P7: pass
+earlier_attempts: >-
+  Two earlier passes on the #358 branch the same day did not complete: the first account's balance ran out
+  after three runs (RunPod refused the create; no Pod was made), and after switching RUNPOD_API_KEY to another
+  account every Pod was refused over SSH because that account held a different SSH key; each Pod was deleted at
+  once. #361 made that error say so, and #362 removed the dependency on account SSH keys.
