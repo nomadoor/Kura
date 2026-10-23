@@ -413,7 +413,7 @@ class InterruptAfterCreateTests(unittest.TestCase):
         """Never record "no Pod exists" once the create returned one."""
         import sys
 
-        from kura.executors.runpod import launch_runpod
+        from kura.executors.runpod import _create_pod, launch_runpod
 
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
@@ -421,7 +421,7 @@ class InterruptAfterCreateTests(unittest.TestCase):
             _write_upload_stage(run_dir)
 
             def interrupt_once_the_pod_is_returned(frame, event, _arg):
-                if frame.f_code is launch_runpod.__code__ and event == "line" and frame.f_locals.get("pod") is not None \
+                if frame.f_code is _create_pod.__code__ and event == "line" and frame.f_locals.get("pod") is not None \
                         and frame.f_locals.get("controller_phase") == "probe":
                     sys.settrace(None)
                     frame.f_trace = None
@@ -429,7 +429,7 @@ class InterruptAfterCreateTests(unittest.TestCase):
                 return interrupt_once_the_pod_is_returned
 
             def tracer(frame, event, _arg):
-                return interrupt_once_the_pod_is_returned if frame.f_code is launch_runpod.__code__ else None
+                return interrupt_once_the_pod_is_returned if frame.f_code is _create_pod.__code__ else None
 
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod.time.sleep"), \
                     patch("kura.executors.runpod.runpod_gpu_availability", return_value=AVAILABLE), \

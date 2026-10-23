@@ -142,7 +142,8 @@ class BackendAdapter:
     # Model facts the adapter already owns (baselines, model roles, entry shapes), for capabilities:
     # given an architecture selector value, only that architecture's.
     model_facts: Callable[[str | None], dict[str, Any]] | None = None
-    default_ports: tuple[str, ...] = ("22/tcp",)
+    # Ports the trainer's image opens besides SSH, which every Pod gets (`pod_ports`).
+    default_ports: tuple[str, ...] = ()
     # Directories, relative to the run, inside its `cache/` where the trainer writes weights before Kura
     # publishes them to outputs/; a run cut short can leave the only copy there, so reclaim never frees them
     # and a RunPod collection brings them home (`trainer_cache_outputs`).
@@ -430,7 +431,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         runtime_checks=runtime_checks_ai_toolkit,
         disk_cache=ai_toolkit_disk_cache,
         model_facts=ai_toolkit_model_facts,
-        default_ports=("8675/http", "22/tcp"),
+        default_ports=("8675/http",),
     ),
     "musubi-tuner": BackendAdapter(
         name="musubi-tuner", image_name="musubi-tuner", compile=_compile_musubi, command=command_musubi_tuner,

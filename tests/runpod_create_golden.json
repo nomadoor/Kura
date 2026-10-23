@@ -1,0 +1,973 @@
+{
+  "render/created": {
+    "events": [
+      {
+        "event": "run_started",
+        "executor": "runpod",
+        "pod_id": "pod-1",
+        "purpose": "comfyui-render",
+        "realization_id": "20261023-100000-000001"
+      }
+    ],
+    "intent": {
+      "executor": "runpod",
+      "kind": "pod_create_intent",
+      "logs_path": "/workspace/runs/render/logs/stdout.log",
+      "pod_name": "kura-render-20261023-100000-000001",
+      "purpose": "comfyui-render",
+      "realization_id": "20261023-100000-000001",
+      "remote_image": "registry/comfy:tag",
+      "request": {
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "requested_at": "2026-10-23T10:00:00+09:00",
+      "schema_version": 1
+    },
+    "phases": [
+      "pod_create_requested"
+    ],
+    "realization": {
+      "create_intent": "20261023-100000-000001.create-intent.json",
+      "executor": "runpod",
+      "id": "20261023-100000-000001",
+      "kind": "realization",
+      "launched_at": "2026-10-23T10:00:00+09:00",
+      "logs_path": "/workspace/runs/render/logs/stdout.log",
+      "pod": {
+        "cost_per_h": 0.4,
+        "desired_status": "RUNNING",
+        "id": "pod-1",
+        "last_status_change": null,
+        "machine": {
+          "data_center_id": null,
+          "gpu_display_name": null,
+          "id": null,
+          "memory_gb": null,
+          "vcpu_count": null
+        },
+        "name": "kura-x-20261023-100000-000001"
+      },
+      "purpose": "comfyui-render",
+      "remote_image": "registry/comfy:tag",
+      "request": {
+        "cloudType": "COMMUNITY",
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "schema_version": 1,
+      "state": "running",
+      "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally"
+    },
+    "sent": [
+      {
+        "cloudType": "COMMUNITY",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      }
+    ]
+  },
+  "render/failed": {
+    "events": [
+      {
+        "error": "NVIDIA A40 COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA A40 SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+        "event": "run_launch_failed",
+        "executor": "runpod",
+        "realization_id": "20261023-100000-000001"
+      }
+    ],
+    "intent": {
+      "executor": "runpod",
+      "kind": "pod_create_intent",
+      "logs_path": "/workspace/runs/render/logs/stdout.log",
+      "pod_name": "kura-render-20261023-100000-000001",
+      "purpose": "comfyui-render",
+      "realization_id": "20261023-100000-000001",
+      "remote_image": "registry/comfy:tag",
+      "request": {
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "requested_at": "2026-10-23T10:00:00+09:00",
+      "schema_version": 1
+    },
+    "phases": [
+      "pod_create_requested"
+    ],
+    "realization": {
+      "attempted_at": "2026-10-23T10:00:00+09:00",
+      "error": "NVIDIA A40 COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA A40 SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+      "executor": "runpod",
+      "id": "20261023-100000-000001",
+      "kind": "realization",
+      "logs_path": "/workspace/runs/render/logs/stdout.log",
+      "pod": null,
+      "purpose": "comfyui-render",
+      "remote_image": "registry/comfy:tag",
+      "request": {
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "launch_attempts": [
+          {
+            "cloud_type": "COMMUNITY",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA A40"
+          },
+          {
+            "cloud_type": "SECURE",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA A40"
+          },
+          {
+            "cloud_type": "COMMUNITY",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA L40S"
+          },
+          {
+            "cloud_type": "SECURE",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA L40S"
+          }
+        ],
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "schema_version": 1,
+      "state": "launch_failed"
+    },
+    "sent": [
+      {
+        "cloudType": "COMMUNITY",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      {
+        "cloudType": "SECURE",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      {
+        "cloudType": "COMMUNITY",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA L40S"
+        ],
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      {
+        "cloudType": "SECURE",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/render/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/render/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/render/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura RunPod session is ready for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/render/logs/stdout.log",
+          "KURA_RUN_ID": "render",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA L40S"
+        ],
+        "imageName": "registry/comfy:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-render-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      }
+    ]
+  },
+  "training/created": {
+    "events": [
+      {
+        "event": "run_started",
+        "executor": "runpod",
+        "pod_id": "pod-1",
+        "realization_id": "20261023-100000-000001"
+      }
+    ],
+    "intent": {
+      "executor": "runpod",
+      "kind": "pod_create_intent",
+      "logs_path": "/workspace/runs/train/logs/stdout.log",
+      "pod_name": "kura-train-20261023-100000-000001",
+      "realization_id": "20261023-100000-000001",
+      "remote_image": "registry/image:tag",
+      "request": {
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "requested_at": "2026-10-23T10:00:00+09:00",
+      "schema_version": 1
+    },
+    "phases": [
+      "pod_create_requested",
+      "pod_created"
+    ],
+    "realization": {
+      "adapter_source": {
+        "kind": "image",
+        "reference": "registry/image:tag"
+      },
+      "backend_command": [
+        "python",
+        "train.py"
+      ],
+      "container_cwd": "/opt/tool",
+      "create_intent": "20261023-100000-000001.create-intent.json",
+      "executor": "runpod",
+      "id": "20261023-100000-000001",
+      "image_identity": {
+        "pinning": {
+          "detail": "runtime image digest was not observed",
+          "observation": "not-observed",
+          "strength": "mutable-reference"
+        },
+        "reference": "registry/image:tag"
+      },
+      "kind": "realization",
+      "launched_at": "2026-10-23T10:00:00+09:00",
+      "logs_path": "/workspace/runs/train/logs/stdout.log",
+      "pod": {
+        "cost_per_h": 0.4,
+        "desired_status": "RUNNING",
+        "id": "pod-1",
+        "last_status_change": null,
+        "machine": {
+          "data_center_id": null,
+          "gpu_display_name": null,
+          "id": null,
+          "memory_gb": null,
+          "vcpu_count": null
+        },
+        "name": "kura-x-20261023-100000-000001"
+      },
+      "remote_image": "registry/image:tag",
+      "request": {
+        "cloudType": "COMMUNITY",
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "schema_version": 1,
+      "state": "running",
+      "transfer": {
+        "archive": "transfer/bundle.tar.gz",
+        "archive_name": "bundle.tar.gz"
+      },
+      "workspace_contract": "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod",
+      "write_roots": []
+    },
+    "sent": [
+      {
+        "cloudType": "COMMUNITY",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      }
+    ]
+  },
+  "training/failed": {
+    "events": [
+      {
+        "error": "NVIDIA A40 COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA A40 SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+        "event": "run_launch_failed",
+        "executor": "runpod",
+        "realization_id": "20261023-100000-000001"
+      }
+    ],
+    "intent": {
+      "executor": "runpod",
+      "kind": "pod_create_intent",
+      "logs_path": "/workspace/runs/train/logs/stdout.log",
+      "pod_name": "kura-train-20261023-100000-000001",
+      "realization_id": "20261023-100000-000001",
+      "remote_image": "registry/image:tag",
+      "request": {
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "requested_at": "2026-10-23T10:00:00+09:00",
+      "schema_version": 1
+    },
+    "phases": [
+      "pod_create_requested"
+    ],
+    "realization": {
+      "adapter_source": {
+        "kind": "image",
+        "reference": "registry/image:tag"
+      },
+      "attempted_at": "2026-10-23T10:00:00+09:00",
+      "backend_command": [
+        "python",
+        "train.py"
+      ],
+      "container_cwd": "/opt/tool",
+      "error": "NVIDIA A40 COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA A40 SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S COMMUNITY: RunPod GraphQL failed: There are no longer any instances available with the requested specifications; NVIDIA L40S SECURE: RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+      "executor": "runpod",
+      "id": "20261023-100000-000001",
+      "image_identity": {
+        "pinning": {
+          "detail": "runtime image digest was not observed",
+          "observation": "not-observed",
+          "strength": "mutable-reference"
+        },
+        "reference": "registry/image:tag"
+      },
+      "kind": "realization",
+      "logs_path": "/workspace/runs/train/logs/stdout.log",
+      "pod": null,
+      "remote_image": "registry/image:tag",
+      "request": {
+        "cloudTypeCandidates": [
+          "COMMUNITY",
+          "SECURE"
+        ],
+        "containerDiskInGb": 120,
+        "countryCandidates": null,
+        "dataCenterCandidates": [
+          "EU-RO-1"
+        ],
+        "dataCenterPriority": null,
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeCandidates": [
+          "NVIDIA A40",
+          "NVIDIA L40S"
+        ],
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "gpuTypePriority": "custom",
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "launch_attempts": [
+          {
+            "classification": "capacity",
+            "cloud_type": "COMMUNITY",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA A40"
+          },
+          {
+            "classification": "capacity",
+            "cloud_type": "SECURE",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA A40"
+          },
+          {
+            "classification": "capacity",
+            "cloud_type": "COMMUNITY",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA L40S"
+          },
+          {
+            "classification": "capacity",
+            "cloud_type": "SECURE",
+            "error": "RunPod GraphQL failed: There are no longer any instances available with the requested specifications",
+            "gpu_type_ids": "NVIDIA L40S"
+          }
+        ],
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      "schema_version": 1,
+      "state": "launch_failed",
+      "workspace_contract": "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod",
+      "write_roots": []
+    },
+    "sent": [
+      {
+        "cloudType": "COMMUNITY",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      {
+        "cloudType": "SECURE",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA A40"
+        ],
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      {
+        "cloudType": "COMMUNITY",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA L40S"
+        ],
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      },
+      {
+        "cloudType": "SECURE",
+        "containerDiskInGb": 120,
+        "dataCenterIds": [
+          "EU-RO-1"
+        ],
+        "dockerStartCmd": [
+          "sh",
+          "-lc",
+          "# Kura's Pod-side self-delete, sourced into every Pod-side guard (unattended\n# wait and maximum lease, for training and render Pods).\n#\n# An SSH session does not inherit the Pod's create-time environment, where\n# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY, so both are read\n# from the init process. The function calls the GraphQL mutation the controller\n# uses (podTerminate), then podStop if termination is refused. It avoids the\n# Pod's preinstalled runpodctl, whose command syntax follows the version RunPod\n# ships, and sends its own User-Agent because RunPod's edge rejects Python's.\n#\n# It keeps trying until RunPod accepts one of the mutations: a guard that gave\n# up after one failed call (an edge 502/429, a timeout, DNS) would leave the Pod\n# billing with no end. The wait between attempts doubles from\n# KURA_POD_SELF_DELETE_RETRY_SEC (default 30 s) up to 300 s.\n#\n# The optional second argument names a shell function the caller defines; it is\n# asked before every retry, and when it succeeds the Pod is to be kept (a\n# controller started collecting, or the lease was moved), so trying stops.\n# Returns 0 when RunPod accepted the delete, 2 when the caller's check kept the\n# Pod, and 1 only when credentials are missing, since no retry can supply them.\nkura_pod_self_delete() {\n  kura_log=\"$1\"\n  kura_keep=\"${2:-}\"\n  kura_env_file=\"${KURA_POD_ENV_FILE:-/proc/1/environ}\"\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_API_KEY=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)\n    export RUNPOD_API_KEY\n  fi\n  if [ -z \"${RUNPOD_POD_ID:-}\" ] && [ -r \"$kura_env_file\" ]; then\n    RUNPOD_POD_ID=$(tr '\\000' '\\n' < \"$kura_env_file\" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)\n    export RUNPOD_POD_ID\n  fi\n  kura_python=$(command -v python3 || command -v python || true)\n  if [ -z \"${RUNPOD_API_KEY:-}\" ] || [ -z \"${RUNPOD_POD_ID:-}\" ] || [ -z \"$kura_python\" ]; then\n    echo \"[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing\" >> \"$kura_log\" 2>&1 || true\n    return 1\n  fi\n  kura_retry=\"${KURA_POD_SELF_DELETE_RETRY_SEC:-30}\"\n  case \"$kura_retry\" in ''|*[!0-9]*) kura_retry=30 ;; esac\n  while ! kura_pod_self_delete_once \"$kura_python\" \"$kura_log\"; do\n    echo \"[kura] Pod self-delete was not accepted; trying again in ${kura_retry}s\" >> \"$kura_log\" 2>&1 || true\n    sleep \"$kura_retry\"\n    if [ -n \"$kura_keep\" ] && \"$kura_keep\"; then\n      echo \"[kura] Pod self-delete stopped: the Pod is to be kept now\" >> \"$kura_log\" 2>&1 || true\n      return 2\n    fi\n    kura_retry=$(( kura_retry * 2 ))\n    if [ \"$kura_retry\" -gt 300 ]; then kura_retry=300; fi\n  done\n  return 0\n}\n\n# One attempt: podTerminate, then podStop; succeeds when RunPod accepts either.\nkura_pod_self_delete_once() {\n  \"$1\" - \"$RUNPOD_POD_ID\" >> \"$2\" 2>&1 <<'KURA_POD_SELF_DELETE'\nimport json, os, sys, urllib.request\n\npod_id = sys.argv[1]\nurl = os.environ.get(\"KURA_RUNPOD_GRAPHQL_URL\", \"https://api.runpod.io/graphql\")\nmutations = (\n    (\"podTerminate\", \"mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }\"),\n    (\"podStop\", \"mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }\"),\n)\nfor name, query in mutations:\n    request = urllib.request.Request(\n        url,\n        data=json.dumps({\"query\": query, \"variables\": {\"podId\": pod_id}}).encode(\"utf-8\"),\n        method=\"POST\",\n        # RunPod's edge rejects Python's default User-Agent before checking the key.\n        headers={\"Content-Type\": \"application/json\", \"User-Agent\": \"Kura-pod-guard\"},\n    )\n    # Not copied onto a redirect to another host (kura.secrets.bearer_request does the same).\n    request.add_unredirected_header(\"Authorization\", \"Bearer \" + os.environ[\"RUNPOD_API_KEY\"])\n    try:\n        with urllib.request.urlopen(request, timeout=30) as response:\n            body = json.loads(response.read().decode(\"utf-8\") or \"{}\")\n    except Exception as exc:\n        detail = \"\"\n        if hasattr(exc, \"read\"):\n            try:\n                detail = exc.read().decode(\"utf-8\", \"replace\")[:200]\n            except Exception:\n                detail = \"\"\n        print(f\"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}\".rstrip(), flush=True)\n        continue\n    if body.get(\"errors\"):\n        messages = \"; \".join(str(error.get(\"message\", \"\")) for error in body[\"errors\"] if isinstance(error, dict))\n        print(f\"[kura] Pod self-delete {name} was refused: {messages[:200]}\", flush=True)\n        continue\n    print(f\"[kura] Pod self-delete {name} accepted\", flush=True)\n    sys.exit(0)\nsys.exit(1)\nKURA_POD_SELF_DELETE\n}\nkura_lease_initial=$(( $(date +%s) + 3600 ))\n# A guard started again on the same Pod never moves a deadline already set.\n[ -s /tmp/kura-lease-deadline ] || { echo \"$kura_lease_initial\" > /tmp/kura-lease-deadline.tmp && mv /tmp/kura-lease-deadline.tmp /tmp/kura-lease-deadline; }\n(\n  set +e\n  kura_lease_deadline_now() {\n    kura_lease_deadline=$(cat /tmp/kura-lease-deadline 2>/dev/null)\n    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.\n    case \"$kura_lease_deadline\" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac\n  }\n  # `kura run lease` may move the deadline while a delete is being retried.\n  kura_lease_moved() { kura_lease_deadline_now; [ \"$(date +%s)\" -lt \"$kura_lease_deadline\" ]; }\n  while :; do\n    while :; do\n      kura_lease_deadline_now\n      [ \"$(date +%s)\" -ge \"$kura_lease_deadline\" ] && break\n      sleep 30\n    done\n    mkdir -p \"$(dirname /workspace/runs/train/logs/stdout.log)\" || true\n    echo \"[kura] the maximum lease ended; deleting the Pod\" >> /workspace/runs/train/logs/stdout.log 2>&1 || true\n    kura_pod_self_delete /workspace/runs/train/logs/stdout.log kura_lease_moved\n    # 2: the lease was moved meanwhile; wait for the new deadline.\n    [ \"$?\" -eq 2 ] || break\n  done\n) </dev/null >/dev/null 2>&1 &\nset -u\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs\"\nmkdir -p \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples\" \"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics\"\ntouch \"$KURA_LOG_PATH\"\nif ! command -v sshd >/dev/null 2>&1; then\n  apt-get update >> \"$KURA_LOG_PATH\" 2>&1\n  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> \"$KURA_LOG_PATH\" 2>&1\nfi\nmkdir -p /run/sshd /root/.ssh\nchmod 700 /root/.ssh\nif [ -n \"${PUBLIC_KEY:-}\" ]; then\n  printf '%s\\n' \"$PUBLIC_KEY\" | grep '^ssh-' > /root/.ssh/authorized_keys || true\n  chmod 600 /root/.ssh/authorized_keys\nfi\n/usr/sbin/sshd >> \"$KURA_LOG_PATH\" 2>&1 || true\necho \"Kura SSH staging pod is ready; waiting for controller\" >> \"$KURA_LOG_PATH\"\nsleep infinity"
+        ],
+        "env": {
+          "FOO": "bar",
+          "HF_HOME": "/workspace/cache/huggingface",
+          "HF_HUB_CACHE": "/workspace/cache/huggingface/hub",
+          "KURA_LOG_PATH": "/workspace/runs/train/logs/stdout.log",
+          "KURA_REALIZATION_ID": "20261023-100000-000001",
+          "KURA_RUN_ID": "train",
+          "KURA_WORKSPACE": "/workspace",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "gpuCount": 1,
+        "gpuTypeIds": [
+          "NVIDIA L40S"
+        ],
+        "imageName": "registry/image:tag",
+        "interruptible": false,
+        "minCudaVersion": "13.2",
+        "name": "kura-train-20261023-100000-000001",
+        "ports": [
+          "8675/http",
+          "22/tcp"
+        ],
+        "supportPublicIp": true
+      }
+    ]
+  }
+}

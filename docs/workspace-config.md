@@ -228,8 +228,8 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.data_center_ids` | Ordered RunPod data-center candidates; Kura tries each configured data center in order | unset |
 | `runpod.data_center_priority` | Data-center ordering: `custom` uses the listed order; `availability` is accepted only with one data center in the list (refused when workspace.yaml loads), because Kura tries each candidate in turn and cannot keep RunPod's availability order | unset |
 | `runpod.country_codes` | Ordered RunPod country candidates; Kura tries each configured country within each data-center attempt | unset |
-| `runpod.ports` | Ports the Pod opens, each `<port>/http` or `<port>/tcp`. Kura reaches every Pod over SSH, so keep `22/tcp` | the image's own: `8675/http` and `22/tcp` for AI-Toolkit, `22/tcp` for the other trainers and ComfyUI |
-| `runpod.backend_ports` | Ports for one image, by image name (`ai-toolkit`, `musubi-tuner`, `sd-scripts`, `comfyui`); they replace `runpod.ports` for that image | unset |
+| `runpod.ports` | Ports the Pod opens, each `<port>/http` or `<port>/tcp`. Kura reaches every Pod over SSH, so `22/tcp` is always added when the list leaves it out | the image's own: `8675/http` for AI-Toolkit, none for the other trainers and ComfyUI; `22/tcp` is added to each |
+| `runpod.backend_ports` | Ports for one image, by image name (`ai-toolkit`, `musubi-tuner`, `sd-scripts`, `comfyui`); they replace `runpod.ports` for that image, and `22/tcp` is always added | unset |
 | `runpod.interruptible` | Only `false` is accepted: Kura creates on-demand Pods, since an interrupted Pod would end a run before its outputs are collected; `true` is refused when workspace.yaml loads | `false` |
 
 `--max-lease` and `--unattended-wait` are not `workspace.yaml` keys. They are

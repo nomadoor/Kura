@@ -1,7 +1,7 @@
 """After any failed Pod create, the Pod is looked up by name before anything is created again.
 
-The same input runs through both create loops (training `launch_runpod`, render
-`launch_runpod_session`); both ask `_pod_made_by_failed_create`.
+The same input runs through both launches (training `launch_runpod`, render
+`launch_runpod_session`); both create through `_create_pod`, which asks `_pod_made_by_failed_create`.
 """
 
 from __future__ import annotations

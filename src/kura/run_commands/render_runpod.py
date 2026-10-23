@@ -13,7 +13,7 @@ from typing import Any
 from kura.executors import launch_runpod_session, runpod_gpu_availability
 from kura.yamlio import YAMLError
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop, kura_container_env, kura_env_exports
-from kura.executors.runpod import confirm_runpod_billing, format_cost_ceiling, runpod_cost_ceiling, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
+from kura.executors.runpod import confirm_runpod_billing, format_cost_ceiling, pod_ports, runpod_cost_ceiling, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
 from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases, render_timeout_sec
@@ -247,7 +247,7 @@ def launch_render_runpod(
             "image": remote_image,
             "models": model_specs,
             "lora_name": lora_name,
-            "ports": runpod_config.get("ports"),
+            "ports": pod_ports(runpod_config.get("ports")),
             "gpu_type_ids": runpod_config.get("gpu_type_ids"),
         }
         if multiple_loras:
