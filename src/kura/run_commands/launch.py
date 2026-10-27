@@ -14,7 +14,7 @@ from typing import Any
 
 from kura.executors import launch_docker, launch_runpod, observe_run
 from kura.yamlio import YAMLError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, append_run_event, record_launch_phase, can_start, start_refusal
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, append_run_event, confirm_launch, record_launch_phase, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -233,7 +233,7 @@ def execute_run(
             "unattended_wait": unattended_wait,
         })
     if executor == "docker":
-        return _launch_docker_through_runner(run_id, image=image, follow=True, notify_channels=notify_channels)
+        return _launch_docker_through_runner(run_id, image=image, follow=True, notify_channels=notify_channels, yes=yes)
     print(f"cannot execute run: unsupported compiled executor {executor!r}", file=sys.stderr)
     return 1
 
@@ -448,11 +448,12 @@ def launch_run(
     return 0
 
 
-def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: bool, notify_channels: Any = None) -> int:
+def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: bool, notify_channels: Any = None, yes: bool = False) -> int:
     """Hand a local Docker training run to the job runner, then follow it or return.
 
-    A launch request is written only when the run has none in progress; run
-    again, this follows the launch in progress and only reports a finished one.
+    A launch request is written only when the run has none in progress, after the
+    launch's confirmation (`y` at a terminal, or `yes`); run again, this follows the
+    launch in progress and only reports a finished one.
     """
     from kura import runner
 
@@ -479,7 +480,15 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
             print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
                   "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
         try:
-            request = runner.write_launch_request(run_dir, executor="docker", image=image, notify=notify_channels)
+            confirm_launch(
+                f"Start training run {run_id} on this machine?", yes=yes,
+                refusal=(f"starting a training run needs the user's go-ahead: show them `kura run plan {run_id}`, and once they "
+                         f"say to start, run `kura run execute {run_id} --yes` (or answer y at a terminal)"),
+                cancelled=(f"not started; to start it, answer y at a terminal, or run `kura run execute {run_id} --yes` "
+                           "once the user has said to start"),
+            )
+            request = runner.write_launch_request(run_dir, executor="docker", image=image, notify=notify_channels,
+                                                  confirmed_at=datetime.now().astimezone().isoformat())
         except (OSError, ValueError) as exc:
             print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
             return 1
@@ -543,8 +552,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
             request = runner.write_launch_request(run_dir, executor="render-runpod", notify=notify_channels, extra={
                 "options": {"max_lease_sec": max_lease_sec},
                 "runpod_config": prepared.get("runpod_config"), "remote_image": prepared.get("remote_image"),
-                "billing_confirmed_at": datetime.now().astimezone().isoformat(),
-            })
+            }, confirmed_at=datetime.now().astimezone().isoformat())
         except (OSError, ValueError) as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1
@@ -624,8 +632,7 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
             request = runner.write_launch_request(run_dir, executor="runpod", image=options.get("image"), notify=options.get("notify_channels"), extra={
                 "options": {key: value for key, value in options.items() if value is not None},
                 "runpod_config": prepared.get("runpod_config"), "remote_image": prepared.get("remote_image"),
-                "billing_confirmed_at": datetime.now().astimezone().isoformat(),
-            })
+            }, confirmed_at=datetime.now().astimezone().isoformat())
         except (OSError, ValueError) as exc:
             print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
             return 1

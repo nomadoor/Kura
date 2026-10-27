@@ -4,7 +4,7 @@
 This is a developer acceptance harness, not a release gate. `prepare` creates,
 compiles, and plans runs with `kura run new/compile/plan` so the user can
 approve them; the approved launch is an ordinary
-`uv run kura run execute <run-id>`; `verify` then checks the recorded result.
+`uv run kura run execute <run-id> --yes`; `verify` then checks the recorded result.
 
 `conformance` runs the fixed scenario of `docs/adr/promises-and-verification.md`
 on each backend in a separate workspace and prints one pass/fail table per
@@ -1033,8 +1033,9 @@ def _execute(workspace: Path, run_id: str, *, runpod: bool) -> tuple[int, dict[s
     peak = {"bytes": 0, "store_baseline": _weights_bytes(workspace / "artifacts" / "training-state")}
     env = {**os.environ, "KURA_NOTIFY": "none"}
     with tempfile.TemporaryFile("w+", encoding="utf-8") as log:
-        runpod_args = ["--yes", "--max-lease", f"{CONFORMANCE_MAX_LEASE_SEC // 3600}h"] if runpod else []
-        process = subprocess.Popen(_kura_argv("run", "execute", run_id, *runpod_args), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        # The scenario was approved with `--yes` on this command; every launch takes it.
+        runpod_args = ["--max-lease", f"{CONFORMANCE_MAX_LEASE_SEC // 3600}h"] if runpod else []
+        process = subprocess.Popen(_kura_argv("run", "execute", run_id, "--yes", *runpod_args), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         while process.poll() is None:
             _sample_peak(run_dir, peak)
             time.sleep(0.5)

@@ -136,7 +136,8 @@ class InitCommandTests(unittest.TestCase):
             launch_help = subprocess.run([*command, *subcommand, "--help"], text=True, capture_output=True, check=False)
             self.assertEqual(launch_help.returncode, 0)
             self.assertIn("--yes", launch_help.stdout)
-            self.assertIn("explicit user instruction", launch_help.stdout)
+            # Both say the flag carries the user's own go-ahead.
+            self.assertRegex(" ".join(launch_help.stdout.split()), r"explicit user instruction|said to start")
 
         doctor_help = subprocess.run([*command, "doctor", "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(doctor_help.returncode, 0)
@@ -2402,7 +2403,7 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(launch.call_args.kwargs["max_lease_sec"], 12 * 3600)
             request = json.loads(next((run_dir / "requests").glob("*.launch.json")).read_text(encoding="utf-8"))
             self.assertEqual((request["executor"], request["options"]["max_lease_sec"]), ("render-runpod", 12 * 3600))
-            self.assertTrue(request["billing_confirmed_at"])
+            self.assertTrue(request["confirmed_at"])
 
     def test_render_launch_notifies_on_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7329,7 +7330,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 self.assertEqual(execute_run("example"), 0)
 
         # Local training goes through the job runner, and the command follows it.
-        through_runner.assert_called_once_with("example", image=None, follow=True, notify_channels=None)
+        through_runner.assert_called_once_with("example", image=None, follow=True, notify_channels=None, yes=False)
 
     def test_execute_run_uses_compiled_runpod_executor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

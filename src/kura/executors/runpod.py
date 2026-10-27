@@ -29,7 +29,7 @@ from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT
 from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, runpod_ssh_key, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
-from kura.executors.common import create_intent_executor, host_time, in_capacity_wait
+from kura.executors.common import confirm_launch, create_intent_executor, request_confirmed_at, host_time, in_capacity_wait
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -458,19 +458,24 @@ def _confirm_runpod_launch(
     """Require one authorization before a billable Pod-creation attempt sequence; the stock and price
     shown, or None when the request's writer already confirmed (`confirmed_at`)."""
 
-    interactive = sys.stdin.isatty()
-    if not interactive and not yes:
-        raise ValueError(
-            "RunPod Pod creation requires confirmation in non-interactive mode; "
-            "use --yes only when the user has explicitly instructed this billed launch"
-        )
-
     if confirmed_at:
         # The command that wrote the launch request showed the price and took the confirmation, so
         # nothing is measured again here; a capacity wait measures stock in its own rounds.
         # A confirmation an older Kura recorded in UTC is shown in local time, as Kura writes its own.
         print(f"Creating the RunPod Pod confirmed at {host_time(confirmed_at) or confirmed_at}", file=sys.stderr)
         return None
+    return confirm_launch(
+        "Create the RunPod Pod?", yes=yes, cancelled="RunPod launch cancelled; no Pod was created",
+        refusal=("RunPod Pod creation requires confirmation in non-interactive mode; "
+                 "use --yes only when the user has explicitly instructed this billed launch"),
+        show=lambda: _show_runpod_launch(config, settings, max_lease_sec=max_lease_sec, wait_for_capacity_sec=wait_for_capacity_sec,
+                                         unattended_wait=unattended_wait, min_cuda_version=min_cuda_version),
+    )
+
+
+def _show_runpod_launch(config: dict[str, Any], settings: dict[str, Any], *, max_lease_sec: int, wait_for_capacity_sec: int,
+                        unattended_wait: str | None, min_cuda_version: str | None) -> dict[str, Any]:
+    """Print what a RunPod launch will bill (stock, price, lease, cost ceiling); the measurement."""
     measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
     candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
     measured_by_id = {
@@ -510,15 +515,6 @@ def _confirm_runpod_launch(
             "hourly prices may change while waiting",
             file=sys.stderr,
         )
-    if yes:
-        return measurement
-    print("Create the RunPod Pod? [y/N] ", end="", file=sys.stderr, flush=True)
-    try:
-        response = sys.stdin.readline()
-    except KeyboardInterrupt as exc:
-        raise ValueError("RunPod launch cancelled; no Pod was created") from exc
-    if response.strip().lower() != "y":
-        raise ValueError("RunPod launch cancelled; no Pod was created")
     return measurement
 
 
@@ -1333,7 +1329,7 @@ def _create_pod(
         wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait,
         min_cuda_version=request["minCudaVersion"],
-        confirmed_at=(controlled_by or {}).get("billing_confirmed_at"),
+        confirmed_at=request_confirmed_at(controlled_by or {}),
     )
     launch = {
         "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}),

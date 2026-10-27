@@ -242,7 +242,7 @@ come from the compiled command, so an uncompiled run shows `none declared`.
 
 ## Own execution through completion
 
-After approval, run `kura run execute <run-id>` through the host's tracked
+After approval, run `kura run execute <run-id> --yes` through the host's tracked
 long-running mechanism unless the user explicitly requests detachment. Do not
 replace it with an untracked background shell.
 

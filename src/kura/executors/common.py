@@ -77,6 +77,35 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
+def request_confirmed_at(details: dict[str, Any]) -> str | None:
+    """When the confirmation of a launch request, or of the realization it started, was taken. A
+    request an older Kura wrote recorded only a RunPod billing confirmation, as
+    `billing_confirmed_at`, beside a `confirmed: true` that meant nothing."""
+    value = details.get("confirmed_at") or details.get("billing_confirmed_at")
+    return value if isinstance(value, str) and value else None
+
+
+def confirm_launch(question: str, *, yes: bool, refusal: str, cancelled: str, show: Callable[[], Any] = lambda: None) -> Any:
+    """The one confirmation a training run's launch takes before Kura writes its request, locally
+    and on RunPod: `y` at a terminal, or `yes` (`--yes`), which is given only after the user
+    approved the plan. Without a terminal and without `yes` it refuses before `show` runs. `show`
+    prints what is confirmed (a RunPod launch's price); its result is returned. A refusal or a
+    cancellation raises ValueError with the text given."""
+    if not sys.stdin.isatty() and not yes:
+        raise ValueError(refusal)
+    shown = show()
+    if yes:
+        return shown
+    print(f"{question} [y/N] ", end="", file=sys.stderr, flush=True)
+    try:
+        response = sys.stdin.readline()
+    except KeyboardInterrupt as exc:
+        raise ValueError(cancelled) from exc
+    if response.strip().lower() != "y":
+        raise ValueError(cancelled)
+    return shown
+
+
 # A RunPod Pod deletes itself this long after it starts unless the launch sets another maximum lease.
 DEFAULT_MAX_LEASE_SEC = 12 * 3600
 

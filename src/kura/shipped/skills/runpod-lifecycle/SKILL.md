@@ -29,9 +29,9 @@ stop Pod
 - `kura run execute <run-id>` is the normal entry point and honors the RunPod
   executor frozen in the compiled run.
 - After showing the final plan and receiving the user's single explicit launch
-  approval, an agent runs `kura run execute <run-id> --yes`. The flag carries
-  that approval through the non-interactive launch gate; it must not cause a
-  second user prompt.
+  approval, an agent runs `kura run execute <run-id> --yes`, as for every
+  training launch. The flag carries that approval through the non-interactive
+  launch gate; it must not cause a second user prompt.
 - It is the only way to start a training run, and the way to follow one: if
   the session or the controller was lost while the run goes on, run
   `kura run execute <run-id>` again; it follows the job and collects it, and
@@ -231,7 +231,7 @@ host without a public IP (`runpod.support_public_ip: true` sends RunPod's
 `supportPublicIp` with the create request).
 
 ```sh
-kura run execute <run-id>
+kura run execute <run-id> --yes   # start, once the user said to; follow again without --yes
 kura doctor runpod
 kura run reconcile <run-id>
 kura run download <run-id> --force

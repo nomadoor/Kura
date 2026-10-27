@@ -85,10 +85,12 @@ render runs alike.
   and notifications, and the Kura version that wrote it. The realization
   cites the request it came from.
 - Confirmations happen before the request is written, never in the runner.
-  The RunPod billing confirmation that `kura-decision-model.md` requires is
-  shown by the writer: `kura run execute` at the terminal or through
-  `--yes`, and the UI in its approval control. The request records that the
-  confirmation was given. The runner never prompts.
+  The start confirmation that `kura-decision-model.md` requires of every
+  training launch (with the price, on RunPod) is taken by the writer:
+  `kura run execute` at the terminal or through `--yes`, and the UI in its
+  approval control. The request records when it was taken (`confirmed_at`;
+  requests an older Kura wrote carry `billing_confirmed_at` for RunPod). The
+  runner never prompts.
 - The runner claims a request under a per-run launch lock by creating its
   claim file exclusively, and the realization it starts cites the claim
   (`run-records-and-external-effects.md`). A claimed request is never launched
@@ -105,9 +107,9 @@ run requires today, unchanged: in the UI by a click on its approval control,
 and in an agent session through the conversational approval `AGENTS.md`
 requires, before the agent runs the launching command.
 
-Kura records no separate approval. A launched run was approved, and a plan
-that was not approved stays unlaunched. The reason for not approving shows up
-as the next, revised run.
+Kura records no separate approval beyond the time the start was confirmed. A
+launched run was approved, and a plan that was not approved stays unlaunched.
+The reason for not approving shows up as the next, revised run.
 
 ## Runner mechanics (2026-10-07)
 
