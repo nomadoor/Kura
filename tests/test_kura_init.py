@@ -48,6 +48,24 @@ class InitTests(unittest.TestCase):
             self.assertIn("kura dataset validate", output)
             self.assertNotIn("uv run", output)
 
+    def test_workspace_yaml_shows_the_settings_a_new_user_fills_in(self) -> None:
+        from kura.workspace import validate_workspace_config
+
+        with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
+            _init()
+            text = Path("workspace.yaml").read_text(encoding="utf-8")
+        config = yaml.safe_load(text)
+        validate_workspace_config(config)
+        # Whether agents may open dataset and sample images is a value, off until the user turns it on.
+        self.assertIs(config["agents"]["view_images"], False)
+        # The ComfyUI folders have no value until the user names one, and Kura refuses an empty
+        # value, so they are shown as commented lines under comfyui.
+        comfyui = text[text.index("\ncomfyui:\n"):]
+        for key in ("lora_dir", "model_patches_dir", "input_dir"):
+            with self.subTest(key=key):
+                self.assertNotIn(key, config["comfyui"])
+                self.assertRegex(comfyui, rf"\n  # {key}: ")
+
     def test_init_writes_no_secrets_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             _init()

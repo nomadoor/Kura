@@ -9,8 +9,9 @@ from pathlib import Path
 
 from kura.doctor import readiness_gaps
 from kura.managed import created_once, is_kura_checkout, plan_restore, record_created_once, sync
-from kura.fsio import atomic_write_yaml as dump_yaml
+from kura.fsio import atomic_write_text
 from kura.workspace import WORKSPACE_SCHEMA_VERSION, require_workspace
+from kura.yamlio import dump_yaml
 
 DIRECTORIES = (
     "datasets", "runs", "artifacts/training-state", "workflows", "promptsets",
@@ -22,6 +23,27 @@ USER_KNOWLEDGE = {
     "knowledge/regrets.md": "# Regrets\n\nOne `trigger -> reminder` entry per real regret, with a `source:` line.\n",
     "knowledge/user-preferences.md": "# Preferences\n\nYour standing choices for training and rendering, which agents apply before Kura's defaults.\n",
 }
+
+# The ComfyUI folders a local render stages files into. They have no value until the user names
+# one, and an empty value is refused, so a new workspace.yaml shows them as commented lines.
+COMFYUI_FOLDER_HINTS = (
+    "  # lora_dir: /path/to/ComfyUI/models/loras                  # where a render puts the LoRA it tests\n"
+    "  # model_patches_dir: /path/to/ComfyUI/models/model_patches # for workflows that load a model patch\n"
+    "  # input_dir: /path/to/ComfyUI/input                        # for workflows that read an input image\n"
+)
+
+
+def _new_workspace_yaml(name: str) -> str:
+    """The workspace.yaml `kura init` writes: the settings below, with the ComfyUI folder hints
+    under `comfyui:`."""
+    text = dump_yaml({
+        "schema_version": WORKSPACE_SCHEMA_VERSION, "name": name,
+        # Off until the user lets agents open dataset and sample images (docs/adr/agents-and-user-images.md).
+        "agents": {"view_images": False},
+        "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "auto", "lora_stage_cleanup": "remove_after_render", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "auto", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}},
+        "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "workspace_path": "/workspace", "backend_ports": {"comfyui": ["22/tcp"]}, "gpu_type_priority": "custom", "interruptible": False},
+    })
+    return text.replace("\ncomfyui:\n", "\ncomfyui:\n" + COMFYUI_FOLDER_HINTS, 1)
 
 
 def _enclosing_workspace(root: Path) -> Path | None:
@@ -61,7 +83,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
-        dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "auto", "lora_stage_cleanup": "remove_after_render", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "auto", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "workspace_path": "/workspace", "backend_ports": {"comfyui": ["22/tcp"]}, "gpu_type_priority": "custom", "interruptible": False}})
+        atomic_write_text(workspace, _new_workspace_yaml(root.name))
     # Written once each; a file the user deleted after that stays deleted.
     already = created_once(root)
     once = list(USER_KNOWLEDGE)
