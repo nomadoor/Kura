@@ -652,6 +652,9 @@ SCENARIO = (
     # counted micro-batches, and sd-scripts as the control. Three items, so a window of two
     # micro-batches fills inside an epoch (Accelerate also ends a window at the end of an epoch).
     ScenarioRun("multi-accum-2", "multi", 4, accumulation=2, backends=("ai-toolkit", "sd-scripts")),
+    # A run that sets no retention keeps every step save (P7): six saves at the cadence, more than
+    # AI-Toolkit's own default of five, which it pruned to before Kura gave it 0.
+    ScenarioRun("one-many-saves", "one", 12),
 )
 
 

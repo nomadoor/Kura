@@ -253,6 +253,11 @@ class RealSmokeHarnessTests(unittest.TestCase):
                 for control in MODULE.COMPARISONS[run.key]:
                     self.assertEqual(runs[control].steps, run.steps)
                     self.assertIsNone(runs[control].resume_of)
+        # Every backend runs one fresh run with more step saves than AI-Toolkit's own default keeps
+        # (five), so a trainer that prunes a run setting no retention fails P2's weight-file check.
+        for backend in MODULE.CONFORMANCE_BACKENDS:
+            most = max(len(MODULE.expected_saves(0, run.steps, MODULE.CADENCE)) - 1 for run in MODULE.scenario_runs(backend) if not run.resume_of)
+            self.assertGreater(most, 5, backend)
         # The one-item Resume has two uninterrupted controls, so a nondeterministic trainer shows itself.
         self.assertEqual(len(MODULE.COMPARISONS["one-resume"]), 2)
 
