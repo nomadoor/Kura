@@ -1,0 +1,30 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-27'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit on
+  local Docker, after Kura began giving AI-Toolkit max_step_saves_to_keep 0 when a run sets no
+  save_last_n_steps. Before, the trainer pruned such a run to its own default of five step saves.
+  The scenario gained one-many-saves (12 steps at the cadence of 2, six step saves), which a
+  trainer keeping only five fails. Earlier AI-Toolkit records stay valid history for their
+  adapter identities; none of their runs left more than three step saves, so pruning never
+  showed in them.
+backends:
+  ai-toolkit:
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553
+    adapter_source: 26471156dde465d8643eea608daf037ffbe475d0d0e75bbec3505243102635f9
+    runs: [20261027-2010_conf-ai-one-control_2bcc, 20261027-2011_conf-ai-one-control-2_7528, 20261027-2011_conf-ai-one-split_5604, 20261027-2012_conf-ai-one-resume_252c, 20261027-2013_conf-ai-multi-fresh_b47b, 20261027-2013_conf-ai-multi-split_152f, 20261027-2014_conf-ai-multi-resume_0e7e, 20261027-2014_conf-ai-multi-accum-2_ec0d, 20261027-2015_conf-ai-one-many-saves_3d89]
+results:
+  P1: pass (includes accumulation 2)
+  P2: pass; one-many-saves left all six step saves (2, 4, 6, 8, 10, 12) and the final file, with max_step_saves_to_keep 0 in its compiled config
+  P3: pass; the controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: not run (local Docker)
+  P7: pass
+  P8: pass
