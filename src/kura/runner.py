@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, request_confirmed_at, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
+from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, request_confirmed_at, early_step_pace, ATTENTION_EXIT_CODE, EXIT_CODE_FOR_STATE, QUIET_RUN_NOTICE_SEC, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -1268,18 +1268,60 @@ EXIT_FOR_STATE = EXIT_CODE_FOR_STATE
 PROGRESS_EVERY_SEC = 30
 # How much of the log a run that did not complete shows when following ends.
 FAILED_LOG_LINES = 40
+# Following a training run returns for attention when its steps take this many times the median
+# pace of its early steps for this long. Step 1 (loading, compiling) is left out of that pace.
+SLOWDOWN_FACTOR = 5
+SLOWDOWN_SEC = 5 * 60
+EARLY_STEPS = range(2, 12)
+# The executors of training runs; a render is followed without the attention checks.
+TRAINING_EXECUTORS = ("docker", "runpod")
+
+
+def _slowdown(run_dir: Path, status: dict[str, Any], early: dict[str, float]) -> tuple[float, float] | None:
+    """(this step's seconds, the early median) when a running run's steps take SLOWDOWN_FACTOR
+    times the pace its trainer printed for EARLY_STEPS (read once from its log into `early`)."""
+    step, pace = status.get("last_step"), status.get("seconds_per_iter")
+    if status.get("state") != "running" or not isinstance(step, int) or step < EARLY_STEPS.stop \
+            or not isinstance(pace, (int, float)) or pace <= 0:
+        return None
+    if "base" not in early:
+        base = early_step_pace(run_dir, EARLY_STEPS)
+        if base is None:
+            return None
+        early["base"] = base
+    return (float(pace), early["base"]) if pace >= SLOWDOWN_FACTOR * early["base"] else None
+
+
+def _return_for_attention(run_dir: Path, reason: str, out: Any) -> int:
+    print(
+        f"needs attention: {reason}. The run keeps going; following stops here so you can decide: "
+        f"`kura run stop {run_dir.name}` stops it, `kura run execute {run_dir.name}` follows it again.",
+        file=out,
+    )
+    return ATTENTION_EXIT_CODE
 
 
 def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2.0, sleep: Callable[[float], None] = time.sleep,
-           out: Any = None, ensure: Callable[..., bool] = ensure_runner, clock: Callable[[], float] = time.monotonic) -> int:
+           out: Any = None, ensure: Callable[..., bool] = ensure_runner, clock: Callable[[], float] = time.monotonic,
+           started_at: datetime | None = None) -> int:
     """Follow a runner-controlled run read-only until it is finished; return its exit code.
 
     Finished means the run's status is finished and no follower still holds the
     run, so the post-run steps of the same reconcile are done too. The trainer's
     own output stays in logs/stdout.log; following prints a progress line, and
     the end of the log when the run did not complete.
+
+    A training run that goes quiet for the quiet-run time of what this follower
+    watched (from `started_at`, now by default), or whose steps take
+    SLOWDOWN_FACTOR times its early pace for SLOWDOWN_SEC, ends following with
+    ATTENTION_EXIT_CODE and leaves the run as it is: an agent host that wakes
+    only when a command returns then gets to decide.
     """
     out = out or sys.stderr
+    started_at = started_at or datetime.now().astimezone()
+    training = _request_executor(request) in TRAINING_EXECUTORS
+    early: dict[str, float] = {}
+    slow_since: float | None = None
     restarts = 0
     said_wait: str | None = None
     quiet_said = False
@@ -1303,9 +1345,9 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             print(f"waiting to launch: {wait}", file=out)
         said_wait = wait
         status = _status(run_dir)
-        # Said once per quiet spell; progress resets it.
-        quiet = quiet_run_notice(run_quiet_since(run_dir, status))
-        if quiet and not quiet_said:
+        # Said once per quiet spell; progress resets it. A training run returns for attention instead, below.
+        quiet = quiet_run_notice(run_quiet_since(run_dir, status, not_before=started_at if training else None))
+        if quiet and not quiet_said and not training:
             print(quiet, file=out)
         quiet_said = quiet is not None
         if status.get("state") != said_state or clock() - said_at >= PROGRESS_EVERY_SEC:
@@ -1316,6 +1358,18 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
                 print(line, file=out)
                 said_line = line
             said_state, said_at = status.get("state"), clock()
+        if training and quiet:
+            print(quiet, file=out)
+            return _return_for_attention(run_dir, f"no new output for {QUIET_RUN_NOTICE_SEC // 60} minutes or more", out)
+        slow = _slowdown(run_dir, status, early) if training else None
+        slow_since = (slow_since if slow_since is not None else clock()) if slow else None
+        if slow and clock() - slow_since >= SLOWDOWN_SEC:
+            pace, base = slow
+            return _return_for_attention(run_dir, (
+                f"steps take {pace:.2f} s per step, {pace / base:.1f} times the {base:.2f} s of steps "
+                f"{EARLY_STEPS.start}-{EARLY_STEPS.stop - 1}, for {SLOWDOWN_SEC // 60} minutes "
+                "(another process may be using the GPU, or its memory may be spilling)"
+            ), out)
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
         if launched and run_finished(status) and not _held(run_dir):

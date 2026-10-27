@@ -188,10 +188,14 @@ With the cache on, `unload_text_encoder: true` adds nothing. Never set
 `unload_text_encoder: true` without the cache: the trainer then trains on a
 blank prompt (or the trigger word only) instead of the captions.
 
-Recognise a spill while a run executes: seconds per step tens of times above
-the family card's figure for comparable settings, or GPU memory pinned at the
-GPU's total. Stop the run (`kura run stop`), tell the user, and plan it again
-with the cache rather than waiting.
+Recognise a possible spill from what `kura run execute` prints: seconds per
+step tens of times above the family card's figure for comparable settings from
+the first steps. A return with exit code 3 because steps became much slower is
+a signal to look, not a diagnosis: another process may be using the GPU. Read
+the printed reason and the end of the log, tell the user what you found, and
+only when it points to memory spilling, with their yes stop the run
+(`kura run stop`) and plan it again with the cache. Do not poll the run with a
+script of your own.
 
 ## Last look
 
