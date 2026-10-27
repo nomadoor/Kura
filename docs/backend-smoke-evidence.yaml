@@ -14,6 +14,24 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-keep-every-checkpoint-conformance-docker-2026-10-27
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 26471156dde465d8643eea608daf037ffbe475d0d0e75bbec3505243102635f9
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-27'
+    artifact: smoke-evidence/2026-10-27-ai-toolkit-keep-every-checkpoint.yaml
   - id: musubi-tuner-own-ssh-key-conformance-runpod-2026-10-23
     backend: musubi-tuner
     adapter_source:

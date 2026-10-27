@@ -636,15 +636,15 @@ def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps:
     `checkpoint` is the backend display's `checkpoint` block. None when the trainer is given
     no cadence or saves at its own default, when there are no steps, or when a retention
     policy prunes step checkpoints, so fewer are left: a positive `prune_before_step` (Musubi
-    Tuner), `keep_last` (AI-Toolkit), or `retention_window_steps` (sd-scripts), or no
-    `keep_last` where the display declares `unset_keep_last: trainer_default` (AI-Toolkit then
-    keeps its own `max_step_saves_to_keep`). Zero or less is no policy: AI-Toolkit keeps every
-    save at `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no prune below
+    Tuner), `keep_last` (AI-Toolkit), or `retention_window_steps` (sd-scripts). Zero or less
+    is no policy: AI-Toolkit keeps every save at `max_step_saves_to_keep: 0` (it slices
+    `[:-0]`), which Kura gives it when the run sets none, Musubi Tuner runs no prune below
     step 1, and sd-scripts refuses a non-positive `save_last_n_steps`. Epoch retention prunes
-    no step checkpoint. The plan's checkpoint warning and preflight line and the monitor's
-    expected checkpoints read it; the disk estimate reads `peak_checkpoints`. The counts trust
-    AI-Toolkit's default pruning because they say how many checkpoints are left, while the disk
-    estimate is a conservative bound and so does not assume a default it does not own."""
+    no step checkpoint. An AI-Toolkit run compiled before Kura gave it 0 froze no `keep_last`
+    and `unset_keep_last: trainer_default` in its display, and its trainer pruned to its own
+    default count; that record still reads as pruned. The plan's checkpoint warning and
+    preflight line and the monitor's expected checkpoints read it; the disk estimate reads
+    `peak_checkpoints`."""
     if not steps:
         return None
     every = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
@@ -699,8 +699,8 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     `keep_last` step saves and the final file); sd-scripts removes the save that left the
     `retention_window_steps` window after writing each save, so it keeps `window // every + 1`
     and holds one more (at the end, the final file). Musubi Tuner's `prune_before_step` runs
-    after training, and AI-Toolkit's unset `keep_last` default is not copied here, so both
-    count every save. The positive-value rules are those of `expected_checkpoints`."""
+    after training, and an AI-Toolkit run compiled before Kura gave it `keep_last` 0 froze none,
+    so both count every save. The positive-value rules are those of `expected_checkpoints`."""
     span = resume_steps(run)
     if span is None:
         start, end = 0, trained_steps(run)

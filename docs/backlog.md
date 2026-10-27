@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-27 | checkpoints | An AI-Toolkit run compiled by an older Kura (its `resolved/ai-toolkit.yaml` has no `max_step_saves_to_keep`) and launched by this one is still pruned to the trainer's 5, while `kura run plan` recomputes the display and says every save is kept; the monitor reads the frozen display and is right. Recompiling fixes it; the plan could read the frozen display for a compiled run | review of the keep-every-checkpoint change | P9
 - 2026-10-23 | RunPod SSH | A launch whose Pod never gets a public 22/tcp mapping (a COMMUNITY host without `supportPublicIp`) times out with a plain ValueError, so the unused Pod is deleted by the runner or at its lease instead of at once (as with `runpodctl` before); raise `TransferRefused` once RunPod's mappings are known final, after the live test shows how they appear | review of the SSH key without runpodctl change | P6
 - 2026-10-23 | RunPod SSH | `record_pod_lease_deadline` makes one ssh attempt; if RunPod maps 22/tcp before sshd listens (an image that installs openssh-server at start), "Connection refused" fails the launch; retry refused or timed-out connections inside the SSH wait | review of the SSH key without runpodctl change | P6
 - 2026-10-23 | RunPod SSH | A dry-run launch creates Kura's RunPod SSH key (and needs ssh-keygen) because `_pod_create_request` reads it; add it only on the path that creates a Pod | review of the SSH key without runpodctl change | -

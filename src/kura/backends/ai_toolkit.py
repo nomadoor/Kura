@@ -1196,9 +1196,7 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         },
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
-            # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
-            "keep_last": native.get("save_last_n_steps"),
-            "unset_keep_last": "trainer_default",
+            "keep_last": _ai_toolkit_keep_last(native),
         },
     }
 
@@ -1262,6 +1260,17 @@ def _ai_toolkit_frozen_native_blocks(
         )
     return native_datasets, views, wrapped
 
+
+def _ai_toolkit_keep_last(override: dict[str, Any]) -> int | None:
+    """The max_step_saves_to_keep a run's trainer is given: its save_last_n_steps, else 0, which
+    keeps every step save (the pinned trainer removes `files[:-n]`, nothing at 0, also under the
+    wan22 multiplier: jobs/process/BaseSDTrainProcess.py:461-470). Left unset, the trainer prunes
+    to its own default of 5 (toolkit/config_modules.py:27) and deletes the user's earlier
+    checkpoints, which no other backend does. None for an explicit command, whose own config Kura
+    does not write. Compile and the display both read it."""
+    if override.get("command") is not None:
+        return None
+    return _first_set(override.get("save_last_n_steps"), 0)
 
 # The native process key each Kura-typed field writes, by section.
 _AI_TOOLKIT_TYPED_FIELDS = {
@@ -1552,7 +1561,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
                 "training_folder": f"/workspace/runs/{run['id']}/outputs",
                 "device": "cuda:0",
                 "network": {"type": "lora"},
-                "save": {},
+                "save": {"max_step_saves_to_keep": _ai_toolkit_keep_last(override)},
                 "datasets": projected_datasets,
                 "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch")},
