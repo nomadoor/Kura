@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from kura.run_results import render_output_dir
 from kura.install_source import kura_provenance
 from kura.yamlio import YAMLError, load_run_yaml, load_yaml, load_yaml_mapping
 from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
@@ -1608,7 +1609,7 @@ def launch_render(
     if dry_run:
         print(json.dumps(details, ensure_ascii=False, indent=2))
         return 0
-    output_dir = run_dir / frozen.get("render", {}).get("output_dir", "samples/images")
+    output_dir = render_output_dir(run_dir, frozen)
     output_dir.mkdir(parents=True, exist_ok=True)
     images_log = run_dir / "samples" / "images.jsonl"
     images_log.parent.mkdir(parents=True, exist_ok=True)

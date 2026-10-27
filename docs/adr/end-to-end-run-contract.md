@@ -140,6 +140,11 @@ billing Pod after the controller exits.
   values, actually applied values, checkpoint provenance, and complete authored
   metadata.
 - `notes.md`: human evaluation and reflection, not machine runtime facts.
+- `comparisons/` (training runs): what an agent assembles from the run's renders
+  (comparison and contact sheets). Like `notes.md`, written after the run and
+  never by the trainer. A training run's renders are the render runs whose
+  `inputs.train_run` names it; Kura reads that link from them each time
+  (`run_results.py`) and records it nowhere else (amended 2026-10-27).
 
 Mutable image tags are insufficient reproducibility evidence. Executors record
 an actual digest or provider image identity when obtainable.
