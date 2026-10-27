@@ -1,0 +1,685 @@
+{
+  "id": "18887e68-f4ff-4f36-a37e-341010972eff",
+  "revision": 0,
+  "last_node_id": 98,
+  "last_link_id": 209,
+  "nodes": [
+    {
+      "id": 8,
+      "type": "VAEDecode",
+      "pos": [
+        1255.3972990369018,
+        187.93908374218398
+      ],
+      "size": [
+        225,
+        46
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 35
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 76
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            101
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      }
+    },
+    {
+      "id": 37,
+      "type": "UNETLoader",
+      "pos": [
+        187.95633807884235,
+        -80.35199785839325
+      ],
+      "size": [
+        305.3782043457031,
+        82
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "slot_index": 0,
+          "links": [
+            206
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "models": [
+          {
+            "name": "moss_image_sft_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "moss_image_sft_int8_convrot.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "moss_image_sft_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 38,
+      "type": "CLIPLoader",
+      "pos": [
+        67.38904068787144,
+        187.93908374218398
+      ],
+      "size": [
+        301.3524169921875,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "slot_index": 0,
+          "links": [
+            74,
+            204
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "models": [
+          {
+            "name": "qwen3.5_9b_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_int8_convrot.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen3.5_9b_int8_convrot.safetensors",
+        "moss_image",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen3.5_9b_int8_convrot.safetensors",
+        "type": "moss_image",
+        "device": "default"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 3,
+      "type": "KSampler",
+      "pos": [
+        897.6355339732748,
+        187.93908374218398
+      ],
+      "size": [
+        315,
+        262
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 207
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 152
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 205
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 160
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            35
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      },
+      "widgets_values": [
+        1234,
+        "fixed",
+        25,
+        3,
+        "euler",
+        "sgm_uniform",
+        1
+      ],
+      "widgets_values_named": {
+        "seed": 1234,
+        "control_after_generate": "fixed",
+        "steps": 25,
+        "cfg": 3,
+        "sampler_name": "euler",
+        "scheduler": "sgm_uniform",
+        "denoise": 1
+      }
+    },
+    {
+      "id": 60,
+      "type": "ResolutionSelector",
+      "pos": [
+        283.6227864304876,
+        635.9250851163613
+      ],
+      "size": [
+        270,
+        150
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "showAdvanced": true,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            161
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            162
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ResolutionSelector",
+        "cnr_id": "comfy-core",
+        "ver": "0.25.0"
+      },
+      "widgets_values": [
+        "3:4 (Portrait Standard)",
+        2,
+        16
+      ],
+      "widgets_values_named": {
+        "aspect_ratio": "3:4 (Portrait Standard)",
+        "megapixels": 2,
+        "multiple": 16
+      }
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [
+        415.7513025457208,
+        187.93908374218398
+      ],
+      "size": [
+        418.5183049982245,
+        177.7917699892659
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 74
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            152
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      },
+      "widgets_values": [
+        "A fashion illustration of a young woman and a crow, both at true real-life scale, posed facing opposite directions, framed as an eye-level full-body shot with generous white space around the figures. The woman stands facing right in a three-quarter view, and the small, life-sized crow stands on the ground just in front of her boots, facing left, overlapping the lower edge of her coat so the two figures layer together. The crow has its wings slightly lifted and its beak open mid-call. The woman has long, straight, glossy black hair falling past her shoulders. Her expression is cool and aloof: eyes glancing sideways, lips closed in a faint, knowing smirk, chin slightly raised. Her outfit is inspired by the crow: a long glossy black coat with layered feather-shaped panels at the shoulders, a high collar, a vivid blue-violet satin lining flashing at the front opening, slim black trousers, and black heeled boots.\n\nShe is a slender figure about seven and a half heads tall, with long legs, a narrow waist and a small head. Her face is a smooth, flat-shaded oval that narrows to a neat pointed chin, with clean simple contours. Her eyes are sharp and upturned at the outer corners, framed by a thick, bold black upper lash line, with dark irises that fill most of the eye and one crisp white highlight each. Her nose is a single short line, her mouth a small, thin line with a slight upturn at one corner, and her eyebrows thin and gently angled. Facial shading is minimal, limited to a crisp shadow under the hair fringe and beneath the chin onto the neck. Her hands are slender with clean, simplified fingers. The crow keeps natural bird proportions, with sharp feather clumps, a pointed beak and a small glinting eye.\n\nThe illustration uses crisp black ink lines with visible pen strokes, tapered, whip-like stroke ends and strong weight variation: heavy outer contours, thin interior lines, and sharp angular creases at fabric folds. Bold solid-black spot fills shape the hair, feathers and coat, with white scratch-line highlights carved into the black. The hair is rendered as ink-defined strand clumps with tapered tips, thin white gaps between clumps and a glossy white sheen band. Color is laid in with hand-colored markers, showing brush texture and slightly uneven fills. The skin is pale and clean, with two-tone cel shadows and small crisp white highlights. The palette is mostly black, white and soft neutrals, so the single vivid blue-violet accent in the coat lining and the crow's feather sheen pops strongly.\n\nThe ground is a flat, pale off-white plane meeting a pure white background at a faint horizon. Realistic photographic lighting falls across the illustration: a large cloud shadow covers the crow, the woman's lower body and the ground, with a wide, naturally soft penumbra and a smooth gradient falloff. Inside the shadow, colors look deeper and cooler through translucent darkening, and the ink lines and marker colors remain clearly visible. The sunlit areas glow with clean, bright daylight and a subtle warm bloom."
+      ],
+      "widgets_values_named": {
+        "text": "A fashion illustration of a young woman and a crow, both at true real-life scale, posed facing opposite directions, framed as an eye-level full-body shot with generous white space around the figures. The woman stands facing right in a three-quarter view, and the small, life-sized crow stands on the ground just in front of her boots, facing left, overlapping the lower edge of her coat so the two figures layer together. The crow has its wings slightly lifted and its beak open mid-call. The woman has long, straight, glossy black hair falling past her shoulders. Her expression is cool and aloof: eyes glancing sideways, lips closed in a faint, knowing smirk, chin slightly raised. Her outfit is inspired by the crow: a long glossy black coat with layered feather-shaped panels at the shoulders, a high collar, a vivid blue-violet satin lining flashing at the front opening, slim black trousers, and black heeled boots.\n\nShe is a slender figure about seven and a half heads tall, with long legs, a narrow waist and a small head. Her face is a smooth, flat-shaded oval that narrows to a neat pointed chin, with clean simple contours. Her eyes are sharp and upturned at the outer corners, framed by a thick, bold black upper lash line, with dark irises that fill most of the eye and one crisp white highlight each. Her nose is a single short line, her mouth a small, thin line with a slight upturn at one corner, and her eyebrows thin and gently angled. Facial shading is minimal, limited to a crisp shadow under the hair fringe and beneath the chin onto the neck. Her hands are slender with clean, simplified fingers. The crow keeps natural bird proportions, with sharp feather clumps, a pointed beak and a small glinting eye.\n\nThe illustration uses crisp black ink lines with visible pen strokes, tapered, whip-like stroke ends and strong weight variation: heavy outer contours, thin interior lines, and sharp angular creases at fabric folds. Bold solid-black spot fills shape the hair, feathers and coat, with white scratch-line highlights carved into the black. The hair is rendered as ink-defined strand clumps with tapered tips, thin white gaps between clumps and a glossy white sheen band. Color is laid in with hand-colored markers, showing brush texture and slightly uneven fills. The skin is pale and clean, with two-tone cel shadows and small crisp white highlights. The palette is mostly black, white and soft neutrals, so the single vivid blue-violet accent in the coat lining and the crow's feather sheen pops strongly.\n\nThe ground is a flat, pale off-white plane meeting a pure white background at a faint horizon. Realistic photographic lighting falls across the illustration: a large cloud shadow covers the crow, the woman's lower body and the ground, with a wide, naturally soft penumbra and a smooth gradient falloff. Inside the shadow, colors look deeper and cooler through translucent darkening, and the ink lines and marker colors remain clearly visible. The sunlit areas glow with clean, bright daylight and a subtle warm bloom."
+      }
+    },
+    {
+      "id": 56,
+      "type": "SaveImage",
+      "pos": [
+        1522.0397762964599,
+        187.93908374218398
+      ],
+      "size": [
+        586.3861842101655,
+        863.688465287762
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 101
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "ComfyUI"
+      }
+    },
+    {
+      "id": 39,
+      "type": "VAELoader",
+      "pos": [
+        897.6355339732748,
+        -80.35199785839325
+      ],
+      "size": [
+        315,
+        58
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "slot_index": 0,
+          "links": [
+            76
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "models": [
+          {
+            "name": "flux2-vae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "flux2-vae.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "flux2-vae.safetensors"
+      },
+      "color": "#322",
+      "bgcolor": "#533"
+    },
+    {
+      "id": 74,
+      "type": "EmptyFlux2LatentImage",
+      "pos": [
+        590.1468669725973,
+        610.2350088744557
+      ],
+      "size": [
+        237,
+        106
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 161
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 162
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            160
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "EmptyFlux2LatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ],
+      "widgets_values_named": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    {
+      "id": 93,
+      "type": "SkipLayerGuidanceDiTSimple",
+      "pos": [
+        538.8686309814453,
+        -80.35199785839325
+      ],
+      "size": [
+        295.4009765625,
+        130
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "showAdvanced": true,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 206
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            207
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "SkipLayerGuidanceDiTSimple"
+      },
+      "widgets_values": [
+        "",
+        "22",
+        0,
+        0.5
+      ],
+      "widgets_values_named": {
+        "double_layers": "",
+        "single_layers": "22",
+        "start_percent": 0,
+        "end_percent": 0.5
+      }
+    },
+    {
+      "id": 94,
+      "type": "CLIPTextEncode",
+      "pos": [
+        415.7513025457208,
+        439.0549810836888
+      ],
+      "size": [
+        418.5183049982245,
+        105.54682990845009
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 204
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            205
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Negative Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      },
+      "widgets_values": [
+        "nsfw, worst quality, bad anatomy, watermark, jpeg artifact, photorealistic, 3d render, clouds, wall, vertical shadow, dappled shade, tree shadow, leaf shadows, gray background, extra limbs"
+      ],
+      "widgets_values_named": {
+        "text": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact, photorealistic, 3d render, clouds, wall, vertical shadow, dappled shade, tree shadow, leaf shadows, gray background, extra limbs"
+      }
+    },
+    {
+      "id": 98,
+      "type": "MarkdownNote",
+      "pos": [
+        -418.753786168745,
+        -80.35199785839325
+      ],
+      "size": [
+        434.36831439218804,
+        441.83593639711034
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## models\n\n- diffusion_models\n  - [moss_image_sft_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/diffusion_models/moss_image_sft_int8_convrot.safetensors) (5.41 GB)\n- text_encoders\n  - [qwen3.5_9b_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/text_encoders/qwen3.5_9b_int8_convrot.safetensors) (9.75 GB)\n- vae\n  - [flux2-vae.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/vae/flux2-vae.safetensors) (336 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── moss_image_sft_int8_convrot.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen3.5_9b_int8_convrot.safetensors\n    └── 📂vae/\n        └── flux2-vae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/moss-image/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/moss-image/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/moss-image/)"
+      ],
+      "widgets_values_named": {
+        "text": "## models\n\n- diffusion_models\n  - [moss_image_sft_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/diffusion_models/moss_image_sft_int8_convrot.safetensors) (5.41 GB)\n- text_encoders\n  - [qwen3.5_9b_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/text_encoders/qwen3.5_9b_int8_convrot.safetensors) (9.75 GB)\n- vae\n  - [flux2-vae.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/vae/flux2-vae.safetensors) (336 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── moss_image_sft_int8_convrot.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen3.5_9b_int8_convrot.safetensors\n    └── 📂vae/\n        └── flux2-vae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/moss-image/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/moss-image/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/moss-image/)"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    }
+  ],
+  "links": [
+    [
+      35,
+      3,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      74,
+      38,
+      0,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      76,
+      39,
+      0,
+      8,
+      1,
+      "VAE"
+    ],
+    [
+      101,
+      8,
+      0,
+      56,
+      0,
+      "IMAGE"
+    ],
+    [
+      152,
+      6,
+      0,
+      3,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      160,
+      74,
+      0,
+      3,
+      3,
+      "LATENT"
+    ],
+    [
+      161,
+      60,
+      0,
+      74,
+      0,
+      "INT"
+    ],
+    [
+      162,
+      60,
+      1,
+      74,
+      1,
+      "INT"
+    ],
+    [
+      204,
+      38,
+      0,
+      94,
+      0,
+      "CLIP"
+    ],
+    [
+      205,
+      94,
+      0,
+      3,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      206,
+      37,
+      0,
+      93,
+      0,
+      "MODEL"
+    ],
+    [
+      207,
+      93,
+      0,
+      3,
+      0,
+      "MODEL"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7627768444386314,
+      "offset": [
+        727.4177643686226,
+        435.65859469355337
+      ]
+    },
+    "frontendVersion": "1.55.17",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

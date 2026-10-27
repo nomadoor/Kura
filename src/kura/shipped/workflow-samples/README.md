@@ -47,6 +47,14 @@ writes and refreshes `workflows/samples/`; copy a sample elsewhere under
   ship them as ready-to-smoke until the required sample inputs are present or
   Kura has an explicit staging path for them.
 
+## Where samples come from
+
+Samples are taken from Comfy with ComfyUI, the maintainer's site, when it has a
+core-node workflow for the family and task: its UI form as published, the API
+form exported from ComfyUI's own frontend, and a sidecar built from the site's
+model list with each Hugging Face repo pinned to a commit. The sidecar's
+`source` names the site page. Kura never reads the site when it runs.
+
 ## Maintenance
 
 - Pin to the ComfyUI ref used by the Kura ComfyUI image (`COMFYUI_REF`).
