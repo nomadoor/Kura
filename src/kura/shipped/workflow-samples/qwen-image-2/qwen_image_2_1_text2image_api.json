@@ -1,0 +1,163 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 12345,
+      "steps": 25,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "37",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "63",
+        0
+      ],
+      "latent_image": [
+        "62",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "A vertical minimalist anime illustration of a stylish young woman occupying most of the left side of the frame. She is caught in the middle of turning back while walking away: her hips and lower body still face forward, while her shoulders, neck, and head twist back toward the viewer. One arm is bent with the elbow raised near shoulder height, the hand loosely open in a reflexive gesture. Her blue-gray braid swings with the turn, adding a clear sense of motion. She wears lightly tinted sunglasses, a black shirt, and an oversized glossy silver enamel jacket. Use very simple flat anime cel shading, broad color shapes, minimal hair detail, and almost no texture. The jacket has only a few crisp white reflections and subtle rainbow highlights. Her face remains clearly readable, with only a soft shadow passing diagonally across part of her face and body. The background is a vivid deep-blue gradient sky with large, irregular towering cumulonimbus clouds, loosely painted in bold simple shapes. The clouds have dramatic uneven silhouettes, bright sunlit tops, and deep blue-gray shadowed undersides. Keep the woman large and close in the foreground while leaving enough open sky around her for the clouds to feel expansive.",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.75"
+    }
+  },
+  "60": {
+    "inputs": {
+      "aspect_ratio": "2:3 (Portrait Photo)",
+      "megapixels": 4,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector",
+      "cnr_id": "comfy-core",
+      "ver": "0.25.0"
+    }
+  },
+  "62": {
+    "inputs": {
+      "width": [
+        "60",
+        0
+      ],
+      "height": [
+        "60",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.26.0"
+    }
+  },
+  "63": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "Conditioning Zero Out",
+      "cnr_id": "comfy-core"
+    }
+  }
+}

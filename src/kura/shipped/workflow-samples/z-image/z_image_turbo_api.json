@@ -1,0 +1,176 @@
+{
+  "6": {
+    "inputs": {
+      "text": "Ink dropped in water, organic patterns, color diffusion, fluid dynamics, abstract art, red and blue",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 1234,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "62",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "64",
+        0
+      ],
+      "latent_image": [
+        "63",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "43": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "44": {
+    "inputs": {
+      "clip_name": "qwen_3_4b_fp8_mixed.safetensors",
+      "type": "lumina2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.73"
+    }
+  },
+  "45": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "53",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.73"
+    }
+  },
+  "48": {
+    "inputs": {
+      "unet_name": "z_image_turbo_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "53": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "57": {
+    "inputs": {
+      "aspect_ratio": "3:4 (Portrait Standard)",
+      "megapixels": 2,
+      "multiple": 16
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "62": {
+    "inputs": {
+      "shift": 3.1,
+      "sampling": "flow",
+      "model": [
+        "48",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.49"
+    }
+  },
+  "63": {
+    "inputs": {
+      "width": [
+        "57",
+        0
+      ],
+      "height": [
+        "57",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "EmptySD3LatentImage",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.49"
+    }
+  },
+  "64": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "Conditioning Zero Out",
+      "cnr_id": "comfy-core"
+    }
+  }
+}

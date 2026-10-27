@@ -1,0 +1,185 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 1234,
+      "steps": 25,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "37",
+        0
+      ],
+      "positive": [
+        "64",
+        0
+      ],
+      "negative": [
+        "64",
+        1
+      ],
+      "latent_image": [
+        "62",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.75"
+    }
+  },
+  "62": {
+    "inputs": {
+      "width": [
+        "76",
+        0
+      ],
+      "height": [
+        "76",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.26.0"
+    }
+  },
+  "64": {
+    "inputs": {
+      "prompt": "Replace the rabbit with a realistic RC off-road buggy in the same pose and position, kicking up dirt.",
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "38",
+        0
+      ],
+      "images.image_1": [
+        "77",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {
+      "title": "Text Encode Qwen Image 2.1",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "76": {
+    "inputs": {
+      "image": [
+        "77",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "77": {
+    "inputs": {
+      "resize_type": "scale to multiple",
+      "resize_type.multiple": 32,
+      "scale_method": "bicubic",
+      "input": [
+        "78",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "78": {
+    "inputs": {
+      "image": "qwen_image_2_1_image_edit_input.webp"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image",
+      "cnr_id": "comfy-core"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/qwen-image-2-1/qwen_image_2_1_image_edit.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-01);
+  API form exported with the ComfyUI frontend.
+models:
+  diffusion_models:
+    qwen_image_2.1_int8_convrot.safetensors:
+      repo: Comfy-Org/Qwen-Image-2.1
+      filename: diffusion_models/qwen_image_2.1_int8_convrot.safetensors
+      revision: 0217efd1d9c9452e84f6448903d6e21bfa171ffd
+  clip:
+    qwen3vl_8b_int8_convrot.safetensors:
+      repo: Comfy-Org/Qwen-Image-2.1
+      filename: text_encoders/qwen3vl_8b_int8_convrot.safetensors
+      revision: 0217efd1d9c9452e84f6448903d6e21bfa171ffd
+      target_dir: text_encoders
+  vae:
+    qwen_image_2.1_vae_bf16.safetensors:
+      repo: Comfy-Org/Qwen-Image-2.1
+      filename: vae/qwen_image_2.1_vae_bf16.safetensors
+      revision: 0217efd1d9c9452e84f6448903d6e21bfa171ffd
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

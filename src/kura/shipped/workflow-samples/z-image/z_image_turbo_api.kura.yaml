@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/z-image-turbo/z_image_turbo.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-20);
+  API form exported with the ComfyUI frontend.
+models:
+  vae:
+    ae.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/vae/ae.safetensors
+      revision: 6fc90a3b1b653e935a0d175e260736de25b84df5
+  clip:
+    qwen_3_4b_fp8_mixed.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors
+      revision: 6fc90a3b1b653e935a0d175e260736de25b84df5
+      target_dir: text_encoders
+  diffusion_models:
+    z_image_turbo_int8_convrot.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors
+      revision: 6fc90a3b1b653e935a0d175e260736de25b84df5
+lora_insert:
+  kind: model_only
+  model_node: '48'
+  strength_model: 0.8

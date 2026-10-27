@@ -1,0 +1,181 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 1234,
+      "steps": 25,
+      "cfg": 3,
+      "sampler_name": "euler",
+      "scheduler": "sgm_uniform",
+      "denoise": 1,
+      "model": [
+        "93",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "94",
+        0
+      ],
+      "latent_image": [
+        "74",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "A fashion illustration of a young woman and a crow, both at true real-life scale, posed facing opposite directions, framed as an eye-level full-body shot with generous white space around the figures. The woman stands facing right in a three-quarter view, and the small, life-sized crow stands on the ground just in front of her boots, facing left, overlapping the lower edge of her coat so the two figures layer together. The crow has its wings slightly lifted and its beak open mid-call. The woman has long, straight, glossy black hair falling past her shoulders. Her expression is cool and aloof: eyes glancing sideways, lips closed in a faint, knowing smirk, chin slightly raised. Her outfit is inspired by the crow: a long glossy black coat with layered feather-shaped panels at the shoulders, a high collar, a vivid blue-violet satin lining flashing at the front opening, slim black trousers, and black heeled boots.\n\nShe is a slender figure about seven and a half heads tall, with long legs, a narrow waist and a small head. Her face is a smooth, flat-shaded oval that narrows to a neat pointed chin, with clean simple contours. Her eyes are sharp and upturned at the outer corners, framed by a thick, bold black upper lash line, with dark irises that fill most of the eye and one crisp white highlight each. Her nose is a single short line, her mouth a small, thin line with a slight upturn at one corner, and her eyebrows thin and gently angled. Facial shading is minimal, limited to a crisp shadow under the hair fringe and beneath the chin onto the neck. Her hands are slender with clean, simplified fingers. The crow keeps natural bird proportions, with sharp feather clumps, a pointed beak and a small glinting eye.\n\nThe illustration uses crisp black ink lines with visible pen strokes, tapered, whip-like stroke ends and strong weight variation: heavy outer contours, thin interior lines, and sharp angular creases at fabric folds. Bold solid-black spot fills shape the hair, feathers and coat, with white scratch-line highlights carved into the black. The hair is rendered as ink-defined strand clumps with tapered tips, thin white gaps between clumps and a glossy white sheen band. Color is laid in with hand-colored markers, showing brush texture and slightly uneven fills. The skin is pale and clean, with two-tone cel shadows and small crisp white highlights. The palette is mostly black, white and soft neutrals, so the single vivid blue-violet accent in the coat lining and the crow's feather sheen pops strongly.\n\nThe ground is a flat, pale off-white plane meeting a pure white background at a faint horizon. Realistic photographic lighting falls across the illustration: a large cloud shadow covers the crow, the woman's lower body and the ground, with a wide, naturally soft penumbra and a smooth gradient falloff. Inside the shadow, colors look deeper and cooler through translucent darkening, and the ink lines and marker colors remain clearly visible. The sunlit areas glow with clean, bright daylight and a subtle warm bloom.",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "moss_image_sft_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "qwen3.5_9b_int8_convrot.safetensors",
+      "type": "moss_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.75"
+    }
+  },
+  "60": {
+    "inputs": {
+      "aspect_ratio": "3:4 (Portrait Standard)",
+      "megapixels": 2,
+      "multiple": 16
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector",
+      "cnr_id": "comfy-core",
+      "ver": "0.25.0"
+    }
+  },
+  "74": {
+    "inputs": {
+      "width": [
+        "60",
+        0
+      ],
+      "height": [
+        "60",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Flux 2 Latent",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "93": {
+    "inputs": {
+      "double_layers": "",
+      "single_layers": "22",
+      "start_percent": 0,
+      "end_percent": 0.5,
+      "model": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "SkipLayerGuidanceDiTSimple",
+    "_meta": {
+      "title": "SkipLayerGuidanceDiTSimple",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "94": {
+    "inputs": {
+      "text": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact, photorealistic, 3d render, clouds, wall, vertical shadow, dappled shade, tree shadow, leaf shadows, gray background, extra limbs",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.33"
+    }
+  }
+}

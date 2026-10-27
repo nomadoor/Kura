@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/moss-image/moss_image_text2image.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-17);
+  API form exported with the ComfyUI frontend.
+models:
+  diffusion_models:
+    moss_image_sft_int8_convrot.safetensors:
+      repo: Comfy-Org/MOSS-Image
+      filename: diffusion_models/moss_image_sft_int8_convrot.safetensors
+      revision: 530a4c94f92c35ef6818b1b035a983fe9dcf5f54
+  clip:
+    qwen3.5_9b_int8_convrot.safetensors:
+      repo: Comfy-Org/MOSS-Image
+      filename: text_encoders/qwen3.5_9b_int8_convrot.safetensors
+      revision: 530a4c94f92c35ef6818b1b035a983fe9dcf5f54
+      target_dir: text_encoders
+  vae:
+    flux2-vae.safetensors:
+      repo: Comfy-Org/MOSS-Image
+      filename: vae/flux2-vae.safetensors
+      revision: 530a4c94f92c35ef6818b1b035a983fe9dcf5f54
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

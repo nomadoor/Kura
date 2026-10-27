@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/anima/anima_aesthetic_v1_1.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-06);
+  API form exported with the ComfyUI frontend.
+models:
+  diffusion_models:
+    anima-aesthetic-v1.1.safetensors:
+      repo: circlestone-labs/Anima
+      filename: split_files/diffusion_models/anima-aesthetic-v1.1.safetensors
+      revision: f973fc41ec7545364ac9776c2440285f43ff2a30
+  clip:
+    qwen_3_06b_base.safetensors:
+      repo: circlestone-labs/Anima
+      filename: split_files/text_encoders/qwen_3_06b_base.safetensors
+      revision: f973fc41ec7545364ac9776c2440285f43ff2a30
+      target_dir: text_encoders
+  vae:
+    qwen_image_vae.safetensors:
+      repo: circlestone-labs/Anima
+      filename: split_files/vae/qwen_image_vae.safetensors
+      revision: f973fc41ec7545364ac9776c2440285f43ff2a30
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

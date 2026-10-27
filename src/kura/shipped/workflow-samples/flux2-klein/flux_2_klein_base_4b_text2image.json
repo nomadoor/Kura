@@ -1,0 +1,622 @@
+{
+  "id": "19daa024-8130-4a6b-9c8b-441973165403",
+  "revision": 0,
+  "last_node_id": 61,
+  "last_link_id": 79,
+  "nodes": [
+    {
+      "id": 43,
+      "type": "VAELoader",
+      "pos": [
+        1047.3380000000002,
+        38.36985892893637
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            71
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39",
+        "models": [
+          {
+            "name": "flux2-vae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/vae/flux2-vae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "flux2-vae.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "flux2-vae.safetensors"
+      },
+      "color": "#322",
+      "bgcolor": "#533"
+    },
+    {
+      "id": 44,
+      "type": "CLIPLoader",
+      "pos": [
+        258.58970120516676,
+        160.40068341159756
+      ],
+      "size": [
+        283.80000000000007,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            63,
+            78
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.73",
+        "models": [
+          {
+            "name": "qwen_3_4b.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen_3_4b.safetensors",
+        "flux2",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen_3_4b.safetensors",
+        "type": "flux2",
+        "device": "default"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 45,
+      "type": "SaveImage",
+      "pos": [
+        1641.9153347143283,
+        160.40068341159756
+      ],
+      "size": [
+        398.18249999999966,
+        542.19775
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 72
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.73"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "ComfyUI"
+      }
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [
+        583.9650317382822,
+        160.40068341159756
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 63
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            68
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39"
+      },
+      "widgets_values": [
+        "Humpback whale underwater, shot from below with an ultra wide-angle lens. Sun rays and caustics from the surface, blue water haze, floating particles, high detail, photoreal underwater wildlife photo."
+      ],
+      "widgets_values_named": {
+        "text": "Humpback whale underwater, shot from below with an ultra wide-angle lens. Sun rays and caustics from the surface, blue water haze, floating particles, high detail, photoreal underwater wildlife photo."
+      }
+    },
+    {
+      "id": 48,
+      "type": "UNETLoader",
+      "pos": [
+        680,
+        10
+      ],
+      "size": [
+        301,
+        82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            69
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "cnr_id": "comfy-core",
+        "models": [
+          {
+            "name": "flux-2-klein-base-4b.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/diffusion_models/flux-2-klein-base-4b.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "flux-2-klein-base-4b.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "flux-2-klein-base-4b.safetensors",
+        "weight_dtype": "default"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 31,
+      "type": "KSampler",
+      "pos": [
+        1047.3380000000002,
+        160.40068341159756
+      ],
+      "size": [
+        270,
+        262
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 69
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 68
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 79
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 67
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            70
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39"
+      },
+      "widgets_values": [
+        1234,
+        "fixed",
+        20,
+        5,
+        "euler",
+        "simple",
+        1
+      ],
+      "widgets_values_named": {
+        "seed": 1234,
+        "control_after_generate": "fixed",
+        "steps": 20,
+        "cfg": 5,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 1
+      }
+    },
+    {
+      "id": 47,
+      "type": "EmptyFlux2LatentImage",
+      "pos": [
+        739.3460928823939,
+        615.4020191239679
+      ],
+      "size": [
+        244.61893885588825,
+        106
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 75
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 76
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            67
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptyFlux2LatentImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.7.0"
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ],
+      "widgets_values_named": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    {
+      "id": 53,
+      "type": "VAEDecode",
+      "pos": [
+        1367.1266673571643,
+        160.40068341159756
+      ],
+      "size": [
+        225,
+        46
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 70
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 71
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            72
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "VAEDecode"
+      }
+    },
+    {
+      "id": 54,
+      "type": "MarkdownNote",
+      "pos": [
+        -180,
+        10
+      ],
+      "size": [
+        386.24331439218804,
+        415.71093639711034
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## models\n\n- diffusion_models\n  - [flux-2-klein-base-4b.safetensors](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/blob/main/split_files/diffusion_models/flux-2-klein-base-4b.safetensors) (7.75 GB)\n- text_encoders\n  - [qwen_3_4b.safetensors](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/blob/main/split_files/text_encoders/qwen_3_4b.safetensors) (8.04 GB)\n- vae\n  - [flux2-vae.safetensors](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/blob/main/split_files/vae/flux2-vae.safetensors) (336 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── flux-2-klein-base-4b.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen_3_4b.safetensors\n    └── 📂vae/\n        └── flux2-vae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/flux-2-klein/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/flux-2-klein/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/flux-2-klein/)"
+      ],
+      "widgets_values_named": {
+        "text": "## models\n\n- diffusion_models\n  - [flux-2-klein-base-4b.safetensors](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/blob/main/split_files/diffusion_models/flux-2-klein-base-4b.safetensors) (7.75 GB)\n- text_encoders\n  - [qwen_3_4b.safetensors](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/blob/main/split_files/text_encoders/qwen_3_4b.safetensors) (8.04 GB)\n- vae\n  - [flux2-vae.safetensors](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/blob/main/split_files/vae/flux2-vae.safetensors) (336 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── flux-2-klein-base-4b.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen_3_4b.safetensors\n    └── 📂vae/\n        └── flux2-vae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/flux-2-klein/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/flux-2-klein/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/flux-2-klein/)"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 57,
+      "type": "ResolutionSelector",
+      "pos": [
+        428.7818433086756,
+        637.8857005493178
+      ],
+      "size": [
+        270,
+        150
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            75
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            76
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "ResolutionSelector"
+      },
+      "widgets_values": [
+        "3:4 (Portrait Standard)",
+        2,
+        16
+      ],
+      "widgets_values_named": {
+        "aspect_ratio": "3:4 (Portrait Standard)",
+        "megapixels": 2,
+        "multiple": 16
+      }
+    },
+    {
+      "id": 59,
+      "type": "CLIPTextEncode",
+      "pos": [
+        583.9650317382822,
+        424.70686306010373
+      ],
+      "size": [
+        400,
+        131.25
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 78
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            79
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39"
+      },
+      "widgets_values": [
+        "text, worst quality, blurry, ugly"
+      ],
+      "widgets_values_named": {
+        "text": "text, worst quality, blurry, ugly"
+      }
+    }
+  ],
+  "links": [
+    [
+      63,
+      44,
+      0,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      67,
+      47,
+      0,
+      31,
+      3,
+      "LATENT"
+    ],
+    [
+      68,
+      6,
+      0,
+      31,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      69,
+      48,
+      0,
+      31,
+      0,
+      "MODEL"
+    ],
+    [
+      70,
+      31,
+      0,
+      53,
+      0,
+      "LATENT"
+    ],
+    [
+      71,
+      43,
+      0,
+      53,
+      1,
+      "VAE"
+    ],
+    [
+      72,
+      53,
+      0,
+      45,
+      0,
+      "IMAGE"
+    ],
+    [
+      75,
+      57,
+      0,
+      47,
+      0,
+      "INT"
+    ],
+    [
+      76,
+      57,
+      1,
+      47,
+      1,
+      "INT"
+    ],
+    [
+      78,
+      44,
+      0,
+      59,
+      0,
+      "CLIP"
+    ],
+    [
+      79,
+      59,
+      0,
+      31,
+      2,
+      "CONDITIONING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 1,
+      "offset": [
+        402.1677828523574,
+        501.3747434606406
+      ]
+    },
+    "frontendVersion": "1.55.17",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

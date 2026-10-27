@@ -11,16 +11,17 @@ writes and refreshes `workflows/samples/`; copy a sample elsewhere under
   accepted by `/prompt`.
 - **Core ComfyUI nodes only** (no custom nodes), so they run on the base Kura
   ComfyUI image and do not rot when custom nodes change.
-- File name is self-describing: `<family>/<family>_<task>_api.json`
-  (e.g. `krea2/Krea_2_turbo_text2image_api.json`). A matching UI workflow
-  without `_api` may sit next to it for human editing/notes, but Kura renders
-  the API workflow.
+- File name is self-describing: `<family>/<name>_api.json`, where a sample
+  from the maintainer's site keeps the site's name (e.g.
+  `krea2/krea_2_turbo_text2image_api.json`). The UI workflow `<name>.json`
+  sits next to it for human editing and notes, but Kura renders the API
+  workflow.
 - Each workflow ships a **metadata sidecar** with the same stem plus
   `.kura.yaml`, telling Kura which models are safe to resolve on RunPod and,
   when possible, where an optional LoRA loader can be inserted:
 
   ```yaml
-  # krea2/Krea_2_turbo_text2image_api.kura.yaml
+  # krea2/krea_2_turbo_text2image_api.kura.yaml
   models:
     diffusion_models:
       krea2_turbo_fp8_scaled.safetensors:
@@ -47,10 +48,21 @@ writes and refreshes `workflows/samples/`; copy a sample elsewhere under
   ship them as ready-to-smoke until the required sample inputs are present or
   Kura has an explicit staging path for them.
 
+## Where samples come from
+
+Samples are taken from Comfy with ComfyUI, the maintainer's site, when it has a
+core-node workflow for the family and task: its UI form as published, the API
+form exported from ComfyUI's own frontend, and a sidecar built from the site's
+model list with each Hugging Face repo pinned to a commit. The sidecar's
+`source` names the site page. Kura never reads the site when it runs. The
+maintainer runs every workflow before publishing it on the site, so a sample
+taken from there counts as rendered.
+
 ## Maintenance
 
 - Pin to the ComfyUI ref used by the Kura ComfyUI image (`COMFYUI_REF`).
 - Re-smoke every sample when bumping that ref. Ship only `(family × task)`
-  combinations that have actually rendered at least once.
+  combinations that have actually rendered at least once (a sample from the
+  maintainer's site has, when it was published).
 
 Start small (high-demand families first) and add more slowly.

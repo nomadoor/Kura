@@ -1,0 +1,674 @@
+{
+  "id": "19daa024-8130-4a6b-9c8b-441973165403",
+  "revision": 0,
+  "last_node_id": 63,
+  "last_link_id": 84,
+  "nodes": [
+    {
+      "id": 43,
+      "type": "VAELoader",
+      "pos": [
+        1047.3380000000002,
+        38.36985892893637
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            71
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39",
+        "models": [
+          {
+            "name": "ae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/vae/ae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "ae.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "ae.safetensors"
+      },
+      "color": "#322",
+      "bgcolor": "#533"
+    },
+    {
+      "id": 44,
+      "type": "CLIPLoader",
+      "pos": [
+        258.58970120516676,
+        160.40068341159756
+      ],
+      "size": [
+        283.80000000000007,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            63,
+            78
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.73",
+        "models": [
+          {
+            "name": "qwen_3_4b_fp8_mixed.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen_3_4b_fp8_mixed.safetensors",
+        "lumina2",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen_3_4b_fp8_mixed.safetensors",
+        "type": "lumina2",
+        "device": "default"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 45,
+      "type": "SaveImage",
+      "pos": [
+        1641.9153347143283,
+        160.40068341159756
+      ],
+      "size": [
+        398.18249999999966,
+        542.19775
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 72
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.73"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "ComfyUI"
+      }
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [
+        583.9650317382822,
+        160.40068341159756
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 63
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            68
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39"
+      },
+      "widgets_values": [
+        "A lone figure walking through dense morning fog in a pine forest, backlight piercing through trees, visible volumetric light beams, soft haze layering, atmospheric perspective. High dynamic range but gentle roll-off in highlights, rich shadow detail, filmic color grading. 35mm lens, slight handheld feel, cinematic realism"
+      ],
+      "widgets_values_named": {
+        "text": "A lone figure walking through dense morning fog in a pine forest, backlight piercing through trees, visible volumetric light beams, soft haze layering, atmospheric perspective. High dynamic range but gentle roll-off in highlights, rich shadow detail, filmic color grading. 35mm lens, slight handheld feel, cinematic realism"
+      }
+    },
+    {
+      "id": 48,
+      "type": "UNETLoader",
+      "pos": [
+        404.4661628924998,
+        14.369858928936367
+      ],
+      "size": [
+        301,
+        82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            80
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "cnr_id": "comfy-core",
+        "models": [
+          {
+            "name": "z_image_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/diffusion_models/z_image_int8_convrot.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "z_image_int8_convrot.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "z_image_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 31,
+      "type": "KSampler",
+      "pos": [
+        1047.3380000000002,
+        160.40068341159756
+      ],
+      "size": [
+        270,
+        262
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 81
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 68
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 79
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 84
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            70
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39"
+      },
+      "widgets_values": [
+        1234,
+        "fixed",
+        30,
+        4,
+        "euler",
+        "simple",
+        1
+      ],
+      "widgets_values_named": {
+        "seed": 1234,
+        "control_after_generate": "fixed",
+        "steps": 30,
+        "cfg": 4,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 1
+      }
+    },
+    {
+      "id": 53,
+      "type": "VAEDecode",
+      "pos": [
+        1367.1266673571643,
+        160.40068341159756
+      ],
+      "size": [
+        225,
+        46
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 70
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 71
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            72
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "VAEDecode"
+      }
+    },
+    {
+      "id": 54,
+      "type": "MarkdownNote",
+      "pos": [
+        -180,
+        10
+      ],
+      "size": [
+        386.24331439218804,
+        415.71093639711034
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## models\n\n- diffusion_models\n  - [z_image_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/diffusion_models/z_image_int8_convrot.safetensors) (6.20 GB)\n- text_encoders\n  - [qwen_3_4b_fp8_mixed.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors) (5.63 GB)\n- vae\n  - [ae.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/vae/ae.safetensors) (335 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── z_image_int8_convrot.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen_3_4b_fp8_mixed.safetensors\n    └── 📂vae/\n        └── ae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/z-image/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/z-image/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/z-image/)"
+      ],
+      "widgets_values_named": {
+        "text": "## models\n\n- diffusion_models\n  - [z_image_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/diffusion_models/z_image_int8_convrot.safetensors) (6.20 GB)\n- text_encoders\n  - [qwen_3_4b_fp8_mixed.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors) (5.63 GB)\n- vae\n  - [ae.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/vae/ae.safetensors) (335 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── z_image_int8_convrot.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen_3_4b_fp8_mixed.safetensors\n    └── 📂vae/\n        └── ae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/z-image/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/z-image/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/z-image/)"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 57,
+      "type": "ResolutionSelector",
+      "pos": [
+        428.7818433086756,
+        637.8857005493178
+      ],
+      "size": [
+        270,
+        150
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            82
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            83
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "ResolutionSelector"
+      },
+      "widgets_values": [
+        "3:4 (Portrait Standard)",
+        2,
+        16
+      ],
+      "widgets_values_named": {
+        "aspect_ratio": "3:4 (Portrait Standard)",
+        "megapixels": 2,
+        "multiple": 16
+      }
+    },
+    {
+      "id": 59,
+      "type": "CLIPTextEncode",
+      "pos": [
+        583.9650317382822,
+        424.70686306010373
+      ],
+      "size": [
+        400,
+        131.25
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 78
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            79
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39"
+      },
+      "widgets_values": [
+        "bad quality, oversaturated, visual artifacts, bad anatomy, deformed hands, facial distortion"
+      ],
+      "widgets_values_named": {
+        "text": "bad quality, oversaturated, visual artifacts, bad anatomy, deformed hands, facial distortion"
+      }
+    },
+    {
+      "id": 62,
+      "type": "ModelSamplingAuraFlow",
+      "pos": [
+        738.1385823046479,
+        14.369858928936367
+      ],
+      "size": [
+        245.82644943363425,
+        82
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 80
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            81
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ModelSamplingAuraFlow",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49"
+      },
+      "widgets_values": [
+        3.1,
+        "flow"
+      ],
+      "widgets_values_named": {
+        "shift": 3.1,
+        "sampling": "flow"
+      }
+    },
+    {
+      "id": 63,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        739.3460928823939,
+        614.3630266767397
+      ],
+      "size": [
+        244.61893885588825,
+        106
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 82
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 83
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            84
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49"
+      },
+      "widgets_values": [
+        1104,
+        1472,
+        1
+      ],
+      "widgets_values_named": {
+        "width": 1104,
+        "height": 1472,
+        "batch_size": 1
+      }
+    }
+  ],
+  "links": [
+    [
+      63,
+      44,
+      0,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      68,
+      6,
+      0,
+      31,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      70,
+      31,
+      0,
+      53,
+      0,
+      "LATENT"
+    ],
+    [
+      71,
+      43,
+      0,
+      53,
+      1,
+      "VAE"
+    ],
+    [
+      72,
+      53,
+      0,
+      45,
+      0,
+      "IMAGE"
+    ],
+    [
+      78,
+      44,
+      0,
+      59,
+      0,
+      "CLIP"
+    ],
+    [
+      79,
+      59,
+      0,
+      31,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      80,
+      48,
+      0,
+      62,
+      0,
+      "MODEL"
+    ],
+    [
+      81,
+      62,
+      0,
+      31,
+      0,
+      "MODEL"
+    ],
+    [
+      82,
+      57,
+      0,
+      63,
+      0,
+      "INT"
+    ],
+    [
+      83,
+      57,
+      1,
+      63,
+      1,
+      "INT"
+    ],
+    [
+      84,
+      63,
+      0,
+      31,
+      3,
+      "LATENT"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 1.015255979947706,
+      "offset": [
+        385.3808097119224,
+        363.30093422372505
+      ]
+    },
+    "frontendVersion": "1.55.17",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

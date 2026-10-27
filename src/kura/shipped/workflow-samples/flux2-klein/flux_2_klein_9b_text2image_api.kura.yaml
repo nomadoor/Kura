@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/flux-2-klein/9b/flux_2_klein_9b_text2image.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-20);
+  API form exported with the ComfyUI frontend.
+models:
+  vae:
+    flux2-vae.safetensors:
+      repo: Comfy-Org/vae-text-encorder-for-flux-klein-9b
+      filename: split_files/vae/flux2-vae.safetensors
+      revision: 3f62d9d8ae1fec33c6e91453d5c712855b096b55
+  clip:
+    qwen_3_8b.safetensors:
+      repo: Comfy-Org/vae-text-encorder-for-flux-klein-9b
+      filename: split_files/text_encoders/qwen_3_8b.safetensors
+      revision: 3f62d9d8ae1fec33c6e91453d5c712855b096b55
+      target_dir: text_encoders
+  diffusion_models:
+    flux-2-klein-9b-fp8.safetensors:
+      repo: black-forest-labs/FLUX.2-klein-9b-fp8
+      filename: flux-2-klein-9b-fp8.safetensors
+      revision: 902d9d510b51533e07729f19211414a3648b77d2
+lora_insert:
+  kind: model_only
+  model_node: '48'
+  strength_model: 0.8

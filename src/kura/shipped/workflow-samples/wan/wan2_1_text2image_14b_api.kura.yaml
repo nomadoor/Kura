@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/wan-2-1/wan2_1_text2image_14b.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2025-12-13);
+  API form exported with the ComfyUI frontend.
+models:
+  diffusion_models:
+    wan2.1_t2v_14B_fp8_e4m3fn.safetensors:
+      repo: Comfy-Org/Wan_2.1_ComfyUI_repackaged
+      filename: split_files/diffusion_models/wan2.1_t2v_14B_fp8_e4m3fn.safetensors
+      revision: 123acf1cc74bccbb9bfff8ac1ee72edc08c2341d
+  clip:
+    umt5_xxl_fp8_e4m3fn_scaled.safetensors:
+      repo: Comfy-Org/Wan_2.1_ComfyUI_repackaged
+      filename: split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+      revision: 123acf1cc74bccbb9bfff8ac1ee72edc08c2341d
+      target_dir: text_encoders
+  vae:
+    wan_2.1_vae.safetensors:
+      repo: Comfy-Org/Wan_2.1_ComfyUI_repackaged
+      filename: split_files/vae/wan_2.1_vae.safetensors
+      revision: 123acf1cc74bccbb9bfff8ac1ee72edc08c2341d
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

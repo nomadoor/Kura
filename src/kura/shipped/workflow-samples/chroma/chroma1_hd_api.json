@@ -1,0 +1,162 @@
+{
+  "8": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "41",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.30"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 777,
+      "steps": 26,
+      "cfg": 6,
+      "sampler_name": "euler",
+      "scheduler": "beta",
+      "denoise": 1,
+      "model": [
+        "55",
+        0
+      ],
+      "positive": [
+        "43",
+        0
+      ],
+      "negative": [
+        "45",
+        0
+      ],
+      "latent_image": [
+        "49",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.30"
+    }
+  },
+  "41": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.30"
+    }
+  },
+  "42": {
+    "inputs": {
+      "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+      "type": "chroma",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.31"
+    }
+  },
+  "43": {
+    "inputs": {
+      "text": "A stylish young lady with short, wavy white hair, rendered in a stylish anime or manga art style.textile shading. She has piercing, light-colored eyes with sharp eyelashes, and a confident, slightly seductive gaze looking directly at the viewer. His lips are slightly parted. He is wearing a dark, sleeveless top. His left hand is raised to his face, fingers elegantly posed, with long, black painted nails and a gold ring on his index finger. He appears to be holding a cigarette near his lips, with smoke subtly depicted.",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.31"
+    }
+  },
+  "44": {
+    "inputs": {
+      "min_padding": 1,
+      "min_length": 0,
+      "clip": [
+        "42",
+        0
+      ]
+    },
+    "class_type": "T5TokenizerOptions",
+    "_meta": {
+      "title": "T5 Tokenizer Options",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.31"
+    }
+  },
+  "45": {
+    "inputs": {
+      "text": "low quality, bad anatomy, extra digits, missing digits, extra limbs, missing limbs",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.31"
+    }
+  },
+  "49": {
+    "inputs": {
+      "width": 1152,
+      "height": 1152,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "EmptySD3LatentImage",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "55": {
+    "inputs": {
+      "unet_name": "Chroma1-HD.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.56"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.56"
+    }
+  }
+}
