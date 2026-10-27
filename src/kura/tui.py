@@ -28,6 +28,7 @@ from textual.widgets import Static
 
 from kura.dataset_manifest import CAPTION_SUFFIXES
 from kura.executors.common import STARTING_STATES, UNSUCCESSFUL_STATES
+from kura.run_results import train_run_results
 from kura.monitor import DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline, step_fraction
 
 
@@ -1427,6 +1428,14 @@ def _path_targets(summary: RunSummary | None) -> list[PathTarget]:
     for dataset in summary.datasets:
         if dataset.path:
             targets.append(PathTarget(f"dataset {dataset.role or dataset.id or ''}", dataset.path))
+    results = train_run_results(summary.run_dir) if summary.run_dir else None
+    if results:
+        workspace = summary.run_dir.parent.parent
+        if results["comparisons"]:
+            targets.append(PathTarget("comparisons", workspace / results["comparisons"]))
+        for render in results["renders"]:
+            images = workspace / render["images"]
+            targets.append(PathTarget(f"render {render['id']}", images, images.is_dir() and any(images.iterdir())))
     return targets
 
 

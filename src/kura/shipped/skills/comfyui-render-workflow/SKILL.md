@@ -46,8 +46,9 @@ only from existing local images, using already-installed tools and without
 downloading assets or models. Save a new artifact under a related run, never
 overwrite an existing image, and record the input image paths in that run's
 `notes.md`. When all compared checkpoints belong to one training run, save
-under that training run; otherwise save under the lexicographically latest
-compared render run. This does not authorize new image generation, dependency
+in that training run's `comparisons/` folder, where `kura run status` and the
+monitor list it beside the run's renders; otherwise save under the
+lexicographically latest compared render run. This does not authorize new image generation, dependency
 installation, external acquisition, or any run-state change.
 
 ## Execution workflow

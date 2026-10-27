@@ -33,6 +33,7 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _path_size_bytes, _root_owned_files, stopped_kura_containers, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
+from kura.run_results import train_run_results
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
@@ -807,6 +808,8 @@ def cmd_run_status(args: argparse.Namespace) -> int:
 
         if cost := pod_gpu_cost(latest_realization, status):
             summary["pod_gpu_cost"] = format_pod_gpu_cost(cost)
+        if (results := train_run_results(run_dir)) is not None:
+            summary.update(results)
         if len(outputs) > STATUS_SUMMARY_OUTPUTS:
             summary["outputs_shown"] = f"{STATUS_SUMMARY_OUTPUTS} of {len(outputs)}; every output is listed under outputs below"
         # The summary leads so a reader that stops early has read what matters.

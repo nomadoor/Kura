@@ -13,6 +13,7 @@ from kura.training_artifacts import checkpoint_files, checkpoint_step, displayed
 from kura.yamlio import YAMLError, load_run_yaml
 from kura.executors.common import format_launch_phases, format_seconds, launch_phases
 from kura.run_envelope import run_executor
+from kura.run_results import render_runs_by_training_run
 
 
 _FACT_ORDER = (
@@ -141,19 +142,10 @@ def _changed_from(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _completed_render_counts(runs_root: Path) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for run_path in runs_root.glob("*/run.yaml"):
-        run = _load_mapping(run_path)
-        if not run or run.get("type") != "render":
-            continue
-        inputs = run.get("inputs") if isinstance(run.get("inputs"), dict) else {}
-        train_run = inputs.get("train_run")
-        if not isinstance(train_run, str) or not train_run:
-            continue
-        if _read_state(run_path.parent) != "completed":
-            continue
-        counts[train_run] = counts.get(train_run, 0) + 1
-    return counts
+    return {
+        train_run: sum(1 for render in renders if render["state"] == "completed")
+        for train_run, renders in render_runs_by_training_run(runs_root).items()
+    }
 
 
 def experiment_context(workspace: Path, run_id: str, run: dict[str, Any] | None = None) -> dict[str, Any] | None:
