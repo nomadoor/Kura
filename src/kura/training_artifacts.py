@@ -699,8 +699,8 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     `keep_last` step saves and the final file); sd-scripts removes the save that left the
     `retention_window_steps` window after writing each save, so it keeps `window // every + 1`
     and holds one more (at the end, the final file). Musubi Tuner's `prune_before_step` runs
-    after training, and AI-Toolkit's unset `keep_last` default is not copied here, so both
-    count every save. The positive-value rules are those of `expected_checkpoints`."""
+    after training, and an AI-Toolkit run compiled before Kura gave it `keep_last` 0 froze none,
+    so both count every save. The positive-value rules are those of `expected_checkpoints`."""
     span = resume_steps(run)
     if span is None:
         start, end = 0, trained_steps(run)

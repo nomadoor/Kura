@@ -1128,6 +1128,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                     self.assertEqual(process["save"], {"save_every": 1, "max_step_saves_to_keep": expected})
                     self.assertEqual(BACKENDS["ai-toolkit"].display(run)["checkpoint"]["keep_last"], expected)
+        # An explicit command owns its own config, so Kura records no retention for it.
+        command_run = {"id": "own-command", "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"]}}}}
+        self.assertIsNone(BACKENDS["ai-toolkit"].display(command_run)["checkpoint"]["keep_last"])
 
     def test_ai_toolkit_baseline_fills_only_unset_values(self) -> None:
         from kura.backends.ai_toolkit import ai_toolkit_baseline
