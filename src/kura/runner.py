@@ -16,7 +16,6 @@ import json
 import os
 import secrets as token
 import signal
-import statistics
 import subprocess
 import sys
 import time
@@ -25,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, request_confirmed_at, ATTENTION_EXIT_CODE, EXIT_CODE_FOR_STATE, QUIET_RUN_NOTICE_SEC, quiet_run_notice, run_quiet_since
+from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, request_confirmed_at, early_step_pace, ATTENTION_EXIT_CODE, EXIT_CODE_FOR_STATE, QUIET_RUN_NOTICE_SEC, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -1278,19 +1277,19 @@ EARLY_STEPS = range(2, 12)
 TRAINING_EXECUTORS = ("docker", "runpod")
 
 
-def _slowdown(status: dict[str, Any], early: dict[int, float]) -> tuple[float, float] | None:
+def _slowdown(run_dir: Path, status: dict[str, Any], early: dict[str, float]) -> tuple[float, float] | None:
     """(this step's seconds, the early median) when a running run's steps take SLOWDOWN_FACTOR
-    times its early pace; `early` gathers the early steps' paces as the follower sees them."""
+    times the pace its trainer printed for EARLY_STEPS (read once from its log into `early`)."""
     step, pace = status.get("last_step"), status.get("seconds_per_iter")
-    if status.get("state") != "running" or not isinstance(step, int) or not isinstance(pace, (int, float)) or pace <= 0:
+    if status.get("state") != "running" or not isinstance(step, int) or step < EARLY_STEPS.stop \
+            or not isinstance(pace, (int, float)) or pace <= 0:
         return None
-    if step in EARLY_STEPS:
-        early.setdefault(step, float(pace))
-        return None
-    if len(early) < len(EARLY_STEPS):
-        return None
-    base = statistics.median(early.values())
-    return (float(pace), base) if pace >= SLOWDOWN_FACTOR * base else None
+    if "base" not in early:
+        base = early_step_pace(run_dir, EARLY_STEPS)
+        if base is None:
+            return None
+        early["base"] = base
+    return (float(pace), early["base"]) if pace >= SLOWDOWN_FACTOR * early["base"] else None
 
 
 def _return_for_attention(run_dir: Path, reason: str, out: Any) -> int:
@@ -1321,7 +1320,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     out = out or sys.stderr
     started_at = started_at or datetime.now().astimezone()
     training = _request_executor(request) in TRAINING_EXECUTORS
-    early: dict[int, float] = {}
+    early: dict[str, float] = {}
     slow_since: float | None = None
     restarts = 0
     said_wait: str | None = None
@@ -1362,7 +1361,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
         if training and quiet:
             print(quiet, file=out)
             return _return_for_attention(run_dir, f"no new output for {QUIET_RUN_NOTICE_SEC // 60} minutes or more", out)
-        slow = _slowdown(status, early) if training else None
+        slow = _slowdown(run_dir, status, early) if training else None
         slow_since = (slow_since if slow_since is not None else clock()) if slow else None
         if slow and clock() - slow_since >= SLOWDOWN_SEC:
             pace, base = slow

@@ -81,14 +81,24 @@ class FollowOutputTests(unittest.TestCase):
             ], earlier="RuntimeError: from the previous attempt\n")
         self.assertNotIn("previous attempt", text)
 
-def _paced(seconds_per_step: list[float], *, end: dict | None = None) -> list[dict]:
-    """Running states at steps 1, 2, ... with the given seconds per step, then `end` if given."""
-    states = [{"state": "running", "last_step": step, "total_steps": 200, "seconds_per_iter": pace} for step, pace in enumerate(seconds_per_step, start=1)]
+def _paced(seconds_per_step: list[float], *, first_step: int = 30, end: dict | None = None) -> list[dict]:
+    """Running states from `first_step` on with the given seconds per step, then `end` if given."""
+    states = [{"state": "running", "last_step": step, "total_steps": 200, "seconds_per_iter": pace} for step, pace in enumerate(seconds_per_step, start=first_step)]
     return states + ([end] if end else [])
 
 
+def _early_log(paces: list[float]) -> str:
+    """Trainer output for steps 1, 2, ... at these paces, as AI-Toolkit's progress bar prints it (one record per \\r)."""
+    return "loading model\n" + "".join(f"\rely:   {step}/200 [00:{step:02d}<10:00, {pace:.2f}s/it, lr: 1.0e-04 loss: 5.0e-01]" for step, pace in enumerate(paces, start=1)) + "\n"
+
+
+# Step 1 (loading) is slow and left out; steps 2-11 take 1 s.
+EARLY = _early_log([30.0] + [1.0] * 10 + [1.0] * 5)
+
+
 class FollowAttentionTests(unittest.TestCase):
-    """Following a training run returns for attention when its steps suddenly take much longer."""
+    """Following a training run returns for attention when its steps suddenly take much longer than
+    the pace its trainer printed for steps 2-11, which the follower reads from the log."""
 
     def test_steps_five_times_slower_for_five_minutes_return_for_attention(self) -> None:
         from kura.executors.common import ATTENTION_EXIT_CODE
@@ -96,8 +106,8 @@ class FollowAttentionTests(unittest.TestCase):
         for executor in ("docker", "runpod"):
             with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
                 result: dict = {}
-                # Step 1 (loading) is slow and left out; steps 2-11 take 1 s; then 6 s per step.
-                text = _follow(Path(directory) / "runs" / "example", _paced([30.0] + [1.0] * 10 + [6.0] * 12), executor=executor, result=result)
+                # The follower starts at step 30 and never sees steps 2-11 itself.
+                text = _follow(Path(directory) / "runs" / "example", _paced([6.0] * 12), earlier=EARLY, executor=executor, result=result)
                 self.assertEqual(result["code"], ATTENTION_EXIT_CODE)
                 self.assertIn("6.00 s per step", text)
                 self.assertIn("6.0 times", text)
@@ -106,20 +116,39 @@ class FollowAttentionTests(unittest.TestCase):
     def test_a_short_or_milder_slowdown_keeps_following(self) -> None:
         completed = {"state": "completed", "publication_state": "not-required", "last_step": 200, "total_steps": 200}
         for name, paces in (
-            ("four times slower", [1.0] * 11 + [4.0] * 12),
-            ("slow for under five minutes", [1.0] * 11 + [6.0] * 8 + [1.0]),
+            ("four times slower", [4.0] * 12),
+            ("slow for under five minutes", [6.0] * 8 + [1.0]),
         ):
             with self.subTest(name), tempfile.TemporaryDirectory() as directory:
                 result: dict = {}
-                _follow(Path(directory) / "runs" / "example", _paced(paces, end=completed), result=result)
+                _follow(Path(directory) / "runs" / "example", _paced(paces, end=completed), earlier=EARLY, result=result)
                 self.assertEqual(result["code"], 0)
+
+    def test_without_the_early_steps_in_the_log_there_is_no_pace_to_compare(self) -> None:
+        completed = {"state": "completed", "publication_state": "not-required", "last_step": 200, "total_steps": 200}
+        with tempfile.TemporaryDirectory() as directory:
+            result: dict = {}
+            _follow(Path(directory) / "runs" / "example", _paced([9.0] * 12, end=completed), earlier=_early_log([30.0, 1.0, 1.0]), result=result)
+            self.assertEqual(result["code"], 0)
 
     def test_a_render_is_not_judged_by_its_pace(self) -> None:
         completed = {"state": "completed", "publication_state": "not-required"}
         with tempfile.TemporaryDirectory() as directory:
             result: dict = {}
-            _follow(Path(directory) / "runs" / "example", _paced([1.0] * 11 + [9.0] * 12, end=completed), executor="render-local", result=result)
+            _follow(Path(directory) / "runs" / "example", _paced([9.0] * 12, end=completed), earlier=EARLY, executor="render-local", result=result)
             self.assertEqual(result["code"], 0)
+
+    def test_the_early_pace_is_read_from_the_log_however_it_ends_its_records(self) -> None:
+        from kura.executors.common import early_step_pace
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / "logs").mkdir()
+            for log in (EARLY, EARLY.replace("\r", "\n")):
+                (run_dir / "logs" / "stdout.log").write_text(log, encoding="utf-8")
+                self.assertEqual(early_step_pace(run_dir, range(2, 12)), 1.0)
+            (run_dir / "logs" / "stdout.log").write_text(_early_log([30.0, 1.0]), encoding="utf-8")
+            self.assertIsNone(early_step_pace(run_dir, range(2, 12)))
 
 
 if __name__ == "__main__":

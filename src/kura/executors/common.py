@@ -8,10 +8,11 @@ import json
 import os
 import re
 import shlex
+import statistics
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from kura.secrets import is_secret_name, redact as _redact_secrets, redact_text as _redact_secret_text
 from kura.yamlio import YAMLError, load_yaml
@@ -834,6 +835,29 @@ def _read_text_tail(path: Path, *, max_bytes: int = 256 * 1024) -> str:
         return handle.read().decode("utf-8", errors="replace")
 
 
+def _progress_records(text: str) -> Iterator[tuple[int, int, float | None]]:
+    """(step, total, seconds per step or None) of each training progress record in trainer output."""
+    # Progress bars commonly rewrite one terminal line with carriage returns.
+    # Scan those records independently so a large tail cannot turn the
+    # non-greedy progress patterns into a quadratic search.
+    for line in re.split(r"[\r\n]+", text):
+        found: tuple[int, int] | None = None
+        for pattern in (AI_TOOLKIT_PROGRESS_RE, MUSUBI_PROGRESS_RE):
+            match = pattern.search(line)
+            if match:
+                found = (int(match.group("step")), int(match.group("total")))
+        if found is None:
+            # Model downloads and latent caching print their own speeds; only a training step's counts.
+            continue
+        seconds_per_iter: float | None = None
+        for match in ITERATION_SPEED_RE.finditer(line):
+            value = float(match.group("value"))
+            if value <= 0:
+                continue
+            seconds_per_iter = value if match.group("unit").lower() == "s/it" else 1 / value
+        yield found[0], found[1], seconds_per_iter
+
+
 def _stdout_progress(run_dir: Path, log: Path | None = None) -> tuple[int | None, int | None, float | None]:
     try:
         text = _read_text_tail(log or run_dir / "logs" / "stdout.log")
@@ -842,26 +866,34 @@ def _stdout_progress(run_dir: Path, log: Path | None = None) -> tuple[int | None
     step: int | None = None
     total: int | None = None
     seconds_per_iter: float | None = None
-    # Progress bars commonly rewrite one terminal line with carriage returns.
-    # Scan those records independently so a large tail cannot turn the
-    # non-greedy progress patterns into a quadratic search.
-    for line in re.split(r"[\r\n]+", text):
-        training_line = False
-        for pattern in (AI_TOOLKIT_PROGRESS_RE, MUSUBI_PROGRESS_RE):
-            match = pattern.search(line)
-            if match:
-                step = int(match.group("step"))
-                total = int(match.group("total"))
-                training_line = True
-        if not training_line:
-            # Model downloads and latent caching print their own speeds; only a training step's counts.
-            continue
-        for match in ITERATION_SPEED_RE.finditer(line):
-            value = float(match.group("value"))
-            if value <= 0:
-                continue
-            seconds_per_iter = value if match.group("unit").lower() == "s/it" else 1 / value
+    for step, total, pace in _progress_records(text):
+        seconds_per_iter = pace if pace is not None else seconds_per_iter
     return step, total, seconds_per_iter
+
+
+def early_step_pace(run_dir: Path, steps: range) -> float | None:
+    """The median seconds per step a training run's trainer printed for `steps`, read from the
+    start of its log; None until it has printed them all. Reads only as far as those steps."""
+    paces: dict[int, float] = {}
+    tail = ""
+    try:
+        with (run_dir / "logs" / "stdout.log").open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            while chunk := handle.read(1024 * 1024):
+                # Progress bars end records with \r as often as \n; a record may span two chunks.
+                buffer = tail + chunk
+                cut = max(buffer.rfind("\n"), buffer.rfind("\r"))
+                text, tail = (buffer[:cut], buffer[cut + 1:]) if cut >= 0 else ("", buffer)
+                for step, _, pace in _progress_records(text):
+                    if step in steps and pace is not None:
+                        paces[step] = pace
+                    elif step >= steps.stop and len(paces) == len(steps):
+                        return statistics.median(paces.values())
+    except OSError:
+        return None
+    for step, _, pace in _progress_records(tail):
+        if step in steps and pace is not None:
+            paces[step] = pace
+    return statistics.median(paces.values()) if len(paces) == len(steps) else None
 
 
 PROGRESS_FIELDS = ("last_step", "total_steps", "seconds_per_iter", "current_run_step", "current_run_total_steps")
