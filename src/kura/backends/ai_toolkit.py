@@ -1196,9 +1196,7 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         },
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
-            # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
-            "keep_last": native.get("save_last_n_steps"),
-            "unset_keep_last": "trainer_default",
+            "keep_last": _first_set(native.get("save_last_n_steps"), AI_TOOLKIT_KEEP_EVERY_SAVE),
         },
     }
 
@@ -1262,6 +1260,11 @@ def _ai_toolkit_frozen_native_blocks(
         )
     return native_datasets, views, wrapped
 
+
+# The max_step_saves_to_keep a run that sets no save_last_n_steps gets: 0 keeps every step save
+# (the pinned trainer slices [:-0]). Left unset, the trainer prunes to its own default count and
+# deletes the user's earlier checkpoints, which no other backend does.
+AI_TOOLKIT_KEEP_EVERY_SAVE = 0
 
 # The native process key each Kura-typed field writes, by section.
 _AI_TOOLKIT_TYPED_FIELDS = {
@@ -1552,7 +1555,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
                 "training_folder": f"/workspace/runs/{run['id']}/outputs",
                 "device": "cuda:0",
                 "network": {"type": "lora"},
-                "save": {},
+                "save": {"max_step_saves_to_keep": AI_TOOLKIT_KEEP_EVERY_SAVE},
                 "datasets": projected_datasets,
                 "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch")},

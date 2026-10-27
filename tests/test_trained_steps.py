@@ -186,7 +186,8 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
                 # Musubi prune threshold prunes nothing, and sd-scripts refuses 0.
                 self.assertEqual(owner({"save_every_n_steps": 50, key: 0}, 1000), 20)
                 self.assertEqual(owner({"save_every_n_steps": 50, key: None}, 1000), 20)
-        # A trainer that prunes by its own default when the run sets no keep-last says so.
+        # An AI-Toolkit run compiled before Kura gave it max_step_saves_to_keep 0 was pruned by the
+        # trainer's own default; its frozen display says so and still reads as no count.
         self.assertIsNone(owner({"save_every_n_steps": 50, "unset_keep_last": "trainer_default"}, 1000))
         self.assertIsNone(owner({"save_every_n_steps": 50, "keep_last": None, "unset_keep_last": "trainer_default"}, 1000))
         self.assertEqual(owner({"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"}, 1000), 20)
@@ -225,7 +226,7 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         run = ai_toolkit_run()
         run["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 0})
         checkpoint = plan._adapter_display(run)["checkpoint"]
-        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"})
+        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0})
         self.assertIn("about 20 checkpoints", plan._disk_warnings(run, checkpoint)[0])
         self.assertEqual([record["fact"] for record in plan._checkpoint_preflight_report(run)], ["checkpoint cadence implies about 20 step checkpoint(s), plus the final file"])
         # The disk peak adds the final file to the 20 step saves.
@@ -267,15 +268,14 @@ class CheckpointRetentionTests(unittest.TestCase):
         self.assertEqual(counts["write_count"], peak)
         self.assertEqual(counts["monitor_expected"], expected)
 
-    def test_ai_toolkit_with_no_keep_last_is_pruned_by_the_trainer_default(self) -> None:
-        # The pinned trainer keeps max_step_saves_to_keep (default 5) when the run sets none.
-        for config in ({"save_every_n_steps": 50},):
-            run = ai_toolkit_run()
-            run["backend"]["config"].update(config)
-            with self.subTest(config=config):
-                # Kura does not copy the trainer's default count: the peak is every save, which
-                # AI-Toolkit (with Kura's image patch) writes on steps 50..1000, plus its final file.
-                self._assert_pruned(run, 21)
+    def test_every_backend_keeps_every_step_save_when_the_run_sets_no_retention(self) -> None:
+        # AI-Toolkit's own default prunes to its last few saves; Kura gives it 0 so it keeps every
+        # save, as Musubi Tuner and sd-scripts do: steps 50..1000 are 20 kept, plus the final file.
+        for build in (ai_toolkit_run, musubi_run, sd_scripts_run):
+            run = build()
+            run["backend"]["config"].update({"save_every_n_steps": 50})
+            with self.subTest(backend=run["backend"]["name"]):
+                self._assert_counted(run, 20, 21)
 
     def test_ai_toolkit_keep_last_zero_keeps_every_save(self) -> None:
         for config in (

@@ -215,8 +215,8 @@ root-owned files; it changes ownership and deletes nothing.
   Checkpoints are counted at the cadence the trainer is given, the final file
   included: retention that prunes during training (AI-Toolkit and sd-scripts
   `save_last_n_steps`) bounds them near the kept count, while Musubi Tuner's
-  `prune_checkpoints_before_step` runs only after training and AI-Toolkit's
-  unset default is not assumed, so those count every save. With
+  `prune_checkpoints_before_step` runs only after training, so it counts every
+  save. A run that sets no retention keeps every save on every backend. With
   `save_every_n_steps` unset, sd-scripts writes only its final file, Musubi
   Tuner saves once at the recipe's steps besides its final file, and
   AI-Toolkit saves at its own default, which Kura does not know: only its final

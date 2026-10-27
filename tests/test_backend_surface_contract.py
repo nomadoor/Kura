@@ -1107,6 +1107,28 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
                 })
 
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_keeps_every_step_save_unless_the_run_sets_a_retention(self) -> None:
+        """The pinned trainer prunes to its own max_step_saves_to_keep when none is given; Kura gives 0 (keep every save)."""
+        for executor in ("docker", "runpod"):
+            for authored, expected in ((None, 0), (0, 0), (3, 3)):
+                config = {"model_arch": "sdxl", "save_every_n_steps": 1}
+                if authored is not None:
+                    config["save_last_n_steps"] = authored
+                with self.subTest(executor=executor, save_last_n_steps=authored), tempfile.TemporaryDirectory() as directory:
+                    run = {
+                        "id": f"retention-{executor}", "backend": {"name": "ai-toolkit", "config": config},
+                        "model": {"base": "stabilityai/stable-diffusion-xl-base-1.0"},
+                        "datasets": [{"id": "flux2-klein-tiny"}],
+                        "recipe": {"steps": 1, "seed": 1}, "compute": {"executor": executor},
+                    }
+                    destination = Path(directory) / "ai-toolkit"
+                    self._write_ai_toolkit_projection(run, destination)
+                    BACKENDS["ai-toolkit"].compile(run, destination)
+                    process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+                    self.assertEqual(process["save"], {"save_every": 1, "max_step_saves_to_keep": expected})
+                    self.assertEqual(BACKENDS["ai-toolkit"].display(run)["checkpoint"]["keep_last"], expected)
+
     def test_ai_toolkit_baseline_fills_only_unset_values(self) -> None:
         from kura.backends.ai_toolkit import ai_toolkit_baseline
 
