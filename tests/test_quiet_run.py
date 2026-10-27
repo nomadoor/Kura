@@ -9,6 +9,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -95,34 +96,63 @@ class QuietRunTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": ""}), encoding="utf-8")
             self.assertIn("quiet", _status_summary(run_dir))
 
-    def test_following_says_once_that_the_run_has_gone_quiet(self) -> None:
+    def _follow(self, directory: str, executor: str, *, quiet_sec: float, followed_sec: float) -> tuple[int, str, dict]:
+        """Follow a run whose output is `quiet_sec` old, as a follower that started `followed_sec`
+        ago; the run fails on the third poll unless following ends first."""
         from kura import runner
         from kura.fsio import file_lock
 
+        run_dir = _running(directory, quiet_sec=quiet_sec)
+        root = run_dir.parent.parent
+        request = runner.write_launch_request(run_dir, executor=executor)
+        runner.claim_request(request, 1)
+        launch = run_dir / "realizations" / "r1.json"
+
+        def launched(**status) -> None:
+            launch.write_text(json.dumps({"controlled_by": {"request": request.name, "epoch": 1}}), encoding="utf-8")
+            _age(launch, 30 * 60)
+            (run_dir / "status.json").write_text(json.dumps({"last_realization": "realizations/r1.json", **status}), encoding="utf-8")
+
+        launched(state="running")
+        polls = {"n": 0}
+
+        def sleep(_) -> None:
+            polls["n"] += 1
+            if polls["n"] == 3:
+                launched(state="failed", publication_state="not-required")
+
+        out = io.StringIO()
+        started = datetime.now().astimezone() - timedelta(seconds=followed_sec)
+        with file_lock(root / ".kura" / "runner" / "runner.lock", blocking=False):
+            code = runner.follow(root, run_dir, request, sleep=sleep, out=out, started_at=started)
+        return code, out.getvalue(), json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+
+    def test_following_a_render_says_once_that_it_has_gone_quiet(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            run_dir = _running(directory, quiet_sec=20 * 60)
-            root = run_dir.parent.parent
-            request = runner.write_launch_request(run_dir, executor="docker")
-            runner.claim_request(request, 1)
-            launch = run_dir / "realizations" / "r1.json"
+            code, text, _ = self._follow(directory, "render-local", quiet_sec=20 * 60, followed_sec=0)
+        self.assertEqual(text.count("may be hung"), 1)
+        self.assertEqual(code, 1)
 
-            def launched(**status) -> None:
-                launch.write_text(json.dumps({"controlled_by": {"request": request.name, "epoch": 1}}), encoding="utf-8")
-                _age(launch, 30 * 60)
-                (run_dir / "status.json").write_text(json.dumps({"last_realization": "realizations/r1.json", **status}), encoding="utf-8")
+    def test_following_a_quiet_training_run_returns_for_attention_and_leaves_it_running(self) -> None:
+        from kura.executors.common import ATTENTION_EXIT_CODE
 
-            launched(state="running")
-            polls = {"n": 0}
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
+                code, text, status = self._follow(directory, executor, quiet_sec=20 * 60, followed_sec=20 * 60)
+                self.assertEqual(code, ATTENTION_EXIT_CODE)
+                self.assertIn("no new output for 20 minutes", text)
+                self.assertIn("kura run stop example", text)
+                self.assertIn("kura run execute example", text)
+                self.assertEqual(status["state"], "running")
 
-            def sleep(_) -> None:
-                polls["n"] += 1
-                if polls["n"] == 3:
-                    launched(state="failed", publication_state="not-required")
-
-            out = io.StringIO()
-            with file_lock(root / ".kura" / "runner" / "runner.lock", blocking=False):
-                runner.follow(root, run_dir, request, sleep=sleep, out=out)
-            self.assertEqual(out.getvalue().count("may be hung"), 1)
+    def test_following_again_counts_quiet_from_when_it_started(self) -> None:
+        # The run has been quiet for 20 minutes, but this follower has watched for none of them:
+        # it keeps following, and the run then fails.
+        with tempfile.TemporaryDirectory() as directory:
+            code, text, _ = self._follow(directory, "docker", quiet_sec=20 * 60, followed_sec=0)
+        self.assertEqual(code, 1)
+        self.assertNotIn("may be hung", text)
+        self.assertNotIn("no new output", text)
 
     def test_one_rule_decides_quiet(self) -> None:
         from kura import cli, monitor, runner

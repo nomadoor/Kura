@@ -72,6 +72,9 @@ UNSUCCESSFUL_STATES = frozenset({"failed", "launch_failed", "interrupted"})
 
 # The exit code a command reports for a run that ended in this state; any other state reports 2.
 EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interrupted": 130}
+# The exit code `kura run execute` reports when it stops following a training run that needs a
+# look (quiet, or suddenly much slower); the run itself keeps going.
+ATTENTION_EXIT_CODE = 3
 
 
 OBSERVABLE_STATES = frozenset({"running"})
@@ -114,14 +117,15 @@ DEFAULT_MAX_LEASE_SEC = 12 * 3600
 QUIET_RUN_NOTICE_SEC = 15 * 60
 
 
-def run_quiet_since(run_dir: Path, status: dict[str, Any]) -> datetime | None:
+def run_quiet_since(run_dir: Path, status: dict[str, Any], *, not_before: datetime | None = None) -> datetime | None:
     """When a running run last showed progress; None unless it is running.
 
     Progress is new output in its log or metrics, the launch of its current
     realization (a relaunch starts with the previous log still in place), or a
     launch phase it records (a RunPod upload). A status write is not progress:
     the RunPod controller rewrites status on every sync, and appends only new
-    remote output to the local log.
+    remote output to the local log. A reader that counts only what it has
+    watched, as a follower that started later does, passes `not_before`.
     """
     if status.get("state") not in OBSERVABLE_STATES:
         return None
@@ -130,7 +134,7 @@ def run_quiet_since(run_dir: Path, status: dict[str, Any]) -> datetime | None:
     if isinstance(reference, str) and reference:
         realization = run_dir / reference
         paths += [realization, realization.with_name(f"{realization.stem}.phases.jsonl")]
-    times = []
+    times = [not_before.timestamp()] if not_before is not None else []
     for path in paths:
         try:
             times.append(path.stat().st_mtime)

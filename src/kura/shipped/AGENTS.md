@@ -115,7 +115,11 @@ Starting a run is not finishing the request. Unless the user asks to start and
 detach, run `kura run execute <run-id> --yes` through the agent host's tracked
 long-running mechanism, never an untracked `nohup ... &`, keep the task active
 until it returns, then verify and report the result from Kura's status, exit
-code, realization, logs, and output artifacts. Start the next approved run only
+code, realization, logs, and output artifacts. Exit code 3 means the training
+run needs a look (no output for a long time, or steps suddenly much slower)
+and is still going: show the user the line it printed and ask whether to stop
+it (`kura run stop`) or follow it again (`kura run execute`). Kura watches the
+run for this; do not write a watcher of your own. Start the next approved run only
 after the previous one is mechanically complete, and stop on failure, uncertain
 state, or a new decision; a note or cursor is never approval, so if a later
 run's approval cannot be found in the conversation, ask again. Training runs,

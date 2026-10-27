@@ -249,6 +249,13 @@ starts with `kura render launch <run-id>`. Only a run that has ended without
 completing starts again, as a new run from its settings:
 `kura run new --from <run-id> --slug <words>`.
 
+While it follows a training run, `kura run execute` returns with exit code 3
+when the run needs a look: no new output for 15 minutes of what it watched, or
+steps taking 5 times the median of steps 2-11 for 5 minutes. The run keeps
+going; the command prints why, and the choice is `kura run stop <run-id>` or
+`kura run execute <run-id>` to follow it again. Otherwise its exit code is the
+run's end: 0 completed, 1 failed, 130 interrupted, 2 any other end.
+
 - `--max-lease 12h` deletes the Pod from inside after that long, whatever the
   local controller does. It is a billing fuse, not output preservation, and
   it cannot be turned off: zero is refused.

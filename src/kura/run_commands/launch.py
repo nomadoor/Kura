@@ -14,7 +14,7 @@ from typing import Any
 
 from kura.executors import launch_docker, launch_runpod, observe_run
 from kura.yamlio import YAMLError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, append_run_event, confirm_launch, record_launch_phase, can_start, start_refusal
+from kura.executors.common import ATTENTION_EXIT_CODE, DEFAULT_MAX_LEASE_SEC, append_run_event, confirm_launch, record_launch_phase, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -508,6 +508,9 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
     except KeyboardInterrupt:
         print(f"\nstopped following; the run continues. Follow it again with `kura run execute {run_id}`", file=sys.stderr)
         return 130
+    if code == ATTENTION_EXIT_CODE:
+        # The run is still going; there is no result to show yet.
+        return code
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     print(format_run_completion(workspace, run_dir, status))
     return code
@@ -651,6 +654,9 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
     except KeyboardInterrupt:
         print(f"\nstopped following; the run continues. Follow it again with `kura run execute {run_id}`", file=sys.stderr)
         return 130
+    if code == ATTENTION_EXIT_CODE:
+        # The run is still going; there is no result to show yet.
+        return code
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     print(format_run_completion(workspace, run_dir, status))
     return code
