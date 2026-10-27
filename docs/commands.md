@@ -55,7 +55,7 @@ Moving from a Kura clone to an installed Kura and a separate workspace:
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched; for AI-Toolkit, each effective train and model setting marked `authored` or `baseline` (the pinned upstream UI baseline) |
 | `uv run kura run resume <source-run> --additional-steps <N>` | Create a derived draft from the latest valid training state and continue the same logical session for `N` optimizer updates |
 | `uv run kura run resume <source-run> --to-step <T> [--artifact <id>]` | Create a derived draft toward absolute logical step `T`, optionally selecting an older valid state |
-| `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
+| `uv run kura run execute <run-id> --yes` | Execute through the Docker or RunPod executor frozen in the compiled run, after the start is confirmed (`--yes`, or `y` at a terminal); waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery. Following a run already started asks nothing |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
 | `uv run kura run prune <run-id>...` | Preview deleting whole finished runs, outputs and records included (add `--yes` to delete); Kura's one whole-run delete. A run whose publication is pending, whose Pod may still exist (`kura run stop <run-id>` first), or whose launch stopped before recording its Pod or container (`kura run reconcile <run-id>` first) is refused. The run's stopped Docker containers are removed with it |
 
@@ -257,10 +257,12 @@ completing starts again, as a new run from its settings:
   longer of 2 hours and the job time (from remote job start, including model
   download). Pass a duration to change the wait or `0` to rely on the maximum
   lease alone.
-- `--yes` confirms Pod creation in a non-interactive session. Use it only after
-  the user explicitly approves the billed RunPod launch. Interactive terminals
-  show GPU, current hourly price, maximum lease, and cost ceiling (the lease
-  times the highest current hourly price) and ask once before creation.
+- `--yes` confirms the start in a non-interactive session, locally and on
+  RunPod. Use it only after the user has seen the plan and said to start.
+  Without it and without a terminal, Kura does not start the run; at a
+  terminal it asks once. On RunPod the terminal also shows GPU, current hourly
+  price, maximum lease, and cost ceiling (the lease times the highest current
+  hourly price) before creation.
   `--yes` skips only the question; the cost summary is still printed. A capacity
   wait is approved once before waiting, and its displayed price may change
   before capacity becomes available.

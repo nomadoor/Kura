@@ -70,7 +70,8 @@ class RequestTests(unittest.TestCase):
         with _workspace() as (_, run_dir):
             request = runner.write_launch_request(run_dir, executor="docker")
             payload = json.loads(request.read_text(encoding="utf-8"))
-            self.assertEqual((payload["kind"], payload["kura_version"], payload["confirmed"]), ("launch_request", __version__, True))
+            self.assertEqual((payload["kind"], payload["kura_version"]), ("launch_request", __version__))
+            self.assertNotIn("confirmed", payload)
             with self.assertRaisesRegex(ValueError, "already has a launch request"):
                 runner.write_launch_request(run_dir, executor="docker")
             self.assertTrue(runner.claim_request(request, 3))
@@ -1238,7 +1239,7 @@ class RunPodWriterTests(unittest.TestCase):
             [request] = runner.launch_requests(run_dir)
             payload = json.loads(request.read_text(encoding="utf-8"))
             self.assertEqual(payload["executor"], "runpod")
-            self.assertTrue(payload["billing_confirmed_at"])
+            self.assertTrue(payload["confirmed_at"])
             self.assertEqual(payload["runpod_config"], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertEqual(payload["options"], {"max_lease": "3h"})
 

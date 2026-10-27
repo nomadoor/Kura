@@ -1033,8 +1033,9 @@ def _execute(workspace: Path, run_id: str, *, runpod: bool) -> tuple[int, dict[s
     peak = {"bytes": 0, "store_baseline": _weights_bytes(workspace / "artifacts" / "training-state")}
     env = {**os.environ, "KURA_NOTIFY": "none"}
     with tempfile.TemporaryFile("w+", encoding="utf-8") as log:
-        runpod_args = ["--yes", "--max-lease", f"{CONFORMANCE_MAX_LEASE_SEC // 3600}h"] if runpod else []
-        process = subprocess.Popen(_kura_argv("run", "execute", run_id, *runpod_args), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        # The scenario was approved with `--yes` on this command; every launch takes it.
+        runpod_args = ["--max-lease", f"{CONFORMANCE_MAX_LEASE_SEC // 3600}h"] if runpod else []
+        process = subprocess.Popen(_kura_argv("run", "execute", run_id, "--yes", *runpod_args), cwd=workspace, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         while process.poll() is None:
             _sample_peak(run_dir, peak)
             time.sleep(0.5)

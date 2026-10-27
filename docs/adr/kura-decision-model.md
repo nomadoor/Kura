@@ -57,12 +57,21 @@ plan review **only if** that contingency was explicitly recorded in
 `run.yaml` and shown in the approved plan. Anything outside the recorded
 envelope returns to plan approval.
 
-RunPod Pod creation also has one mechanical confirmation of that approval;
-it is not a second plan review or a persisted approval system. At an
-interactive terminal, Kura shows the GPU candidates, current hourly prices,
-and effective maximum lease, then accepts only `y`. In a non-interactive
-session, creation requires `--yes`, which an agent may use only after explicit
-user instruction. A bounded capacity wait is confirmed once before its wait
+Starting a training run, locally or on RunPod, also has one mechanical
+confirmation of that approval; it is not a second plan review or a persisted
+approval system. At an interactive terminal Kura accepts only `y`; in a
+non-interactive session the start requires `--yes`, which an agent may use
+only after the user has seen the plan and said to start. On RunPod the
+terminal first shows the GPU candidates, current hourly prices, and effective
+maximum lease. Following a run already started asks nothing. Renders are not
+confirmed this way.
+
+Amended 2026-10-27: the confirmation was RunPod-only, as a billing guard. In
+the maintainer's install test an agent started a local training run nobody had
+approved, against the written rule. A mechanical confirmation cannot tell an
+agent's own decision from the user's (an agent can pass `--yes`), but it turns
+an accidental start into a refusal that names the next step, and the request
+records when the start was confirmed. A bounded capacity wait is confirmed once before its wait
 loop so unattended acquisition remains possible; the confirmation warns that
 the displayed price may change while waiting and covers the configured
 creation-attempt sequence.

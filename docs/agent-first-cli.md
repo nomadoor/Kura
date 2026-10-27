@@ -33,7 +33,7 @@ The normal commands are the same whether an agent or a human invokes them:
 ```sh
 uv run kura run compile <run-id>
 uv run kura run plan <run-id>
-uv run kura run execute <run-id>
+uv run kura run execute <run-id> --yes
 uv run kura run watch <run-id>
 ```
 

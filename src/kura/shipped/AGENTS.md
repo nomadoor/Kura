@@ -20,8 +20,10 @@ read the skill named at the end of this file before that task.
    `--arch <value>` adds one architecture's model facts).
 4. `kura run compile <run-id>`, then `kura run plan <run-id>`: show the plan to
    the user and get approval.
-5. `kura run execute <run-id>`, stay with it until it returns, and report from
-   `kura run status <run-id>` and the run's outputs.
+5. Once the user says to start, `kura run execute <run-id> --yes`, stay with it
+   until it returns, and report from `kura run status <run-id>` and the run's
+   outputs. `--yes` carries the user's go-ahead: without it, and without a
+   terminal to answer `y`, Kura does not start the run.
 
 The rules below say why each step is there.
 
@@ -110,7 +112,7 @@ logs, stalled startup, doctor output), make the accepted change in a new run
 the same way, and never silently retry with changed settings.
 
 Starting a run is not finishing the request. Unless the user asks to start and
-detach, run `kura run execute <run-id>` through the agent host's tracked
+detach, run `kura run execute <run-id> --yes` through the agent host's tracked
 long-running mechanism, never an untracked `nohup ... &`, keep the task active
 until it returns, then verify and report the result from Kura's status, exit
 code, realization, logs, and output artifacts. Start the next approved run only
@@ -132,7 +134,7 @@ and local download are confirmed.
 | State | Meaning | Next step |
 |---|---|---|
 | `draft` | `run.yaml` is not frozen yet | `kura run compile <run-id>` |
-| `compiled` | frozen and never launched | `kura run plan <run-id>`, approval, `kura run execute <run-id>` |
+| `compiled` | frozen and never launched | `kura run plan <run-id>`, approval, `kura run execute <run-id> --yes` |
 | `queued`, `staged`, `launching` | waiting for, or being put on, a machine | follow with `kura run execute <run-id>` |
 | `running` | the trainer is running; on RunPod, also until its outputs are collected, which the runner retries while the Pod exists | follow with `kura run execute <run-id>`; on a notice that the outputs could not be collected yet, report the reason in `runs/<run-id>/logs/runner.log` (`runpod-lifecycle`) |
 | `publishing` | local Docker only: the trainer exited 0; its outputs are not published yet | keep following; it is not finished |

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
+from kura.executors.common import StaleRunnerEpoch, _EARLIEST, record_time, status_runner_epoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, request_confirmed_at, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -290,10 +290,12 @@ def latest_request(run_dir: Path) -> Path | None:
 
 
 def write_launch_request(run_dir: Path, *, executor: str, image: str | None = None, notify: Any = None, out: Any = None,
-                         extra: dict[str, Any] | None = None) -> Path:
+                         extra: dict[str, Any] | None = None, confirmed_at: str | None = None) -> Path:
     """Write a launch request after the approval the run needs; at most one is pending.
 
-    A pending request written by another Kura version is replaced, after saying so.
+    `confirmed_at` is when the launch's confirmation (`confirm_launch`) was taken: every
+    training launch, locally and on RunPod, and a RunPod render. A pending request written by
+    another Kura version is replaced, after saying so.
     """
     with file_lock(run_dir / ".locks" / "launch-request.lock", blocking=False):
         for pending in pending_requests(run_dir):
@@ -305,7 +307,8 @@ def write_launch_request(run_dir: Path, *, executor: str, image: str | None = No
         path = requests_dir(run_dir) / f"{_request_id()}.launch.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(path, record("launch_request", {
-            "run_id": run_dir.name, "executor": executor, "image": image, "notify": notify, "confirmed": True, **(extra or {}),
+            "run_id": run_dir.name, "executor": executor, "image": image, "notify": notify,
+            **({"confirmed_at": confirmed_at} if confirmed_at else {}), **(extra or {}),
             "kura_version": __version__, "written_at": _now(),
         }))
         return path
@@ -868,7 +871,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     from kura.run_commands.render_runpod import launch_render_runpod
 
     details = _read_json(request)
-    if not details.get("billing_confirmed_at"):
+    if not request_confirmed_at(details):
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", error="the request carries no billing confirmation; nothing was created")
         return 0
     if not _first_attempt(request):
@@ -888,7 +891,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
         return 0
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
-                     "billing_confirmed_at": details.get("billing_confirmed_at")}
+                     "confirmed_at": request_confirmed_at(details)}
     options = details.get("options") or {}
     set_stop_check(lambda: _sibling(request, ".stop.json").exists())
     try:
@@ -956,7 +959,7 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     from kura.executors.common import StopRequested, set_stop_check
 
     details = _read_json(request)
-    if not details.get("billing_confirmed_at"):
+    if not request_confirmed_at(details):
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", error="the request carries no billing confirmation; nothing was created")
         return 0
     set_stop_check(lambda: _sibling(request, ".stop.json").exists())
@@ -1013,7 +1016,7 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
     options = dict(details.get("options") or {})
     options["max_lease"] = max_lease_seconds(options.get("max_lease"))
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
-                     "billing_confirmed_at": details.get("billing_confirmed_at")}
+                     "confirmed_at": request_confirmed_at(details)}
     return _run_remote_locked(
         run_dir.name, yes=True, reattach=reattach, controlled_by=controlled_by,
         runpod_config_override=details.get("runpod_config"), **options,

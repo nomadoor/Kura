@@ -1821,7 +1821,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.set_defaults(func=cmd_run_plan)
     execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run; for a RunPod run whose job is already running, follow it and collect instead")
     execute.add_argument("run_id")
-    execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
+    execute.add_argument("--yes", action="store_true", help="Confirm starting the run (and, on RunPod, the billed Pod) without a terminal; use only after the user has seen the plan and said to start")
     execute.add_argument("--max-lease", default=f"{DEFAULT_MAX_LEASE_SEC // 3600}h", help="RunPod only: the Pod deletes itself this long after its container starts (the image download before that bills outside the lease), whatever happens locally, e.g. 12h; it must be longer than zero, since Kura never starts a Pod without it.")
     execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after the job ends, how long the Pod waits for Kura to collect outputs before deleting itself (the maximum lease still applies): auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
     execute.set_defaults(func=cmd_run_execute)
