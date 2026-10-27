@@ -100,9 +100,11 @@ class OneConfirmationTests(unittest.TestCase):
                 runpod._confirm_runpod_launch({}, {"gpu_type_ids": ["A"], "gpu_count": 1, "cloud_types": ["SECURE"]}, yes=False, max_lease_sec=3600)
 
     def test_a_request_an_older_kura_confirmed_for_billing_reads_as_confirmed(self) -> None:
-        self.assertEqual(runner.request_confirmed_at({"billing_confirmed_at": "t1"}), "t1")
-        self.assertEqual(runner.request_confirmed_at({"confirmed_at": "t2"}), "t2")
-        self.assertIsNone(runner.request_confirmed_at({"confirmed": True}))
+        from kura.executors.common import request_confirmed_at
+
+        self.assertEqual(request_confirmed_at({"billing_confirmed_at": "t1"}), "t1")
+        self.assertEqual(request_confirmed_at({"confirmed_at": "t2"}), "t2")
+        self.assertIsNone(request_confirmed_at({"confirmed": True}))
 
 
 if __name__ == "__main__":

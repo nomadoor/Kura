@@ -78,7 +78,7 @@ OBSERVABLE_STATES = frozenset({"running"})
 
 
 def request_confirmed_at(details: dict[str, Any]) -> str | None:
-    """When a launch request's (or the realization it controls') confirmation was taken. A
+    """When the confirmation of a launch request, or of the realization it started, was taken. A
     request an older Kura wrote recorded only a RunPod billing confirmation, as
     `billing_confirmed_at`, beside a `confirmed: true` that meant nothing."""
     value = details.get("confirmed_at") or details.get("billing_confirmed_at")

@@ -4,7 +4,7 @@
 This is a developer acceptance harness, not a release gate. `prepare` creates,
 compiles, and plans runs with `kura run new/compile/plan` so the user can
 approve them; the approved launch is an ordinary
-`uv run kura run execute <run-id>`; `verify` then checks the recorded result.
+`uv run kura run execute <run-id> --yes`; `verify` then checks the recorded result.
 
 `conformance` runs the fixed scenario of `docs/adr/promises-and-verification.md`
 on each backend in a separate workspace and prints one pass/fail table per

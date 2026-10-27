@@ -231,7 +231,7 @@ host without a public IP (`runpod.support_public_ip: true` sends RunPod's
 `supportPublicIp` with the create request).
 
 ```sh
-kura run execute <run-id>
+kura run execute <run-id> --yes   # start, once the user said to; follow again without --yes
 kura doctor runpod
 kura run reconcile <run-id>
 kura run download <run-id> --force
