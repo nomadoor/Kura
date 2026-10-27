@@ -118,6 +118,28 @@ def _read_state(run_dir: Path) -> str:
     return str(status.get("state") or "unknown")
 
 
+# States of a run that was never launched: it has trained nothing to compare against.
+_NOT_LAUNCHED_STATES = frozenset({"draft", "compiled", "unknown"})
+
+
+def _changed_from(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """What the current run changes from the latest run before it (in `created` order) that was
+    launched: each fact whose value differs, in fact order. None when no earlier run was launched."""
+    current_index = next((index for index, row in enumerate(rows) if row["current"]), None)
+    if current_index is None:
+        return None
+    earlier = [row for row in rows[:current_index] if row["state"] not in _NOT_LAUNCHED_STATES]
+    if not earlier:
+        return None
+    before, after = earlier[-1]["facts"], rows[current_index]["facts"]
+    changes = [
+        {"fact": key, "from": before.get(key), "to": after.get(key)}
+        for key in _FACT_ORDER
+        if _fact_identity(before.get(key)) != _fact_identity(after.get(key))
+    ]
+    return {"run": earlier[-1]["id"], "changes": changes}
+
+
 def _completed_render_counts(runs_root: Path) -> dict[str, int]:
     counts: dict[str, int] = {}
     for run_path in runs_root.glob("*/run.yaml"):
@@ -188,6 +210,7 @@ def experiment_context(workspace: Path, run_id: str, run: dict[str, Any] | None 
         "current_run": run_id,
         "varying_facts": varying,
         "runs": rows,
+        "changed_from": _changed_from(rows),
     }
 
 
@@ -199,6 +222,15 @@ def _format_value(value: Any) -> str:
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return str(value)
+
+
+def _ratio(before: Any, after: Any) -> str:
+    """How many times `before` a number `after` is, as `x2.5` or `x1/71.4`; empty for anything else."""
+    numbers = all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (before, after))
+    if not numbers or before == 0 or after == 0:
+        return ""
+    ratio = after / before
+    return f"(x{ratio:.3g})" if abs(ratio) >= 1 else f"(x1/{1 / ratio:.3g})"
 
 
 def _short_run_ids(rows: list[dict[str, Any]]) -> dict[str, str]:
@@ -237,6 +269,14 @@ def format_experiment_context(context: dict[str, Any] | None, *, max_runs: int =
     current = next((row for row in rows if row.get("current")), None)
     if current is not None:
         lines.append(f"  completed render runs for this run  {current.get('completed_render_runs', 0)}")
+    changed = context.get("changed_from")
+    if isinstance(changed, dict) and changed.get("changes"):
+        lines.append(f"  Changed from {changed['run']} (the latest earlier run that was launched)")
+        width = max(len(change["fact"]) for change in changed["changes"])
+        for change in changed["changes"]:
+            before, after = change["from"], change["to"]
+            shown = f"{'-' if before is None else _format_value(before)} -> {'-' if after is None else _format_value(after)}"
+            lines.append(f"    {change['fact']:<{width}}  {shown}  {_ratio(before, after)}".rstrip())
     return "\n".join(lines)
 
 
