@@ -23,6 +23,7 @@ class ExperimentOutputTests(unittest.TestCase):
         steps: int,
         state: str = "completed",
         note: str = "# Notes\n",
+        day: int | None = None,
     ) -> Path:
         run_dir = root / "runs" / run_id
         (run_dir / "resolved").mkdir(parents=True)
@@ -32,7 +33,7 @@ class ExperimentOutputTests(unittest.TestCase):
                     "id": run_id,
                     "type": "train",
                     "experiment": "anima-control",
-                    "created": f"2026-08-{1 if run_id == 'older' else 2:02d}T00:00:00+00:00",
+                    "created": f"2026-08-{day or (1 if run_id == 'older' else 2):02d}T00:00:00+00:00",
                     "intent": "Compare the control recipe.",
                     "model": {"base": "anima"},
                     "backend": {"name": "sd-scripts", "config": {"architecture": "anima"}},
@@ -86,6 +87,42 @@ class ExperimentOutputTests(unittest.TestCase):
         self.assertIn("| notes: —  <- this run", output)
         self.assertIn("| notes: Structure is sound but control is weak on diagonal lines.", output)
         self.assertIn("completed render runs for this run  1", output)
+
+    def test_the_plan_lists_what_changed_from_the_latest_earlier_launched_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._train_run(root, "first", learning_rate=1e-4, steps=1000, day=1)
+            self._train_run(root, "trained", learning_rate=5e-5, steps=3000, day=2)
+            # Never launched, so not "the run before": a draft and a compiled run.
+            self._train_run(root, "draft", learning_rate=9e-3, steps=10, state="draft", day=3)
+            self._train_run(root, "compiled", learning_rate=9e-3, steps=10, state="compiled", day=4)
+            self._train_run(root, "current", learning_rate=7e-7, steps=5000, state="compiled", day=5)
+            context = experiment_context(root, "current")
+
+        assert context is not None
+        self.assertEqual(context["changed_from"], {
+            "run": "trained",
+            "changes": [
+                {"fact": "lr", "from": 5e-5, "to": 7e-7},
+                {"fact": "steps", "from": 3000, "to": 5000},
+            ],
+        })
+        text = format_experiment_context(context)
+        self.assertIn("Changed from trained (the latest earlier run that was launched)", text)
+        self.assertRegex(text, r"lr\s+5e-05 -> 7e-07\s+\(x1/71\.4\)")
+        self.assertRegex(text, r"steps\s+3000 -> 5000\s+\(x1\.67\)")
+        # Facts that did not change are not listed.
+        self.assertNotIn("rank", text.split("Changed from", 1)[1])
+
+    def test_the_first_launched_run_of_an_experiment_lists_no_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._train_run(root, "draft", learning_rate=1e-4, steps=10, state="draft", day=1)
+            self._train_run(root, "current", learning_rate=7e-5, steps=200, state="compiled", day=2)
+            context = experiment_context(root, "current")
+        assert context is not None
+        self.assertIsNone(context["changed_from"])
+        self.assertNotIn("Changed from", format_experiment_context(context))
 
     def test_completion_compresses_checkpoint_paths_and_includes_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
