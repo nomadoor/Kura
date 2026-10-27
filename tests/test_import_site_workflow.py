@@ -52,6 +52,14 @@ class ImportSiteWorkflowTests(unittest.TestCase):
         self.assertIn("API node 7 (KSampler) is not in the UI workflow", MODULE.api_problems(extra, UI))
         self.assertTrue(MODULE.api_problems(UI, UI))
 
+    def test_a_text_with_braces_must_survive_the_export(self) -> None:
+        # The frontend's dynamic-prompt handling strips braces, which breaks a JSON prompt (Ideogram 4).
+        prompt = '{\n  "description": "a tower at dusk"\n}'
+        ui = {"nodes": [{"id": 6, "type": "CLIPTextEncode", "widgets_values": [prompt]}]}
+        self.assertEqual(MODULE.api_problems({"6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt}}}, ui), [])
+        stripped = {"6": {"class_type": "CLIPTextEncode", "inputs": {"text": '\n  "description": "a tower at dusk"\n'}}}
+        self.assertIn("changed a text with braces", MODULE.api_problems(stripped, ui)[0])
+
     def test_the_sidecar_pins_each_repo_and_resolves_every_model(self) -> None:
         asked: list[tuple[str, str]] = []
 
@@ -107,6 +115,11 @@ class ImportSiteWorkflowTests(unittest.TestCase):
         self.assertNotIn("lora_insert", sidecar)
         self.assertTrue(any("upscaler.pth" in note for note in notes))
         self.assertTrue(any("lora_insert left out" in note for note in notes))
+        # The importer names the loader the LoRA follows when there are two.
+        sidecar, _ = MODULE.build_sidecar(two_loaders, ENTRY, imported_on="d", commit=lambda r, v: "c", lora_node="1")
+        self.assertEqual(sidecar["lora_insert"]["model_node"], "1")
+        with self.assertRaisesRegex(ValueError, "--lora-node 4 is not a model loader"):
+            MODULE.build_sidecar(two_loaders, ENTRY, imported_on="d", commit=lambda r, v: "c", lora_node="4")
 
 
 if __name__ == "__main__":

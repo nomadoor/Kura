@@ -1,5 +1,5 @@
 source: https://comfyui.nomadoor.net/workflows/basic-workflows/moss-image/moss_image_text2image.json
-provenance: Imported 2026-10-27 from the site's UI workflow (updated 2026-10-17);
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-17);
   API form exported with the ComfyUI frontend.
 models:
   diffusion_models:

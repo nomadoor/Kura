@@ -82,13 +82,22 @@ def api_problems(api: dict[str, Any], ui: dict[str, Any]) -> list[str]:
     not exported)."""
     if not api or not all(isinstance(node, dict) and "class_type" in node for node in api.values()):
         return ["the API file is not a ComfyUI API export (File > Export (API)): every entry needs a class_type"]
-    ui_types = {str(node.get("id")): node.get("type") for node in ui.get("nodes") or [] if isinstance(node, dict)}
+    ui_nodes = {str(node.get("id")): node for node in ui.get("nodes") or [] if isinstance(node, dict)}
     problems = []
     for node_id, node in api.items():
-        if node_id not in ui_types:
+        if node_id not in ui_nodes:
             problems.append(f"API node {node_id} ({node['class_type']}) is not in the UI workflow")
-        elif ui_types[node_id] != node["class_type"]:
-            problems.append(f"API node {node_id} is {node['class_type']}, the UI node {ui_types[node_id]}")
+            continue
+        if ui_nodes[node_id].get("type") != node["class_type"]:
+            problems.append(f"API node {node_id} is {node['class_type']}, the UI node {ui_nodes[node_id].get('type')}")
+            continue
+        # A hand export applies dynamic-prompt syntax to text with braces; the text must stay as written.
+        widgets = ui_nodes[node_id].get("widgets_values")
+        texts = {value for value in node.get("inputs", {}).values() if isinstance(value, str)}
+        for value in widgets if isinstance(widgets, list) else []:
+            if isinstance(value, str) and "{" in value and value not in texts:
+                problems.append(f"API node {node_id} ({node['class_type']}) changed a text with braces (dynamic-prompt syntax); "
+                                "export again with this script's export, which keeps it")
     return problems
 
 
@@ -111,7 +120,7 @@ def lora_candidates(api: dict[str, Any]) -> list[str]:
 
 
 def build_sidecar(api: dict[str, Any], entry: dict[str, Any], *, imported_on: str,
-                  commit: Callable[[str, str], str]) -> tuple[dict[str, Any], list[str]]:
+                  commit: Callable[[str, str], str], lora_node: str | None = None) -> tuple[dict[str, Any], list[str]]:
     """The sidecar for an API workflow from its site entry, and notes for the importer."""
     notes: list[str] = []
     if entry.get("custom_nodes"):
@@ -141,13 +150,17 @@ def build_sidecar(api: dict[str, Any], entry: dict[str, Any], *, imported_on: st
         "models": models,
     }
     candidates = lora_candidates(api)
+    if lora_node is not None:
+        if lora_node not in candidates:
+            raise ValueError(f"--lora-node {lora_node} is not a model loader of this workflow: {candidates or 'none'}")
+        candidates = [lora_node]
     if len(candidates) == 1 and api[candidates[0]]["class_type"] == "CheckpointLoaderSimple":
         sidecar["lora_insert"] = {"kind": "model_clip", "model_node": candidates[0], "clip_node": candidates[0],
                                   "strength_model": 0.8, "strength_clip": 0.8}
     elif len(candidates) == 1:
         sidecar["lora_insert"] = {"kind": "model_only", "model_node": candidates[0], "strength_model": 0.8}
     else:
-        notes.append(f"lora_insert left out: model loaders {candidates or 'none'}; add it by hand if the sample takes a LoRA")
+        notes.append(f"lora_insert left out: model loaders {candidates or 'none'}; name the one the LoRA follows with --lora-node")
     return sidecar, notes
 
 
@@ -178,10 +191,21 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
-# Run in the ComfyUI frontend: load a UI workflow and convert it as File > Export (API) does.
+# Run in the ComfyUI frontend: load a UI workflow and convert it as File > Export (API) does, except
+# that text widgets keep their text. The frontend treats `{a|b}` in a prompt widget as a dynamic
+# prompt (one choice at random, braces removed), which breaks a JSON prompt such as Ideogram 4's.
 _EXPORT_SCRIPT = """async (workflow) => {
     await window.app.loadGraphData(workflow);
-    return (await window.app.graphToPrompt()).output;
+    const output = (await window.app.graphToPrompt()).output;
+    for (const node of window.app.graph._nodes) {
+        const inputs = output[String(node.id)]?.inputs;
+        for (const widget of node.widgets ?? []) {
+            if (inputs && typeof widget.value === "string" && widget.value.includes("{") && widget.name in inputs) {
+                inputs[widget.name] = widget.value;
+            }
+        }
+    }
+    return output;
 }"""
 
 
@@ -221,7 +245,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
     entry = site_entry(_get_json(SITE_INDEX), args.site_url)
     renamed = site_model_names(api, entry)
     try:
-        sidecar, notes = build_sidecar(api, entry, imported_on=date.today().isoformat(), commit=hf_commit)
+        sidecar, notes = build_sidecar(api, entry, imported_on=date.today().isoformat(), commit=hf_commit, lora_node=args.lora_node)
         check_sidecar(api, sidecar)
     except ValueError as exc:
         print(f"cannot write the sidecar: {exc}", file=sys.stderr)
@@ -253,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     finish = sub.add_parser("finish", help="Check the API export and write its sidecar")
     finish.add_argument("api", help="<family>/<name>_api.json under the samples folder")
     finish.add_argument("--site-url", required=True, help="The workflow's URL on the site")
+    finish.add_argument("--lora-node", help="The model loader a LoRA follows, when the workflow has more than one")
     finish.set_defaults(func=cmd_finish)
     args = parser.parse_args(argv)
     return args.func(args)
