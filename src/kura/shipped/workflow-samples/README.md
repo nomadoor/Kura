@@ -53,12 +53,15 @@ Samples are taken from Comfy with ComfyUI, the maintainer's site, when it has a
 core-node workflow for the family and task: its UI form as published, the API
 form exported from ComfyUI's own frontend, and a sidecar built from the site's
 model list with each Hugging Face repo pinned to a commit. The sidecar's
-`source` names the site page. Kura never reads the site when it runs.
+`source` names the site page. Kura never reads the site when it runs. The
+maintainer runs every workflow before publishing it on the site, so a sample
+taken from there counts as rendered.
 
 ## Maintenance
 
 - Pin to the ComfyUI ref used by the Kura ComfyUI image (`COMFYUI_REF`).
 - Re-smoke every sample when bumping that ref. Ship only `(family × task)`
-  combinations that have actually rendered at least once.
+  combinations that have actually rendered at least once (a sample from the
+  maintainer's site has, when it was published).
 
 Start small (high-demand families first) and add more slowly.

@@ -11,7 +11,7 @@ two steps around one export by hand:
 
 `finish` checks the export against the UI form, writes the `.kura.yaml` sidecar from the site's
 model list (pinning each Hugging Face repo to its current commit), and proposes `lora_insert`.
-Ship the sample only after it has rendered once on Kura's ComfyUI image
+The maintainer ran every site workflow before publishing it, so the sample counts as rendered
 (`src/kura/shipped/workflow-samples/README.md`).
 """
 
@@ -180,7 +180,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
     print(f"wrote {sidecar_path.relative_to(REPO)}")
     for note in notes:
         print(f"note: {note}")
-    print("next: render it once on Kura's ComfyUI image before shipping it")
+    print("next: commit the UI form, the API form, and the sidecar together")
     return 0
 
 
