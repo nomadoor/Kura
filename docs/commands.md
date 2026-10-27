@@ -274,6 +274,7 @@ completing starts again, as a new run from its settings:
 | --- | --- |
 | `uv run kura monitor` | Open the run monitor TUI |
 | `uv run kura monitor --all` | Include draft runs in the monitor |
+| `uv run kura open <run-id>` | Open the run's results on your desktop: a training run's `comparisons/` folder when it has one, else its outputs; a render's image folder. `kura open <path>` opens any folder or file. On WSL it opens in Windows Explorer; nothing is shown to an agent |
 | `uv run kura run watch <run-id>` | Watch one run in the TUI |
 
 ## Render (ComfyUI comparison images)

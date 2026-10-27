@@ -33,7 +33,8 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _path_size_bytes, _root_owned_files, stopped_kura_containers, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
-from kura.run_results import train_run_results
+from kura.opener import open_path
+from kura.run_results import results_folder, train_run_results
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
@@ -759,6 +760,29 @@ def _modified_at(path: Path) -> str | None:
         return datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat()
     except OSError:
         return None
+
+
+def cmd_open(args: argparse.Namespace) -> int:
+    """Open a run's results folder, or a path, on the user's desktop (`opener.open_path`)."""
+    target = str(args.target)
+    try:
+        run_dir = _run_path(target)
+    except ValueError:
+        run_dir = None
+    if run_dir is not None and (run_dir / "run.yaml").is_file():
+        path = results_folder(run_dir)
+        if not path.exists():
+            path = run_dir
+    else:
+        path = Path(target).expanduser()
+        if not path.exists():
+            print(f"cannot open {target}: it is neither a run in this workspace nor an existing path", file=sys.stderr)
+            return 1
+    if not open_path(path):
+        print(f"cannot open {path} on this machine (no desktop to open it on); open it yourself: {path}", file=sys.stderr)
+        return 1
+    print(f"opened {path}")
+    return 0
 
 
 def cmd_run_status(args: argparse.Namespace) -> int:
@@ -1744,6 +1768,10 @@ def build_parser() -> argparse.ArgumentParser:
     fix_links = sub.add_parser("fix-links", help="Repair Kura workspace symlinks with container-private targets")
     fix_links.add_argument("--yes", action="store_true", help="Apply link repair; default is dry-run")
     fix_links.set_defaults(func=cmd_fix_links)
+
+    open_parser = sub.add_parser("open", help="Open a run's results folder (or any path) on your desktop, so you can look at them yourself")
+    open_parser.add_argument("target", help="A run ID, or a path to a folder or file")
+    open_parser.set_defaults(func=cmd_open)
 
     monitor = sub.add_parser("monitor", help="Open the run monitor TUI")
     monitor.add_argument("--interval", type=float, default=2.0)
