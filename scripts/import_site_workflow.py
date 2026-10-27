@@ -2,12 +2,15 @@
 
 Development only: Kura never reads the site when it runs. The site publishes each workflow in
 ComfyUI's UI form with its models and their download URLs (https://comfyui.nomadoor.net/workflows/index.json);
-a sample needs the API form, which only ComfyUI's own frontend writes exactly. So an import has
-two steps around one export by hand:
+a sample needs the API form, which only ComfyUI's own frontend writes exactly. So an import is:
 
     uv run python scripts/import_site_workflow.py fetch <workflow URL on the site> --family <folder>
-    # open the UI JSON it wrote in ComfyUI, then File > Export (API) to the path it printed
+    uv run --with playwright python scripts/import_site_workflow.py export <family>/<name>.json --comfyui <URL>
     uv run python scripts/import_site_workflow.py finish <family>/<name>_api.json --site-url <same URL>
+
+`export` opens the ComfyUI frontend that a running ComfyUI serves in a headless browser, loads the
+UI form, and saves what the frontend's own `graphToPrompt` produces: the same API form as
+File > Export (API) by hand (checked on the MOSS-Image sample). Exporting by hand works too.
 
 `finish` checks the export against the UI form, writes the `.kura.yaml` sidecar from the site's
 model list (pinning each Hugging Face repo to its current commit), and proposes `lora_insert`.
@@ -34,7 +37,9 @@ from kura.yamlio import dump_yaml  # noqa: E402
 
 SITE_INDEX = "https://comfyui.nomadoor.net/workflows/index.json"
 SAMPLES = REPO / "src" / "kura" / "shipped" / "workflow-samples"
-# Loaders whose model output a LoRA loader can take: Kura inserts LoraLoaderModelOnly after one.
+# Loaders whose model output a LoRA loader can take. After a checkpoint loader, which also loads the
+# text encoder, Kura inserts LoraLoader on both (as the SD1.5 and SDXL samples do); after a
+# diffusion-model loader, LoraLoaderModelOnly.
 LORA_MODEL_LOADERS = ("UNETLoader", "CheckpointLoaderSimple")
 
 
@@ -87,6 +92,19 @@ def api_problems(api: dict[str, Any], ui: dict[str, Any]) -> list[str]:
     return problems
 
 
+def site_model_names(api: dict[str, Any], entry: dict[str, Any]) -> list[str]:
+    """Rename models the workflow names inside its author's own folders (`Flux.1\\flux1-dev.safetensors`)
+    to the file names the site lists, in place; one line per renamed model."""
+    listed = {model.get("name") for model in entry.get("models") or [] if isinstance(model, dict)}
+    renamed = []
+    for ref in required_model_refs(api):
+        base = ref["name"].replace("\\", "/").rsplit("/", 1)[-1]
+        if ref["name"] not in listed and base in listed:
+            api[ref["node"]]["inputs"][ref["input"]] = base
+            renamed.append(f"{ref['name']} -> {base}")
+    return renamed
+
+
 def lora_candidates(api: dict[str, Any]) -> list[str]:
     """The nodes a LoRA loader could follow: loaders whose output is the model."""
     return [node_id for node_id, node in api.items() if node.get("class_type") in LORA_MODEL_LOADERS]
@@ -123,7 +141,10 @@ def build_sidecar(api: dict[str, Any], entry: dict[str, Any], *, imported_on: st
         "models": models,
     }
     candidates = lora_candidates(api)
-    if len(candidates) == 1:
+    if len(candidates) == 1 and api[candidates[0]]["class_type"] == "CheckpointLoaderSimple":
+        sidecar["lora_insert"] = {"kind": "model_clip", "model_node": candidates[0], "clip_node": candidates[0],
+                                  "strength_model": 0.8, "strength_clip": 0.8}
+    elif len(candidates) == 1:
         sidecar["lora_insert"] = {"kind": "model_only", "model_node": candidates[0], "strength_model": 0.8}
     else:
         notes.append(f"lora_insert left out: model loaders {candidates or 'none'}; add it by hand if the sample takes a LoRA")
@@ -151,8 +172,37 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     ui_path.write_text(json.dumps(_get_json(args.url), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     api_path = ui_path.with_name(f"{name}_api.json")
     print(f"wrote {ui_path.relative_to(REPO)}")
-    print(f"next: open it in ComfyUI (the ref of Kura's ComfyUI image), File > Export (API) to {api_path.relative_to(REPO)},")
+    print(f"next: uv run --with playwright python scripts/import_site_workflow.py export {ui_path.relative_to(SAMPLES)} --comfyui <URL>")
+    print(f"      (or File > Export (API) by hand to {api_path.relative_to(REPO)}),")
     print(f"then: uv run python scripts/import_site_workflow.py finish {api_path.relative_to(SAMPLES)} --site-url {args.url}")
+    return 0
+
+
+# Run in the ComfyUI frontend: load a UI workflow and convert it as File > Export (API) does.
+_EXPORT_SCRIPT = """async (workflow) => {
+    await window.app.loadGraphData(workflow);
+    return (await window.app.graphToPrompt()).output;
+}"""
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("export needs Playwright: run it with `uv run --with playwright python scripts/import_site_workflow.py export ...`", file=sys.stderr)
+        return 1
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.goto(args.comfyui, wait_until="domcontentloaded")
+        page.wait_for_function("() => window.app && typeof window.app.graphToPrompt === 'function'", timeout=120_000)
+        for name in args.ui:
+            ui_path = SAMPLES / name
+            api_path = ui_path.with_name(ui_path.stem + "_api.json")
+            api = page.evaluate(_EXPORT_SCRIPT, json.loads(ui_path.read_text(encoding="utf-8")))
+            api_path.write_text(json.dumps(api, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"wrote {api_path.relative_to(REPO)}")
+        browser.close()
     return 0
 
 
@@ -169,12 +219,16 @@ def cmd_finish(args: argparse.Namespace) -> int:
         print("the API export does not match the UI workflow:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 1
     entry = site_entry(_get_json(SITE_INDEX), args.site_url)
+    renamed = site_model_names(api, entry)
     try:
         sidecar, notes = build_sidecar(api, entry, imported_on=date.today().isoformat(), commit=hf_commit)
         check_sidecar(api, sidecar)
     except ValueError as exc:
         print(f"cannot write the sidecar: {exc}", file=sys.stderr)
         return 1
+    if renamed:
+        api_path.write_text(json.dumps(api, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        notes = [f"model renamed to the site's file name: {line}" for line in renamed] + notes
     sidecar_path = api_path.with_suffix(".kura.yaml")
     sidecar_path.write_text(dump_yaml(sidecar), encoding="utf-8")
     print(f"wrote {sidecar_path.relative_to(REPO)}")
@@ -192,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--family", required=True, help="The sample folder, such as moss-image")
     fetch.add_argument("--name", help="The file name without .json; default the site's")
     fetch.set_defaults(func=cmd_fetch)
+    export = sub.add_parser("export", help="Export the API form of UI workflows with a running ComfyUI's frontend")
+    export.add_argument("ui", nargs="+", help="<family>/<name>.json under the samples folder")
+    export.add_argument("--comfyui", required=True, help="The ComfyUI to use, such as http://127.0.0.1:8188")
+    export.set_defaults(func=cmd_export)
     finish = sub.add_parser("finish", help="Check the API export and write its sidecar")
     finish.add_argument("api", help="<family>/<name>_api.json under the samples folder")
     finish.add_argument("--site-url", required=True, help="The workflow's URL on the site")

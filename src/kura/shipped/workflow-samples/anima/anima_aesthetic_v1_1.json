@@ -1,0 +1,682 @@
+{
+  "id": "d8034549-7e0a-40f1-8c2e-de3ffc6f1cae",
+  "revision": 0,
+  "last_node_id": 73,
+  "last_link_id": 123,
+  "nodes": [
+    {
+      "id": 54,
+      "type": "ModelSamplingAuraFlow",
+      "pos": [
+        603.9390258789062,
+        45.71437377929687
+      ],
+      "size": [
+        230.33058166503906,
+        82
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 99
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            100
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ModelSamplingAuraFlow",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49"
+      },
+      "widgets_values": [
+        3,
+        "flow"
+      ],
+      "widgets_values_named": {
+        "shift": 3,
+        "sampling": "flow"
+      }
+    },
+    {
+      "id": 56,
+      "type": "SaveImage",
+      "pos": [
+        1507.5098111474615,
+        188.1918182373047
+      ],
+      "size": [
+        840.8608467636989,
+        696.6737191157355
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 101
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "ComfyUI"
+      }
+    },
+    {
+      "id": 8,
+      "type": "VAEDecode",
+      "pos": [
+        1234.0964099462894,
+        188.1918182373047
+      ],
+      "size": [
+        225,
+        53.99998917783853
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 35
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 76
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            101
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      }
+    },
+    {
+      "id": 71,
+      "type": "MarkdownNote",
+      "pos": [
+        -374.54353037788127,
+        45.71437377929687
+      ],
+      "size": [
+        376.48595950551373,
+        371.57130378536453
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## models\n\n* diffusion_models\n\n  * [anima-aesthetic-v1.1.safetensors](https://huggingface.co/circlestone-labs/Anima/blob/main/split_files/diffusion_models/anima-aesthetic-v1.1.safetensors) (4.18 GB)\n\n* text_encoders\n\n  * [qwen_3_06b_base.safetensors](https://huggingface.co/circlestone-labs/Anima/blob/main/split_files/text_encoders/qwen_3_06b_base.safetensors) (1.19 GB)\n\n* vae\n\n  * [qwen_image_vae.safetensors](https://huggingface.co/circlestone-labs/Anima/blob/main/split_files/vae/qwen_image_vae.safetensors) (254 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── anima-aesthetic-v1.1.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen_3_06b_base.safetensors\n    └── 📂vae/\n        └── qwen_image_vae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/anima/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/anima/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/anima/)"
+      ],
+      "widgets_values_named": {
+        "text": "## models\n\n* diffusion_models\n\n  * [anima-aesthetic-v1.1.safetensors](https://huggingface.co/circlestone-labs/Anima/blob/main/split_files/diffusion_models/anima-aesthetic-v1.1.safetensors) (4.18 GB)\n\n* text_encoders\n\n  * [qwen_3_06b_base.safetensors](https://huggingface.co/circlestone-labs/Anima/blob/main/split_files/text_encoders/qwen_3_06b_base.safetensors) (1.19 GB)\n\n* vae\n\n  * [qwen_image_vae.safetensors](https://huggingface.co/circlestone-labs/Anima/blob/main/split_files/vae/qwen_image_vae.safetensors) (254 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── anima-aesthetic-v1.1.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen_3_06b_base.safetensors\n    └── 📂vae/\n        └── qwen_image_vae.safetensors\n```\n\n## guide\n\n- [日本語](https://comfyui.nomadoor.net/ja/basic-workflows/anima/)\n- [English](https://comfyui.nomadoor.net/en/basic-workflows/anima/)\n- [中文](https://comfyui.nomadoor.net/zh/basic-workflows/anima/)"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 38,
+      "type": "CLIPLoader",
+      "pos": [
+        69.92502940784797,
+        310.9265081232244
+      ],
+      "size": [
+        301.3524169921875,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "slot_index": 0,
+          "links": [
+            74,
+            75
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "models": [
+          {
+            "name": "qwen_3_06b_base.safetensors",
+            "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen_3_06b_base.safetensors",
+        "stable_diffusion",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen_3_06b_base.safetensors",
+        "type": "stable_diffusion",
+        "device": "default"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 39,
+      "type": "VAELoader",
+      "pos": [
+        909.0466451087534,
+        69.71437377929689
+      ],
+      "size": [
+        276.63636363636397,
+        58
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "slot_index": 0,
+          "links": [
+            76
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "models": [
+          {
+            "name": "qwen_image_vae.safetensors",
+            "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen_image_vae.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "qwen_image_vae.safetensors"
+      },
+      "color": "#322",
+      "bgcolor": "#533"
+    },
+    {
+      "id": 60,
+      "type": "EmptyLatentImage",
+      "pos": [
+        597.2696075439453,
+        584.737218645886
+      ],
+      "size": [
+        237,
+        106
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 122
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 123
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            103
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptyLatentImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40"
+      },
+      "widgets_values": [
+        1152,
+        896,
+        1
+      ],
+      "widgets_values_named": {
+        "width": 1152,
+        "height": 896,
+        "batch_size": 1
+      }
+    },
+    {
+      "id": 7,
+      "type": "CLIPTextEncode",
+      "pos": [
+        415.00001525878906,
+        403.99281184374564
+      ],
+      "size": [
+        419.26959228515625,
+        107.08506774902344
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 75
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            52
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Negative Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      },
+      "widgets_values": [
+        "worst quality, low quality, score_1, close-up face only, portrait crop, poolside, float ring, beach ball, toy boat, water gun, chibi, giant eyes, thick lineart, western comic, photorealistic, 3d, cgi, painterly, watercolor, muddy colors, neon colors, text, logo, watermark, looking at viewer"
+      ],
+      "widgets_values_named": {
+        "text": "worst quality, low quality, score_1, close-up face only, portrait crop, poolside, float ring, beach ball, toy boat, water gun, chibi, giant eyes, thick lineart, western comic, photorealistic, 3d, cgi, painterly, watercolor, muddy colors, neon colors, text, logo, watermark, looking at viewer"
+      }
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [
+        415.00001525878906,
+        186
+      ],
+      "size": [
+        419.26959228515625,
+        156.00363159179688
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 74
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            46
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      },
+      "widgets_values": [
+        "safe, masterpiece, best quality, score_9, score_8_up, anime screenshot, modern japanese illustration, high quality anime key visual, clean thin lineart, delicate linework, restrained line weight, refined anatomy, elegant proportions, slightly sharp face, narrow expressive eyes, subtle eyelashes, small nose, soft blush, muted but vivid colors, rich summer colors, bright but controlled saturation, dusty teal shadows, warm orange highlights, golden summer sunlight, soft cel shading, reduced palette, beautiful reflected light, beautiful window reflections, beautiful street reflections, emotional lighting, calm graphic balance, polished rendering,\n\n1girl, solo, giant japanese high school girl, school uniform, summer uniform, short sleeve blouse, pleated skirt, loose socks, loafers, drinking a frappuccino from a clear plastic cup with a straw, candid pose, natural posture, relaxed expression, slightly amused, not looking at viewer, no eye contact, looking to the side, look side, looking down toward the city, face turned away from camera, side profile feeling,\n\nclose high oblique view, near aerial angle, medium wide shot, the camera is close to the giant girl, the girl dominates the composition, large foreground character, her upper body and legs are clearly visible, she occupies about half of the image height, enormous scale contrast, miniature Tokyo-like city below and behind her,\n\nShe is casually sitting on the edge of a tall building, leaning lightly against another nearby building as if it were a wall. The city below is tiny compared to her. The moment feels ordinary to her but absurd to the viewer, like a quiet summer afternoon in an impossible world.\n\nA richly rendered Tokyo-like summer city spreads below her, dense but readable: sunlit rooftops, narrow streets, train tracks, rooftop machinery, glass windows, signs, tiny cars, intersections, convenience-store-like corners, vending machines, and layered buildings. The background has the richness of an anime film background, with detailed architecture, warm sunlight, blue-green shadows, bright reflected light, and a vivid summer atmosphere.\n\nKeep the character clean and elegant with thin anime lineart and soft cel shading, while the city background is richer, more textured, and more detailed. The contrast between the clean character and the dense vivid city is important. The image should feel natural, funny, and surreal at the same time, not like a posed pinup.\n\nsummer daylight, blue sky feeling, hot summer air, sunlit concrete, saturated teal shadows, warm peach highlights, sparkling window reflections, bright rooftop highlights, soft atmospheric depth, colorful but not garish, calm whimsical mood"
+      ],
+      "widgets_values_named": {
+        "text": "safe, masterpiece, best quality, score_9, score_8_up, anime screenshot, modern japanese illustration, high quality anime key visual, clean thin lineart, delicate linework, restrained line weight, refined anatomy, elegant proportions, slightly sharp face, narrow expressive eyes, subtle eyelashes, small nose, soft blush, muted but vivid colors, rich summer colors, bright but controlled saturation, dusty teal shadows, warm orange highlights, golden summer sunlight, soft cel shading, reduced palette, beautiful reflected light, beautiful window reflections, beautiful street reflections, emotional lighting, calm graphic balance, polished rendering,\n\n1girl, solo, giant japanese high school girl, school uniform, summer uniform, short sleeve blouse, pleated skirt, loose socks, loafers, drinking a frappuccino from a clear plastic cup with a straw, candid pose, natural posture, relaxed expression, slightly amused, not looking at viewer, no eye contact, looking to the side, look side, looking down toward the city, face turned away from camera, side profile feeling,\n\nclose high oblique view, near aerial angle, medium wide shot, the camera is close to the giant girl, the girl dominates the composition, large foreground character, her upper body and legs are clearly visible, she occupies about half of the image height, enormous scale contrast, miniature Tokyo-like city below and behind her,\n\nShe is casually sitting on the edge of a tall building, leaning lightly against another nearby building as if it were a wall. The city below is tiny compared to her. The moment feels ordinary to her but absurd to the viewer, like a quiet summer afternoon in an impossible world.\n\nA richly rendered Tokyo-like summer city spreads below her, dense but readable: sunlit rooftops, narrow streets, train tracks, rooftop machinery, glass windows, signs, tiny cars, intersections, convenience-store-like corners, vending machines, and layered buildings. The background has the richness of an anime film background, with detailed architecture, warm sunlight, blue-green shadows, bright reflected light, and a vivid summer atmosphere.\n\nKeep the character clean and elegant with thin anime lineart and soft cel shading, while the city background is richer, more textured, and more detailed. The contrast between the clean character and the dense vivid city is important. The image should feel natural, funny, and surreal at the same time, not like a posed pinup.\n\nsummer daylight, blue sky feeling, hot summer air, sunlit concrete, saturated teal shadows, warm peach highlights, sparkling window reflections, bright rooftop highlights, soft atmospheric depth, colorful but not garish, calm whimsical mood"
+      }
+    },
+    {
+      "id": 37,
+      "type": "UNETLoader",
+      "pos": [
+        267.6552734375,
+        45.71437377929687
+      ],
+      "size": [
+        305.3782043457031,
+        82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "slot_index": 0,
+          "links": [
+            99
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "models": [
+          {
+            "name": "anima-aesthetic-v1.1.safetensors",
+            "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-aesthetic-v1.1.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "anima-aesthetic-v1.1.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "anima-aesthetic-v1.1.safetensors",
+        "weight_dtype": "default"
+      },
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 73,
+      "type": "ResolutionSelector",
+      "pos": [
+        301.61918282352354,
+        607.9596761282988
+      ],
+      "size": [
+        270,
+        150
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            122
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            123
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "ResolutionSelector"
+      },
+      "widgets_values": [
+        "4:3 (Standard)",
+        1,
+        16
+      ],
+      "widgets_values_named": {
+        "aspect_ratio": "4:3 (Standard)",
+        "megapixels": 1,
+        "multiple": 16
+      }
+    },
+    {
+      "id": 3,
+      "type": "KSampler",
+      "pos": [
+        882.6830087451174,
+        188.1918182373047
+      ],
+      "size": [
+        303,
+        262
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 100
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 46
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 52
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 103
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            35
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33"
+      },
+      "widgets_values": [
+        123,
+        "fixed",
+        30,
+        4,
+        "er_sde",
+        "simple",
+        1
+      ],
+      "widgets_values_named": {
+        "seed": 123,
+        "control_after_generate": "fixed",
+        "steps": 30,
+        "cfg": 4,
+        "sampler_name": "er_sde",
+        "scheduler": "simple",
+        "denoise": 1
+      }
+    }
+  ],
+  "links": [
+    [
+      35,
+      3,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      46,
+      6,
+      0,
+      3,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      52,
+      7,
+      0,
+      3,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      74,
+      38,
+      0,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      75,
+      38,
+      0,
+      7,
+      0,
+      "CLIP"
+    ],
+    [
+      76,
+      39,
+      0,
+      8,
+      1,
+      "VAE"
+    ],
+    [
+      99,
+      37,
+      0,
+      54,
+      0,
+      "MODEL"
+    ],
+    [
+      100,
+      54,
+      0,
+      3,
+      0,
+      "MODEL"
+    ],
+    [
+      101,
+      8,
+      0,
+      56,
+      0,
+      "IMAGE"
+    ],
+    [
+      103,
+      60,
+      0,
+      3,
+      3,
+      "LATENT"
+    ],
+    [
+      122,
+      73,
+      0,
+      60,
+      0,
+      "INT"
+    ],
+    [
+      123,
+      73,
+      1,
+      60,
+      1,
+      "INT"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.620921323059155,
+      "offset": [
+        835.7918083727415,
+        467.7306729159434
+      ]
+    },
+    "frontendVersion": "1.53.6",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

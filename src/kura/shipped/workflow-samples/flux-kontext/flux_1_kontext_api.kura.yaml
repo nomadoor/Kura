@@ -1,0 +1,29 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/flux-1-kontext/flux_1_kontext.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2025-12-11);
+  API form exported with the ComfyUI frontend.
+models:
+  vae:
+    ae.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/vae/ae.safetensors
+      revision: 6fc90a3b1b653e935a0d175e260736de25b84df5
+  clip:
+    clip_l.safetensors:
+      repo: comfyanonymous/flux_text_encoders
+      filename: clip_l.safetensors
+      revision: 6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5
+      target_dir: text_encoders
+    t5xxl_fp8_e4m3fn.safetensors:
+      repo: comfyanonymous/flux_text_encoders
+      filename: t5xxl_fp8_e4m3fn.safetensors
+      revision: 6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5
+      target_dir: text_encoders
+  diffusion_models:
+    flux1-dev-kontext_fp8_scaled.safetensors:
+      repo: Comfy-Org/flux1-kontext-dev_ComfyUI
+      filename: split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors
+      revision: aa3dd3c4bf31e466dd343107b2af67c472b948bc
+lora_insert:
+  kind: model_only
+  model_node: '74'
+  strength_model: 0.8

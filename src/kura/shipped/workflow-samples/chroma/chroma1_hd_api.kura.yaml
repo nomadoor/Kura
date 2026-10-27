@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/chroma1-hd/chroma1_hd.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-08-01);
+  API form exported with the ComfyUI frontend.
+models:
+  vae:
+    ae.safetensors:
+      repo: Comfy-Org/z_image
+      filename: split_files/vae/ae.safetensors
+      revision: 94d47a468ec820d29a5dc09d4642539d76d49542
+  clip:
+    t5xxl_fp8_e4m3fn.safetensors:
+      repo: comfyanonymous/flux_text_encoders
+      filename: t5xxl_fp8_e4m3fn.safetensors
+      revision: 6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5
+      target_dir: text_encoders
+  diffusion_models:
+    Chroma1-HD.safetensors:
+      repo: lodestones/Chroma1-HD
+      filename: Chroma1-HD.safetensors
+      revision: 0e0c60ece1e82b17cb7f77342d765ba5024c40c0
+lora_insert:
+  kind: model_only
+  model_node: '55'
+  strength_model: 0.8

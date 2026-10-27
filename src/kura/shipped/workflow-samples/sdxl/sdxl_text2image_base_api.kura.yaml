@@ -1,0 +1,15 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/sdxl/sdxl_text2image_base.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2025-12-09);
+  API form exported with the ComfyUI frontend.
+models:
+  checkpoints:
+    sd_xl_base_1.0_0.9vae.safetensors:
+      repo: stabilityai/stable-diffusion-xl-base-1.0
+      filename: sd_xl_base_1.0_0.9vae.safetensors
+      revision: 462165984030d82259a11f4367a4eed129e94a7b
+lora_insert:
+  kind: model_clip
+  model_node: '4'
+  clip_node: '4'
+  strength_model: 0.8
+  strength_clip: 0.8

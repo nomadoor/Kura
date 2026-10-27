@@ -80,6 +80,21 @@ class ImportSiteWorkflowTests(unittest.TestCase):
         self.assertLessEqual(set(sidecar), SIDECAR_KEYS)
         self.assertIsNotNone(_lora_insert_from_sidecar(sidecar))
 
+    def test_a_checkpoint_loader_takes_the_lora_on_model_and_text_encoder(self) -> None:
+        api = {"4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5.safetensors"}}}
+        entry = {"url": "u", "models": [{"name": "v1-5.safetensors", "directory": "checkpoints", "url": f"{HF}/v1-5.safetensors"}], "custom_nodes": []}
+        sidecar, _ = MODULE.build_sidecar(api, entry, imported_on="d", commit=lambda r, v: "c")
+        self.assertEqual(sidecar["lora_insert"], {"kind": "model_clip", "model_node": "4", "clip_node": "4", "strength_model": 0.8, "strength_clip": 0.8})
+
+    def test_a_model_named_inside_the_authors_folders_takes_the_sites_file_name(self) -> None:
+        import copy
+
+        api = copy.deepcopy(API)
+        api["1"]["inputs"]["unet_name"] = "MOSS\\moss_image_sft_int8_convrot.safetensors"
+        self.assertEqual(MODULE.site_model_names(api, ENTRY), ["MOSS\\moss_image_sft_int8_convrot.safetensors -> moss_image_sft_int8_convrot.safetensors"])
+        self.assertEqual(api, API)
+        self.assertEqual(MODULE.site_model_names(api, ENTRY), [])
+
     def test_what_the_import_cannot_do_is_said(self) -> None:
         with self.assertRaisesRegex(ValueError, "custom nodes"):
             MODULE.build_sidecar(API, {**ENTRY, "custom_nodes": [{"id": "x"}]}, imported_on="d", commit=lambda r, v: "c")

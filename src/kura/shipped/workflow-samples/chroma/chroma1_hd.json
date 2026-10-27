@@ -1,0 +1,552 @@
+{
+  "id": "a6c871b8-10c5-4758-ba11-0c13a6d67507",
+  "revision": 0,
+  "last_node_id": 57,
+  "last_link_id": 88,
+  "nodes": [
+    {
+      "id": 45,
+      "type": "CLIPTextEncode",
+      "pos": [
+        428.4686584472656,
+        402.1686706542969
+      ],
+      "size": [
+        392.7272644042969,
+        107.36180877685547
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 71
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            72
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.31",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "low quality, bad anatomy, extra digits, missing digits, extra limbs, missing limbs"
+      ]
+    },
+    {
+      "id": 44,
+      "type": "T5TokenizerOptions",
+      "pos": [
+        153.3099365234375,
+        320.68304443359375
+      ],
+      "size": [
+        210,
+        82
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 70
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            69,
+            71
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.31",
+        "Node name for S&R": "T5TokenizerOptions"
+      },
+      "widgets_values": [
+        1,
+        0
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 42,
+      "type": "CLIPLoader",
+      "pos": [
+        -142.1746063232422,
+        320.68304443359375
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            70
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.31",
+        "Node name for S&R": "CLIPLoader",
+        "models": [
+          {
+            "name": "t5xxl_fp8_e4m3fn.safetensors",
+            "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "t5xxl_fp8_e4m3fn.safetensors",
+        "chroma",
+        "default"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 57,
+      "type": "MarkdownNote",
+      "pos": [
+        155.898193359375,
+        -99.75691986083984
+      ],
+      "size": [
+        353.5063781738281,
+        220.58982849121094
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## models\n- [Chroma1-HD.safetensors](https://huggingface.co/lodestones/Chroma1-HD/blob/main/Chroma1-HD.safetensors)\n- [t5xxl_fp8_e4m3fn_scaled.safetensors](https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/t5xxl_fp8_e4m3fn_scaled.safetensors)\n- [ae.safetensors](https://huggingface.co/Comfy-Org/z_image/blob/main/split_files/vae/ae.safetensors)\n\n\n```\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   └── Chroma1-HD.safetensors\n    ├── 📂text_encoders/\n    │   └── t5xxl_fp8_e4m3fn_scaled.safetensors\n    └── 📂vae/\n         └── ae.safetensors\n```"
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 8,
+      "type": "VAEDecode",
+      "pos": [
+        1247.5003662109375,
+        208.6058349609375
+      ],
+      "size": [
+        156,
+        46
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 52
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 63
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            88
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.30",
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 41,
+      "type": "VAELoader",
+      "pos": [
+        945,
+        86.43731689453125
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            63
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.30",
+        "Node name for S&R": "VAELoader",
+        "models": [
+          {
+            "name": "ae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/vae/ae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "ae.safetensors"
+      ],
+      "color": "#322",
+      "bgcolor": "#533"
+    },
+    {
+      "id": 56,
+      "type": "SaveImage",
+      "pos": [
+        1436.000732421875,
+        208.6058349609375
+      ],
+      "size": [
+        421.36083984375,
+        467.84173583984375
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 88
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.56"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    },
+    {
+      "id": 49,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        555.8366088867188,
+        575.5158081054688
+      ],
+      "size": [
+        261.60076904296875,
+        106
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            75
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.39",
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        1152,
+        1152,
+        1
+      ]
+    },
+    {
+      "id": 31,
+      "type": "KSampler",
+      "pos": [
+        900,
+        208.6058349609375
+      ],
+      "size": [
+        315,
+        262
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 87
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 67
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 72
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 75
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            52
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.30",
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        777,
+        "fixed",
+        26,
+        6,
+        "euler",
+        "beta",
+        1
+      ]
+    },
+    {
+      "id": 55,
+      "type": "UNETLoader",
+      "pos": [
+        546.31689453125,
+        38.45512008666992
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            87
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.56",
+        "Node name for S&R": "UNETLoader",
+        "models": [
+          {
+            "name": "Chroma1-HD.safetensors",
+            "url": "https://huggingface.co/lodestones/Chroma1-HD/resolve/main/Chroma1-HD.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "Chroma\\Chroma1-HD.safetensors",
+        "default"
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 43,
+      "type": "CLIPTextEncode",
+      "pos": [
+        421.19598388671875,
+        196.53317260742188
+      ],
+      "size": [
+        400,
+        149.17999267578125
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 69
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            67
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.31",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "A stylish young lady with short, wavy white hair, rendered in a stylish anime or manga art style.textile shading. She has piercing, light-colored eyes with sharp eyelashes, and a confident, slightly seductive gaze looking directly at the viewer. His lips are slightly parted. He is wearing a dark, sleeveless top. His left hand is raised to his face, fingers elegantly posed, with long, black painted nails and a gold ring on his index finger. He appears to be holding a cigarette near his lips, with smoke subtly depicted."
+      ]
+    }
+  ],
+  "links": [
+    [
+      52,
+      31,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      63,
+      41,
+      0,
+      8,
+      1,
+      "VAE"
+    ],
+    [
+      67,
+      43,
+      0,
+      31,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      69,
+      44,
+      0,
+      43,
+      0,
+      "CLIP"
+    ],
+    [
+      70,
+      42,
+      0,
+      44,
+      0,
+      "CLIP"
+    ],
+    [
+      71,
+      44,
+      0,
+      45,
+      0,
+      "CLIP"
+    ],
+    [
+      72,
+      45,
+      0,
+      31,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      75,
+      49,
+      0,
+      31,
+      3,
+      "LATENT"
+    ],
+    [
+      87,
+      55,
+      0,
+      31,
+      0,
+      "MODEL"
+    ],
+    [
+      88,
+      8,
+      0,
+      56,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8264462809917354,
+      "offset": [
+        181.6746063232422,
+        242.10691986083992
+      ]
+    },
+    "frontendVersion": "1.35.0",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

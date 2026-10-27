@@ -1,0 +1,24 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/krea-2/krea_2_turbo_text2image.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2026-10-06);
+  API form exported with the ComfyUI frontend.
+models:
+  diffusion_models:
+    krea2_turbo_fp8_scaled.safetensors:
+      repo: Comfy-Org/Krea-2
+      filename: diffusion_models/krea2_turbo_fp8_scaled.safetensors
+      revision: 1171f4dc7e325bf3734586942e737872506c73e1
+  clip:
+    qwen3vl_4b_fp8_scaled.safetensors:
+      repo: Comfy-Org/Krea-2
+      filename: text_encoders/qwen3vl_4b_fp8_scaled.safetensors
+      revision: 1171f4dc7e325bf3734586942e737872506c73e1
+      target_dir: text_encoders
+  vae:
+    qwen_image_vae.safetensors:
+      repo: Comfy-Org/Krea-2
+      filename: vae/qwen_image_vae.safetensors
+      revision: 1171f4dc7e325bf3734586942e737872506c73e1
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

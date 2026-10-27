@@ -1,0 +1,15 @@
+source: https://comfyui.nomadoor.net/workflows/basic-workflows/sd15-basics/sd1_5_text2image.json
+provenance: Imported 2026-10-28 from the site's UI workflow (updated 2025-12-06);
+  API form exported with the ComfyUI frontend.
+models:
+  checkpoints:
+    v1-5-pruned-emaonly-fp16.safetensors:
+      repo: Comfy-Org/stable-diffusion-v1-5-archive
+      filename: v1-5-pruned-emaonly-fp16.safetensors
+      revision: 9cfd069101959ca3828bf9c04a4419870832b74f
+lora_insert:
+  kind: model_clip
+  model_node: '4'
+  clip_node: '4'
+  strength_model: 0.8
+  strength_clip: 0.8

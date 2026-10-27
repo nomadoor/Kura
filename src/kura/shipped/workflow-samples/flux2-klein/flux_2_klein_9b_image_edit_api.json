@@ -1,0 +1,197 @@
+{
+  "6": {
+    "inputs": {
+      "text": "remove the deer",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 1234,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "48",
+        0
+      ],
+      "positive": [
+        "62",
+        0
+      ],
+      "negative": [
+        "62",
+        1
+      ],
+      "latent_image": [
+        "62",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "43": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.39"
+    }
+  },
+  "44": {
+    "inputs": {
+      "clip_name": "qwen_3_8b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.73"
+    }
+  },
+  "45": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "53",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.73"
+    }
+  },
+  "48": {
+    "inputs": {
+      "unet_name": "flux-2-klein-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "53": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "62": {
+    "inputs": {
+      "resolution": "keep resolution",
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "66",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ],
+      "images.image0": [
+        "65",
+        0
+      ]
+    },
+    "class_type": "ReferenceMultiLatent",
+    "_meta": {
+      "title": "Set Reference Multi Latent",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "63": {
+    "inputs": {
+      "image": "flux_2_klein_base_9b_image_edit_input.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "64": {
+    "inputs": {
+      "resize_type": "scale total pixels",
+      "resize_type.megapixels": 1,
+      "scale_method": "bicubic",
+      "input": [
+        "63",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "65": {
+    "inputs": {
+      "resize_type": "scale to multiple",
+      "resize_type.multiple": 16,
+      "scale_method": "bicubic",
+      "input": [
+        "64",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask",
+      "cnr_id": "comfy-core"
+    }
+  },
+  "66": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "Conditioning Zero Out",
+      "cnr_id": "comfy-core"
+    }
+  }
+}
