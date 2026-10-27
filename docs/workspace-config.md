@@ -67,7 +67,7 @@ digest moves only after compatibility checks.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `agents.view_images` | Whether agents may open user images (datasets, samples, render inputs) in this workspace, for example to write captions or judge samples. Even when true, an agent stops at the first image its own service's policy does not allow (`docs/adr/agents-and-user-images.md`) | `false` |
+| `agents.view_images` | Whether agents may open user images (datasets, samples, render inputs) in this workspace, for example to write captions or judge samples. Even when true, an agent stops at the first image its own service's policy does not allow (`docs/adr/agents-and-user-images.md`) | `false`, written by `kura init` |
 
 ## Job runner
 
@@ -176,15 +176,15 @@ workspace mount table.
 | Key | Purpose | Default |
 | --- | --- | --- |
 | `comfyui.endpoint` | Local ComfyUI API endpoint: scheme, host, port, and an optional path, with no user name, password, query, or fragment (they are refused, since the endpoint is kept in run records); `kura render new` starts each render from it, and `kura doctor comfyui` checks it | `http://127.0.0.1:8188` |
-| `comfyui.lora_dir` | Host path to ComfyUI `models/loras`; empty means no automatic LoRA staging | `""` |
+| `comfyui.lora_dir` | Host path to ComfyUI `models/loras`; unset means no automatic LoRA staging. `kura init` writes it as a commented line | unset |
 | `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
 | `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI: `auto` links when the endpoint's `/system_stats` reports Linux or WSL, and copies when it reports Windows, does not answer, or Kura itself runs on Windows; `symlink` or `copy` forces one | `auto` |
 | `comfyui.lora_stage_cleanup` | Whether temporary staged LoRAs are removed after render | `remove_after_render` |
-| `comfyui.model_patches_dir` | Host path to ComfyUI `models/model_patches`; required and non-empty when a render workflow declares a `model_patch` patch | `""` |
+| `comfyui.model_patches_dir` | Host path to ComfyUI `models/model_patches`; required when a render workflow declares a `model_patch` patch. `kura init` writes it as a commented line | unset |
 | `comfyui.model_patch_stage_subdir` | Temporary subdirectory under `model_patches_dir` | `Kura_tmp` |
 | `comfyui.model_patch_stage_mode` | How render runs expose a local model patch to ComfyUI; same choices as `lora_stage_mode` | `auto` |
 | `comfyui.model_patch_stage_cleanup` | Whether temporary staged model patches are removed after render | `remove_after_render` |
-| `comfyui.input_dir` | Host path to ComfyUI `input`; required and non-empty for local renders with a `type: image` patch binding. RunPod uses its managed Pod input directory instead | `""` |
+| `comfyui.input_dir` | Host path to ComfyUI `input`; required for local renders with a `type: image` patch binding. RunPod uses its managed Pod input directory instead. `kura init` writes it as a commented line | unset |
 | `comfyui.input_stage_subdir` | Temporary subdirectory under `input_dir` | `Kura_tmp` |
 | `comfyui.input_stage_mode` | How render runs expose a case image to ComfyUI; ComfyUI rejects symlinked `LoadImage` inputs, so this defaults to copying | `copy` |
 | `comfyui.input_stage_cleanup` | Whether temporary staged images are removed after render | `remove_after_render` |
