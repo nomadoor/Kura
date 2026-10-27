@@ -17,6 +17,7 @@ from kura.yamlio import YAMLError, load_run_yaml, load_yaml
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.runpod import pod_gpu_cost, pods_left
+from kura.run_results import downloaded_run_dir, outputs_folder
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, _EARLIEST, in_capacity_wait, latest_launch_id, record_time, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
@@ -221,7 +222,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     publication_state = _string(status.get("publication_state"))
     if not run_finished({"state": state, "publication_state": publication_state}):
         ended = None
-    outputs_path = _outputs_path(run_dir, status)
+    outputs_path = outputs_folder(run_dir, status)
     quiet_since = run_quiet_since(run_dir, status)
     is_stale = bool(quiet_since and (datetime.now().astimezone() - quiet_since).total_seconds() >= QUIET_RUN_NOTICE_SEC)
     capacity_wait = _capacity_wait_info(status["capacity_wait"]) if in_capacity_wait(status) and status["capacity_wait"] else None
@@ -742,21 +743,6 @@ def _datasets(workspace: Path, config: dict[str, Any]) -> list[RunDataset]:
     return datasets
 
 
-def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
-    primary = run_dir / "outputs"
-    if primary.exists() and any(primary.iterdir()):
-        return primary
-    render_images = run_dir / "samples" / "images"
-    if render_images.exists() and any(render_images.iterdir()):
-        return render_images
-    downloaded_dir = _downloaded_run_dir(run_dir, status)
-    if downloaded_dir is not None:
-        candidate = downloaded_dir / "outputs"
-        if candidate.exists():
-            return candidate
-    return primary
-
-
 def _checkpoint_count(outputs: Path) -> int:
     if not outputs.is_dir():
         return 0
@@ -775,11 +761,7 @@ def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:
 
 
 def _downloaded_run_dir(run_dir: Path, status: dict[str, Any]) -> Path | None:
-    downloaded = status.get("downloaded_run")
-    if not isinstance(downloaded, str) or not downloaded:
-        return None
-    candidate = run_dir / downloaded
-    return candidate if candidate.exists() else None
+    return downloaded_run_dir(run_dir, status)
 
 
 def _artifact_candidates(run_dir: Path, status: dict[str, Any], relative: str) -> list[Path]:

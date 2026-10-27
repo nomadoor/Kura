@@ -68,3 +68,43 @@ def train_run_results(run_dir: Path) -> dict[str, Any] | None:
         "renders": render_runs_by_training_run(runs_root).get(run_dir.name, []),
         "comparisons": comparisons.relative_to(runs_root.parent).as_posix() if comparisons.is_dir() else None,
     }
+
+
+def downloaded_run_dir(run_dir: Path, status: dict[str, Any]) -> Path | None:
+    """The copy of a RunPod run's remote folder that Kura downloaded, when there is one."""
+    downloaded = status.get("downloaded_run")
+    if not isinstance(downloaded, str) or not downloaded:
+        return None
+    candidate = run_dir / downloaded
+    return candidate if candidate.exists() else None
+
+
+def outputs_folder(run_dir: Path, status: dict[str, Any]) -> Path:
+    """Where a run's outputs are: its `outputs/` when it has any, else a render's image folder
+    when it has images, else a downloaded copy's `outputs/`, else `outputs/`."""
+    primary = run_dir / "outputs"
+    if primary.exists() and any(primary.iterdir()):
+        return primary
+    run = _mapping(run_dir / "resolved" / "manifest.lock.yaml") or _mapping(run_dir / "run.yaml") or {}
+    if run.get("type") == "render":
+        images = render_output_dir(run_dir, run)
+        if images.exists() and any(images.iterdir()):
+            return images
+    downloaded = downloaded_run_dir(run_dir, status)
+    if downloaded is not None and (downloaded / "outputs").exists():
+        return downloaded / "outputs"
+    return primary
+
+
+def results_folder(run_dir: Path) -> Path:
+    """The one folder to show a user a run's results in: a training run's `comparisons/` when it
+    has one, else the run's outputs folder."""
+    comparisons = run_dir / COMPARISONS_DIR
+    run = _mapping(run_dir / "run.yaml") or {}
+    if run.get("type") == "train" and comparisons.is_dir():
+        return comparisons
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        status = {}
+    return outputs_folder(run_dir, status if isinstance(status, dict) else {})

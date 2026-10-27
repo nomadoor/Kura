@@ -15,7 +15,7 @@ from rich.console import Console
 
 from kura.monitor import CapacityWaitInfo, ExecutorInfo, PodInfo, RunSummary
 from kura import tui
-from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, WatchScreen, _aware_datetime, _batch, _compute_location, _events_table, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _retained_run_history, _runpod_pod_url
+from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, WatchScreen, _aware_datetime, _batch, _compute_location, _events_table, _filter_run_history, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _retained_run_history, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
@@ -148,23 +148,6 @@ class TuiMetricsTests(unittest.TestCase):
     def test_runpod_pod_url(self) -> None:
         self.assertEqual(_runpod_pod_url("6oebwlls62iz1z"), "https://console.runpod.io/pods?id=6oebwlls62iz1z")
         self.assertIsNone(_runpod_pod_url(None))
-
-    def test_open_url_uses_windows_browser_bridge_on_wsl(self) -> None:
-        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui._windows_command", side_effect=lambda name: name if name == "cmd.exe" else None), patch("kura.tui.subprocess.Popen") as popen:
-            opened = _open_url("https://console.runpod.io/pods?id=pod-1")
-
-        self.assertTrue(opened)
-        popen.assert_called_once()
-        self.assertEqual(popen.call_args.args[0][:4], ["cmd.exe", "/c", "start", ""])
-
-    def test_open_path_missing_wsl_bridge_returns_false(self) -> None:
-        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui._windows_command", return_value=None), patch("kura.tui.subprocess.run") as run, patch("kura.tui.subprocess.Popen") as popen:
-            run.return_value.returncode = 0
-            run.return_value.stdout = r"\\wsl.localhost\\Ubuntu\\tmp" + "\n"
-            opened = _open_path(Path("/tmp"))
-
-        self.assertFalse(opened)
-        popen.assert_not_called()
 
     def test_aware_datetime_normalizes_naive_values(self) -> None:
         naive = datetime(2026, 6, 21, 10, 0, 0)

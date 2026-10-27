@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import math
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -28,6 +27,7 @@ from textual.widgets import Static
 
 from kura.dataset_manifest import CAPTION_SUFFIXES
 from kura.executors.common import STARTING_STATES, UNSUCCESSFUL_STATES
+from kura.opener import open_path, open_url
 from kura.run_results import train_run_results
 from kura.monitor import DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline, step_fraction
 
@@ -535,7 +535,7 @@ class UrlRow(Static):
             _copy_text(self.url, self.screen)
             self.notify("copied RunPod URL")
         else:
-            if _open_url(self.url):
+            if open_url(self.url):
                 self.notify("opened RunPod pod")
             else:
                 self.notify("could not open RunPod URL", severity="warning")
@@ -1180,7 +1180,7 @@ class MonitorScreen(Screen[None]):
             _copy_text(str(path), self)
             self.notify(f"copied {path.name}")
         else:
-            if _open_path(path):
+            if open_path(path):
                 self.notify(f"opened {path.name}")
             else:
                 self.notify(f"could not open {path.name}", severity="warning")
@@ -1216,10 +1216,10 @@ class MonitorScreen(Screen[None]):
             self.path_index = (self.path_index + 1) % len(self.path_targets)
             self.update_view()
 
-    def action_open_path(self) -> None:
+    def actionopen_path(self) -> None:
         if self.path_targets:
             target = self.path_targets[self.path_index]
-            if _open_path(target.path):
+            if open_path(target.path):
                 self.notify(f"opened {target.label}")
             else:
                 self.notify(f"could not open {target.label}", severity="warning")
@@ -1307,7 +1307,7 @@ class WatchScreen(Screen[None]):
             _copy_text(str(message.target.path), self)
             self.notify(f"copied {message.target.path.name}")
         else:
-            if _open_path(message.target.path):
+            if open_path(message.target.path):
                 self.notify(f"opened {message.target.path.name}")
             else:
                 self.notify(f"could not open {message.target.path.name}", severity="warning")
@@ -1317,10 +1317,10 @@ class WatchScreen(Screen[None]):
             self.path_index = (self.path_index + 1) % len(self.path_targets)
             self.refresh_data()
 
-    def action_open_path(self) -> None:
+    def actionopen_path(self) -> None:
         if self.path_targets:
             target = self.path_targets[self.path_index]
-            if _open_path(target.path):
+            if open_path(target.path):
                 self.notify(f"opened {target.label}")
             else:
                 self.notify(f"could not open {target.label}", severity="warning")
@@ -1793,72 +1793,6 @@ def _run_fingerprint(run_dir: Path) -> tuple[tuple[str, int, int], ...]:
     return tuple(values)
 
 
-def _open_path(path: Path) -> bool:
-    if not path.exists():
-        return False
-    if _is_wsl():
-        converted = subprocess.run(["wslpath", "-w", str(path)], text=True, capture_output=True, check=False)
-        converted_path = converted.stdout.strip()
-        if converted.returncode or not converted_path:
-            return False
-        explorer = _windows_command("explorer.exe")
-        cmd = _windows_command("cmd.exe")
-        if explorer:
-            command = [explorer, converted_path]
-        elif cmd:
-            command = [cmd, "/c", "start", "", converted_path]
-        else:
-            return False
-    elif platform.system() == "Darwin":
-        command = ["open", str(path)]
-    else:
-        if not shutil.which("xdg-open"):
-            return False
-        command = ["xdg-open", str(path)]
-    try:
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        return False
-    return True
-
-
-def _open_url(url: str) -> bool:
-    if _is_wsl():
-        cmd = _windows_command("cmd.exe")
-        explorer = _windows_command("explorer.exe")
-        if cmd:
-            command = [cmd, "/c", "start", "", url]
-        elif explorer:
-            command = [explorer, url]
-        else:
-            return False
-    elif platform.system() == "Darwin":
-        command = ["open", url]
-    else:
-        if not shutil.which("xdg-open"):
-            return False
-        command = ["xdg-open", url]
-    try:
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        return False
-    return True
-
-
-def _windows_command(name: str) -> str | None:
-    found = shutil.which(name)
-    if found:
-        return found
-    candidates = {
-        "explorer.exe": ("/mnt/c/Windows/explorer.exe",),
-        "cmd.exe": ("/mnt/c/Windows/System32/cmd.exe",),
-    }.get(name, ())
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return candidate
-    return None
-
-
 def _runpod_pod_url(pod_id: str | None) -> str | None:
     return f"https://console.runpod.io/pods?id={pod_id}" if pod_id else None
 
@@ -1879,13 +1813,6 @@ def _copy_text(value: str, screen: Screen[Any]) -> None:
         pass
     encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
     os.write(1, f"\033]52;c;{encoded}\a".encode("ascii"))
-
-
-def _is_wsl() -> bool:
-    try:
-        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
-    except OSError:
-        return False
 
 
 def _state_dot(summary: RunSummary) -> str:
