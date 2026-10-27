@@ -75,7 +75,8 @@ class OpenerTests(unittest.TestCase):
 @contextmanager
 def _workspace():
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        # The workspace is found by its resolved path (macOS puts temp folders under /private).
+        root = Path(directory).resolve()
         (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
         previous = Path.cwd()
         os.chdir(root)
@@ -101,7 +102,7 @@ def _kura_open(target: str) -> tuple[int, list[Path], str]:
 
     opened: list[Path] = []
     stderr = io.StringIO()
-    with patch("kura.cli.open_path", side_effect=lambda path: opened.append(path) or True), redirect_stderr(stderr), patch("sys.stdout", io.StringIO()):
+    with patch("kura.cli.open_path", side_effect=lambda path: opened.append(path.resolve()) or True), redirect_stderr(stderr), patch("sys.stdout", io.StringIO()):
         code = cmd_open(argparse.Namespace(target=target))
     return code, opened, stderr.getvalue()
 
