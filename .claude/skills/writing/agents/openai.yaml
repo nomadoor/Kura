@@ -1,0 +1,4 @@
+interface:
+  display_name: "Writing"
+  short_description: "How to write what the user reads"
+  default_prompt: "Use $writing to report this to the user."

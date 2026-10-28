@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish"
+  short_description: "Publish a trained LoRA to Hugging Face or ModelScope"
+  default_prompt: "Use $publish to publish this trained LoRA."

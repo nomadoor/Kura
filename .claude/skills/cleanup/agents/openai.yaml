@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cleanup"
+  short_description: "Free disk space in a Kura workspace"
+  default_prompt: "Use $cleanup to free disk space."

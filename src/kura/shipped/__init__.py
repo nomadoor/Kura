@@ -11,13 +11,12 @@ from importlib.resources import files
 from importlib.resources.abc import Traversable
 
 SHIPPED_SKILLS = (
-    "comfyui-render-workflow",
-    "dataset-prep",
-    "local-disk-safety",
-    "lora-evaluation",
-    "publishing-huggingface-modelscope",
-    "runpod-lifecycle",
-    "training-parameter-planning",
+    "cleanup",
+    "dataset",
+    "publish",
+    "render",
+    "train",
+    "writing",
 )
 
 

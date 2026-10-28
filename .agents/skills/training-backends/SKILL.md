@@ -75,7 +75,7 @@ evidence ledger and in the family card.
 ## Resource and Resume boundaries
 
 - Preserve the training recipe before applying execution accommodations.
-- Use `training-parameter-planning` for quality, memory, runtime, and cost
+- The shipped `train` skill covers quality, memory, runtime, and cost
   trade-offs.
 - Use `kura run resume`; never describe loading a standalone trained adapter
   into a fresh optimizer as Resume.
@@ -94,5 +94,5 @@ uv run kura doctor <backend>
 uv run python -m unittest discover -s tests
 ```
 
-Before a billed or large-download smoke, follow `local-disk-safety`,
-`runpod-lifecycle` when applicable, and the approval rules in `AGENTS.md`.
+Before a billed or large-download smoke, follow the shipped `train` skill's
+disk and RunPod references and the approval rules in `AGENTS.md`.

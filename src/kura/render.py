@@ -1209,7 +1209,7 @@ RENDER_RUN_SCHEMA: dict[str, frozenset[str]] = {
     "": frozenset({
         "schema_version", "id", "type", "created", "intent", "inputs", "generator", "executor", "compute",
         "workflow_patches", "render",
-        # Recorded as written (the lora-evaluation skill's plan); Kura reads nothing in it.
+        # Recorded as written (an optional evaluation plan); Kura reads nothing in it.
         "evaluation",
     }),
     "inputs": frozenset({"train_run", "workflow", "cases", "promptset", "checkpoint"}),

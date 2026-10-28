@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dataset"
+  short_description: "Make, review, and check a Kura training dataset"
+  default_prompt: "Use $dataset to prepare and check this training dataset."

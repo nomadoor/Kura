@@ -55,8 +55,9 @@ the source tree.
 
 **Two knowledge layers**
 
-- **Shipped knowledge:** family cards and general regrets, curated by the
-  maintainer and versioned with Kura.
+- **Shipped knowledge:** family cards, curated by the maintainer and
+  versioned with Kura. Kura ships no regrets list (amended 2026-10-28: what
+  every user should know belongs in a skill, a card, or a plan warning).
 - **User knowledge:** preferences, the user's own regrets, and the user's own
   cards. It lives in the workspace.
 - Agents read both. User knowledge wins when they conflict.

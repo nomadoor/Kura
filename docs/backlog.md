@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-28 | evaluation block | No shipped skill asks for the optional `evaluation:` block in a render's `run.yaml` any more (the lora-evaluation skill is gone), yet `scripts/check_evaluation_blocks.py` and `examples/lora-evaluation/` still validate and show its categories; decide whether the block and its check stay | shipped-skills rebuild | -
 - 2026-10-28 | workflow samples | The image-edit samples (FLUX.2 klein edit, Qwen-Image 2.1 edit, FLUX.1 Kontext; before them `example.png` in the older samples) load an input image Kura does not ship, and a sidecar cannot declare one, so a render must bind its own image with a `type: image` patch; consider shipping the site's input images with a way for the sidecar to stage them | CodeRabbit on the site-samples change (pre-existing) | -
 - 2026-10-27 | display | AI-Toolkit's dataset resolution `[768, 1024]` (two bucket sizes) is shown as `768x1024` in the plan's Experiment rows and elsewhere, which reads as one width-by-height size; for Musubi Tuner a pair really is one size, so the fix belongs in each adapter's `display()`, not the shared formatter | design review of the plan-changes change | -
 - 2026-10-27 | run new | `kura run new --from` copies the source's `parent_run` and `continuation`, though its help says it copies settings only; a run derived from a Resume run then looks like a Resume | design review of the plan-changes change | P9

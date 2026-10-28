@@ -55,23 +55,23 @@ class ManagedFileTests(unittest.TestCase):
             code, output = _init()
             self.assertEqual(code, 0, output)
             self.assertIn("Kura workspace", (root / "AGENTS.md").read_text(encoding="utf-8"))
-            for skill in ("dataset-prep", "runpod-lifecycle"):
+            for skill in ("dataset", "train"):
                 self.assertTrue((root / ".agents" / "skills" / skill / "SKILL.md").is_file())
                 self.assertTrue((root / ".claude" / "skills" / skill / "SKILL.md").is_file())
-            self.assertTrue((root / ".kura" / "knowledge" / "regrets.md").is_file())
+            self.assertTrue((root / ".kura" / "knowledge" / "model-families" / "anima.md").is_file())
             self.assertTrue((root / ".kura" / "reference" / "external-access.md").is_file())
             self.assertTrue((root / "workflows" / "samples" / "README.md").is_file())
             manifest = json.loads((root / MANIFEST).read_text(encoding="utf-8"))
             self.assertIn("AGENTS.md", manifest["files"])
-            self.assertFalse((root / ".agents" / "skills" / "dataset-prep" / "SKILL.md").is_symlink())
+            self.assertFalse((root / ".agents" / "skills" / "dataset" / "SKILL.md").is_symlink())
 
     def test_a_shipped_change_refreshes_unchanged_files_without_a_version_bump(self) -> None:
         with _workspace_with_source() as (root, source):
             _init()
-            (source / "skills" / "dataset-prep" / "SKILL.md").write_text("---\nname: dataset-prep\ndescription: changed\n---\n", encoding="utf-8")
+            (source / "skills" / "dataset" / "SKILL.md").write_text("---\nname: dataset\ndescription: changed\n---\n", encoding="utf-8")
             output = _refresh(root)
             self.assertIn("refreshed", output)
-            self.assertIn("changed", (root / ".claude" / "skills" / "dataset-prep" / "SKILL.md").read_text(encoding="utf-8"))
+            self.assertIn("changed", (root / ".claude" / "skills" / "dataset" / "SKILL.md").read_text(encoding="utf-8"))
             self.assertEqual(_refresh(root), "")
 
     def test_an_edited_file_is_kept_and_named_until_restored(self) -> None:
@@ -100,11 +100,11 @@ class ManagedFileTests(unittest.TestCase):
             self.assertFalse((root / ".claude").exists())
             code, output = _init(restore=True)
             self.assertEqual(code, 1)
-            self.assertIn(".claude/skills/dataset-prep/SKILL.md", output)
+            self.assertIn(".claude/skills/dataset/SKILL.md", output)
             self.assertFalse((root / ".claude").exists())
             code, _ = _init(restore=True, yes=True)
             self.assertEqual(code, 0)
-            self.assertTrue((root / ".claude" / "skills" / "dataset-prep" / "SKILL.md").is_file())
+            self.assertTrue((root / ".claude" / "skills" / "dataset" / "SKILL.md").is_file())
 
     def test_deleted_user_files_are_not_recreated_by_init(self) -> None:
         with _workspace_with_source() as (root, _):
@@ -118,11 +118,11 @@ class ManagedFileTests(unittest.TestCase):
             _init()
             (root / "knowledge" / "regrets.md").write_text("mine\n", encoding="utf-8")
             config = (root / "workspace.yaml").read_text(encoding="utf-8")
-            (source / "knowledge" / "regrets.md").write_text("shipped changed\n", encoding="utf-8")
+            (source / "knowledge" / "model-families" / "anima.md").write_text("shipped changed\n", encoding="utf-8")
             _refresh(root)
             self.assertEqual((root / "knowledge" / "regrets.md").read_text(encoding="utf-8"), "mine\n")
             self.assertEqual((root / "workspace.yaml").read_text(encoding="utf-8"), config)
-            self.assertEqual((root / ".kura" / "knowledge" / "regrets.md").read_text(encoding="utf-8"), "shipped changed\n")
+            self.assertEqual((root / ".kura" / "knowledge" / "model-families" / "anima.md").read_text(encoding="utf-8"), "shipped changed\n")
 
     def test_a_retired_shipped_file_is_removed_unless_edited(self) -> None:
         with _workspace_with_source() as (root, source):
@@ -204,13 +204,13 @@ class ManagedFileTests(unittest.TestCase):
     def test_restore_replaces_a_symlinked_managed_file(self) -> None:
         with _workspace_with_source() as (root, _):
             _init()
-            target = root / ".claude" / "skills" / "dataset-prep" / "SKILL.md"
+            target = root / ".claude" / "skills" / "dataset" / "SKILL.md"
             (root / "elsewhere.md").write_text("linked\n", encoding="utf-8")
             target.unlink()
             target.symlink_to(root / "elsewhere.md")
             _init(restore=True, yes=True)
             self.assertFalse(target.is_symlink())
-            self.assertIn("dataset-prep", target.read_text(encoding="utf-8"))
+            self.assertIn("dataset", target.read_text(encoding="utf-8"))
             self.assertEqual((root / "elsewhere.md").read_text(encoding="utf-8"), "linked\n")
 
     @unittest.skipIf(os.name == "nt", "symlinks need extra privileges on Windows")
@@ -218,17 +218,17 @@ class ManagedFileTests(unittest.TestCase):
         with _workspace_with_source() as (root, source), tempfile.TemporaryDirectory() as outside:
             _init()
             shutil.rmtree(root / ".claude")
-            (Path(outside) / "skills" / "dataset-prep").mkdir(parents=True)
-            (Path(outside) / "skills" / "dataset-prep" / "SKILL.md").write_text("theirs\n", encoding="utf-8")
+            (Path(outside) / "skills" / "dataset").mkdir(parents=True)
+            (Path(outside) / "skills" / "dataset" / "SKILL.md").write_text("theirs\n", encoding="utf-8")
             (root / ".claude").symlink_to(outside, target_is_directory=True)
-            (source / "skills" / "dataset-prep" / "SKILL.md").write_text("---\nname: dataset-prep\ndescription: changed\n---\n", encoding="utf-8")
-            shutil.rmtree(source / "skills" / "runpod-lifecycle")
+            (source / "skills" / "dataset" / "SKILL.md").write_text("---\nname: dataset\ndescription: changed\n---\n", encoding="utf-8")
+            shutil.rmtree(source / "skills" / "train")
             _refresh(root)
             code, _ = _init(restore=True, yes=True)
             self.assertEqual(code, 0)
-            self.assertEqual(sorted(p.relative_to(outside).as_posix() for p in Path(outside).rglob("*") if p.is_file()), ["skills/dataset-prep/SKILL.md"])
-            self.assertEqual((Path(outside) / "skills" / "dataset-prep" / "SKILL.md").read_text(encoding="utf-8"), "theirs\n")
-            self.assertIn("changed", (root / ".agents" / "skills" / "dataset-prep" / "SKILL.md").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(p.relative_to(outside).as_posix() for p in Path(outside).rglob("*") if p.is_file()), ["skills/dataset/SKILL.md"])
+            self.assertEqual((Path(outside) / "skills" / "dataset" / "SKILL.md").read_text(encoding="utf-8"), "theirs\n")
+            self.assertIn("changed", (root / ".agents" / "skills" / "dataset" / "SKILL.md").read_text(encoding="utf-8"))
 
     def test_init_reports_a_failure_to_record_what_it_wrote(self) -> None:
         with _workspace_with_source():
