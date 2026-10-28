@@ -135,8 +135,9 @@ Three ways, by what the user wants:
 ### 7. Check the result
 - Read `kura run status <run-id>`. What each state means and what comes next is in
   references/states.md.
-- Completed: check the outputs it lists and report. Renders and comparisons only when the user
-  asks (the `render` skill).
+- Completed: check the outputs it lists and report, ending with the next steps as choices (the
+  `writing` skill): compare the saves with a render (the `render` skill), train again with
+  changes, or publish. Start none without the user's yes.
 - Failed or interrupted: report what Kura says and the next step it names. A fix is a new run.
 - Write what was learned in the run's `notes.md`: settings, machine, what happened, the user's
   judgment.

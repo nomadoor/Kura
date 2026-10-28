@@ -1,4 +1,4 @@
-"""A training run's results are found in one way: the render runs that name it, and its comparisons/ folder."""
+"""A training run's results are found in one way: the render runs that name it, and its folder under the workspace's comparisons/."""
 
 from __future__ import annotations
 
@@ -49,8 +49,11 @@ class TrainRunResultsTests(unittest.TestCase):
                 ],
                 "comparisons": None,
             })
+            # A sheet is not part of the run's record: it lives outside the run, under the workspace.
             (train / "comparisons").mkdir()
-            self.assertEqual(run_results.train_run_results(train)["comparisons"], f"runs/{train.name}/comparisons")
+            self.assertIsNone(run_results.train_run_results(train)["comparisons"])
+            (Path(directory) / "comparisons" / train.name).mkdir(parents=True)
+            self.assertEqual(run_results.train_run_results(train)["comparisons"], f"comparisons/{train.name}")
 
     def test_a_render_run_has_no_such_results(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -87,9 +90,9 @@ class TrainRunResultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             train = _workspace(root)
-            (train / "comparisons").mkdir()
+            (root / "comparisons" / train.name).mkdir(parents=True)
             labels = {target.label: target.path for target in _path_targets(collect_run_summary(root, train.name))}
-            self.assertEqual(labels["comparisons"], train / "comparisons")
+            self.assertEqual(labels["comparisons"], root / "comparisons" / train.name)
             self.assertEqual(labels["render 20261027-1000_steps_bbbb"], root / "runs" / "20261027-1000_steps_bbbb" / "samples" / "images")
             self.assertEqual(labels["render 20261027-1100_sheet_cccc"], root / "runs" / "20261027-1100_sheet_cccc" / "samples" / "grid")
 
