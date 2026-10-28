@@ -42,7 +42,8 @@ What is in use (a model an unfinished run needs, say) is left out or refused.
 2. **Make one proposal, by effect**: how much space, what it costs to get back, whether it can
    be undone, what stays. Do not list commands.
 3. Get one yes for exactly what you proposed.
-4. Run each command first without `--yes` to see what it removes, then with `--yes`. One
+4. Run each command first without `--yes` to see what it removes. If it lists anything the
+   proposal did not, stop and show it. Add `--yes` only when they match. One
    command per class, all under the same yes:
    ```sh
    kura cleanup --yes                          # the free class

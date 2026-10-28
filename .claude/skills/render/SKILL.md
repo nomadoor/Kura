@@ -54,7 +54,9 @@ kura render launch --yes     generate in ComfyUI; follow it to the end
   sample on SFT, say). When it does, say so and let the user choose.
 - For a family without a sample, offer two ways and let the user choose:
   1. the user gives a workflow they trust
-  2. you build one, and first render one image without the LoRA to check the workflow itself
+  2. you build one, and first render one image without the LoRA to check the workflow itself:
+     that it made an image (`kura run status`); give the user its path. Judging it needs
+     `agents.view_images: true`.
 
 ### 3. Decide the prompts
 - Follow the **Prompts** section of the family card (`.kura/knowledge/model-families/<family>.md`,

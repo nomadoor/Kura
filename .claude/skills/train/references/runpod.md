@@ -1,7 +1,7 @@
 # Training on RunPod
 
 A RunPod run trains on a rented GPU (a Pod) that bills by the hour. Kura creates the Pod,
-sends the inputs, follows the training, brings the outputs back, and deletes the Pod. The
+sends the inputs (the dataset itself is copied to the Pod; say so with the price), follows the training, brings the outputs back, and deletes the Pod. The
 user decides every cost.
 
 ## Before the yes
@@ -9,8 +9,9 @@ user decides every cost.
 - Run `kura run plan` while the run is still a draft: it shows each requested GPU's stock and
   hourly price. Choose `compute.gpu` (a list, in order of preference) with the user, then
   compile and show the final plan.
-- Show the **cost ceiling** with the hourly price: the most the Pod's GPU time can bill before
-  its lease ends it. It does not cover disk storage, which RunPod bills separately; say so. When Kura says the ceiling is unknown, say why; do not estimate one.
+- Show the **cost ceiling** with the hourly price: the most the Pod's GPU time can bill from when its
+  container starts until its lease ends it. The image download before that, and disk storage,
+  bill outside it; say so. When Kura says the ceiling is unknown, say why; do not estimate one.
 - By default a run waits for its GPU when none is free (nothing bills while waiting); the plan
   says so. Prices may change while it waits.
 - Moving a run from this machine to RunPod, or to a dearer GPU, is a new cost decision, never a
@@ -39,7 +40,7 @@ user decides every cost.
 ```sh
 kura doctor runpod                    # the account, the key, Pods Kura knows about
 kura run reconcile <run-id>           # look at the Pod and record what is true
-kura run download <run-id> --force    # collect the outputs by hand
+kura run download <run-id>            # collect the outputs by hand (--force only when its refusal names it and the user agrees)
 kura run stop <run-id>                # delete the Pod, only after the user's yes
 ```
 

@@ -58,6 +58,8 @@ dataset's shape, do part 2 only.
 - In an edit dataset a caption is the instruction (what to change), not a description of the
   image. Follow the model's official way.
 - Write them all by one rule. Show the user a few first, and continue after their OK.
+- Captions that already exist are the user's. Before replacing any, say how many there are,
+  keep a copy outside the dataset folder, and get a yes for replacing them.
 
 ### Review
 - Look at: images (blur, duplicates, ones unlike the rest), captions (missing, off the agreed
@@ -111,7 +113,8 @@ references/rows.md.
   `items.v2.candidate.jsonl`. Decide with the user which to keep.
 
 ### Check it
-- `kura dataset validate <id>`: whether the shape is valid. If not, follow the fix it names.
+- `kura dataset validate <id>`: whether the shape is valid. If not, show the user the fix it names;
+  change `items.jsonl` only after their yes, keeping the previous file as a copy.
 - `kura dataset inspect <id>`: counts, resolutions, missing or duplicate captions, trigger-word
   coverage, missing pairs, aspect-ratio mismatches. It does not look at image content.
 - Tell the user the results as facts, not a verdict. Do not fix things on your own.

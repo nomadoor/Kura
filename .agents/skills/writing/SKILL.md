@@ -88,7 +88,7 @@ a table, or short bullets
 - ⚠️: values that do not match what the user said, or changed unasked (if there are none,
   leave ⚠️ out).
 - "This training" table: model, dataset, main settings, time, disk; on RunPod the hourly price
-  and the cost ceiling (GPU time only; disk is billed separately).
+  and the cost ceiling (GPU time after the container starts; the image download and disk bill outside it).
 - "Changed from the previous run" table: the differences `kura run plan` lists.
 - ▶: start or change, and what each does.
 

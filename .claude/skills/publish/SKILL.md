@@ -51,6 +51,9 @@ upload (with the user's own login)
   it finds.
 - `kura check artifacts artifacts/publish/<repository name>`: it lists the weight files. Only
   the LoRA you mean to upload may be listed (it always lists that one).
+- A LoRA file can carry training metadata in its header (settings, and with some trainers
+  caption words or folder names). Kura neither checks nor removes it; tell the user it goes
+  up with the file.
 - Show it by the `writing` skill: where it goes, public or private, the files, the model card.
 - Wait for the user's yes.
 

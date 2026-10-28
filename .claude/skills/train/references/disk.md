@@ -24,5 +24,5 @@ it could crash Docker partway through.
 
 ▶ Choose
 - A. Free space first → I list what can be freed and wait for your yes
-- B. Run it on RunPod → a new plan with the GPU price
+- B. Run it on RunPod → a new plan with the GPU price; your dataset is copied to the rented GPU
 ```
