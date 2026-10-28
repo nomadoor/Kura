@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Validate LoRA evaluation skill wiring and family-card metadata, and keep the model files a card
-lists equal to the scripts/real_smoke.py recipe they were verified with."""
+"""Validate the shipped model-family cards: their source lines and provenance metadata, and that the
+model files a card lists equal the scripts/real_smoke.py recipe they were verified with."""
 
 from __future__ import annotations
 
@@ -18,11 +18,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from kura.yamlio import load_yaml_text  # noqa: E402
 
 REAL_SMOKE = ROOT / "scripts" / "real_smoke.py"
-SKILL_DIR = ROOT / "src" / "kura" / "shipped" / "skills" / "lora-evaluation"
-# Model-family knowledge is shared by the training and evaluation skills and is
-# not specific to one agent; it ships with Kura and is written into workspaces.
+# Model-family knowledge is read by the train, dataset, and render skills and is not specific to
+# one agent; it ships with Kura and is written into workspaces.
 KNOWLEDGE_DIR = ROOT / "src" / "kura" / "shipped" / "knowledge" / "model-families"
-ORDER = "dataset-prep -> training-parameter-planning -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
 REQUIRED_FIELDS = (
     "source_url",
     "source_revision",
@@ -117,34 +115,13 @@ def card_model_file_errors(path: Path, recipes: list[tuple[str, dict[str, Any]]]
 
 def main() -> int:
     errors: list[str] = []
-    skill_path = SKILL_DIR / "SKILL.md"
-    if not skill_path.is_file():
-        errors.append(f"missing {skill_path.relative_to(ROOT)}")
-        skill_text = ""
-    else:
-        skill_text = skill_path.read_text(encoding="utf-8")
-    agents_path = SKILL_DIR / "agents" / "openai.yaml"
-    if not agents_path.is_file():
-        errors.append(f"missing {agents_path.relative_to(ROOT)}")
     cards = sorted(KNOWLEDGE_DIR.glob("*.md")) if KNOWLEDGE_DIR.is_dir() else []
     if not cards:
-        errors.append("lora-evaluation requires at least one model-family knowledge card")
+        errors.append("Kura ships no model-family knowledge card")
     recipes = real_smoke_recipes()
     for card in cards:
         errors.extend(card_errors(card))
         errors.extend(card_model_file_errors(card, recipes))
-
-    agents_text = (ROOT / "src" / "kura" / "shipped" / "AGENTS.md").read_text(encoding="utf-8")
-    normalized_skill = " ".join(skill_text.split())
-    normalized_agents = " ".join(agents_text.split())
-    if ORDER not in normalized_skill:
-        errors.append("lora-evaluation/SKILL.md is missing the canonical skill order")
-    if "`lora-evaluation` — before evaluating a trained adapter" not in normalized_agents:
-        errors.append("the shipped AGENTS.md must route evaluations to lora-evaluation")
-    if "Kura currently has no video render execution path" not in normalized_skill:
-        errors.append("lora-evaluation/SKILL.md must state that video render execution is unavailable")
-    if "do not invoke ComfyUI or another generator outside Kura" not in normalized_skill:
-        errors.append("lora-evaluation/SKILL.md must prohibit out-of-Kura video execution")
 
     if errors:
         print("Evaluation knowledge validation failed:", file=sys.stderr)

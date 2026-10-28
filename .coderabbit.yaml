@@ -4,3 +4,7 @@ inheritance: true
 reviews:
   auto_review:
     enabled: false
+  # Generated skill mirrors (scripts/sync_agent_skills.py); their sources are reviewed.
+  path_filters:
+    - "!.agents/skills/**"
+    - "!.claude/skills/**"

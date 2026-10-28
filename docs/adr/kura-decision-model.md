@@ -63,8 +63,9 @@ approval system. At an interactive terminal Kura accepts only `y`; in a
 non-interactive session the start requires `--yes`, which an agent may use
 only after the user has seen the plan and said to start. On RunPod the
 terminal first shows the GPU candidates, current hourly prices, and effective
-maximum lease. Following a run already started asks nothing. Renders are not
-confirmed this way.
+maximum lease. Following a run already started asks nothing. A render launch
+takes the same confirmation, locally as on RunPod (amended 2026-10-28: a local
+render started without one).
 
 Amended 2026-10-27: the confirmation was RunPod-only, as a billing guard. In
 the maintainer's install test an agent started a local training run nobody had

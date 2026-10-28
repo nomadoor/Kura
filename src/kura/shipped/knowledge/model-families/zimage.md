@@ -24,8 +24,7 @@
   LoRA file (saved bf16) was 140,160,116 bytes.
   source: acceptance test 2026-10-19, run 20261019-0750_vivi-zimage-local_887b
 - Caption style for this family's Qwen3 text encoder (tag lists or natural
-  language): not recorded yet. regrets.md flags tag captions for a model
-  prompted in natural language; no recorded Z-Image run compared the two.
+  language): not recorded yet; no recorded Z-Image run compared the two.
   source: acceptance test 2026-10-19 (the card had no entry)
 - Upstream's starting timestep values: Musubi's own Z-Image guide trains with
   `timestep_sampling: shift`, `weighting_scheme: none`, and

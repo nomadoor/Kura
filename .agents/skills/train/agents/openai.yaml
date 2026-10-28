@@ -1,0 +1,4 @@
+interface:
+  display_name: "Train"
+  short_description: "Train a LoRA with Kura, locally or on RunPod"
+  default_prompt: "Use $train to plan and run this LoRA training."

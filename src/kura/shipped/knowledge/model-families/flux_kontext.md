@@ -21,4 +21,4 @@
 - lr: 1e-4 is the common upstream reference.
 - batch: 1 micro × accumulation 2–4
 - source: upstream (Musubi examples) for the 1e-4 reference.
-- notes: paired/control datasets change data needs — see `dataset-prep`.
+- notes: paired/control datasets change data needs — see the `dataset` skill.

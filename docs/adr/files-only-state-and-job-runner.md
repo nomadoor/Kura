@@ -88,7 +88,8 @@ render runs alike.
   The start confirmation that `kura-decision-model.md` requires of every
   training launch (with the price, on RunPod) is taken by the writer:
   `kura run execute` at the terminal or through `--yes`, and the UI in its
-  approval control. The request records when it was taken (`confirmed_at`;
+  approval control. A render launch takes the same confirmation, locally as on
+  RunPod (amended 2026-10-28: a local render started without one). The request records when it was taken (`confirmed_at`;
   requests an older Kura wrote carry `billing_confirmed_at` for RunPod). The
   runner never prompts.
 - The runner claims a request under a per-run launch lock by creating its

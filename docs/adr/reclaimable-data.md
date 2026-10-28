@@ -102,7 +102,7 @@ the user names each model.
 **4. Other surfaces point at that command and do not clean up.**
 `kura doctor disk`, the launch's disk refusal, and the disk watch's stop
 reason each end with one sentence naming the command. The shipped
-`local-disk-safety` skill tells the agent to run it, present the items by
+`cleanup` skill tells the agent to run it, present the items by
 effect (space freed, cost to recover, reversible or not), get one yes, and
 apply. Nothing cleans up in the background.
 

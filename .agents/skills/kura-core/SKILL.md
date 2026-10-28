@@ -69,7 +69,7 @@ by `kura.secrets.is_secret_name` and declared values read through
 
 Pod-side deletion, shared by training and render Pods, lives in
 `src/kura/container_scripts/pod_self_delete.sh`. Usage guidance stays in the
-shipped `runpod-lifecycle` skill.
+shipped `train` skill (its `references/runpod.md`).
 
 ## Local disk
 
@@ -81,4 +81,4 @@ reserve" for every gate (`docs/adr/local-disk-protection.md`). What a user
 can free is one inventory in four classes by what deleting costs (free,
 download, resume, outputs); outputs are never reclaimable by default
 (`docs/adr/reclaimable-data.md`). Usage guidance stays in the shipped
-`local-disk-safety` skill.
+`train` (its `references/disk.md`) and `cleanup` skills.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Render"
+  short_description: "Render with ComfyUI through Kura"
+  default_prompt: "Use $render to render with this workflow and LoRA."

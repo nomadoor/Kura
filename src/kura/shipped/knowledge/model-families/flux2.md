@@ -57,8 +57,7 @@ source: owner (2026-08-15)
   `architecture: flux2` because the trainer's generic default is `sigma`.
   source: upstream (Musubi Tuner flux_2.md guide at the pinned v0.3.5)
 - Caption style for this family's Qwen3 text encoder (tag lists or natural
-  language): not recorded yet. regrets.md flags tag captions for a model
-  prompted in natural language; no recorded FLUX.2 run compared the two.
+  language): not recorded yet; no recorded FLUX.2 run compared the two.
   source: acceptance test 2026-10-19 (the card had no entry)
 - No evaluated task entries yet.
 

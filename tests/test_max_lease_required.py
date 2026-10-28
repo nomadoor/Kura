@@ -105,7 +105,7 @@ class MaxLeaseRequiredTests(unittest.TestCase):
                 patch.object(runner, "write_launch_request") as request,
                 patch("sys.stderr", new_callable=io.StringIO) as stderr,
             ):
-                through_runner = launch._launch_render_through_runner("example", follow=False, runpod={"image": None, "yes": True, "max_lease": "0"})
+                through_runner = launch._launch_render_through_runner("example", follow=False, yes=True, runpod={"image": None, "max_lease": "0"})
                 direct = launch.launch_run("example", executor="runpod", dry_run=False, max_lease="0s")
             self.assertEqual((through_runner, direct), (1, 1))
             create.assert_not_called()

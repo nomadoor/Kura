@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import re
 import unittest
 import zipfile
 from pathlib import Path
@@ -16,36 +17,34 @@ class ShippedContentTests(unittest.TestCase):
     def test_usage_skills_knowledge_and_samples_ship_in_the_package(self) -> None:
         root = shipped_root()
         self.assertEqual(sorted(path.name for path in (root / "skills").iterdir()), sorted(SHIPPED_SKILLS))
-        self.assertTrue((root / "knowledge" / "regrets.md").is_file())
+        # Kura ships no regrets list; each user keeps their own in knowledge/regrets.md.
+        self.assertFalse((root / "knowledge" / "regrets.md").exists())
         self.assertTrue(any((root / "knowledge" / "model-families").iterdir()))
         self.assertTrue((root / "workflow-samples" / "README.md").is_file())
 
-    def test_agents_md_routes_every_skill_and_the_moved_rules_live_in_skills(self) -> None:
+    def test_agents_md_routes_every_skill(self) -> None:
         root = shipped_root()
         agents = (root / "AGENTS.md").read_text(encoding="utf-8")
-        routing = agents.split("## Which skill to read first", 1)[1]
         for skill in SHIPPED_SKILLS:
-            self.assertIn(f"`{skill}` — before", routing, skill)
+            self.assertIn(f"| `{skill}` |", agents, skill)
 
-        def skill(name: str) -> str:
-            return " ".join((root / "skills" / name / "SKILL.md").read_text(encoding="utf-8").split())
-
-        moved = {
-            "comfyui-render-workflow": ["Author one explicit `inputs.cases` JSONL queue", "intentional agent-owned presentation task"],
-            "lora-evaluation": ["dataset-prep -> training-parameter-planning -> training -> lora-evaluation"],
-            "training-parameter-planning": ["Training configuration and compute selection are one plan"],
-            "dataset-prep": ["the dataset manifest inventories inputs"],
-            "local-disk-safety": ["rank × 64 MiB", "fix-permissions"],
-        }
-        for name, phrases in moved.items():
-            for phrase in phrases:
-                self.assertIn(phrase, skill(name), name)
+    def test_every_skill_has_the_parts_an_agent_follows(self) -> None:
+        # Each task skill says who decides, and every skill's references exist.
+        root = shipped_root()
+        for name in SHIPPED_SKILLS:
+            text = (root / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+            with self.subTest(skill=name):
+                if name != "writing":
+                    self.assertIn("## Who decides", text)
+                for reference in re.findall(r"references/[a-z]+\.md", text):
+                    if "skill" not in text.split(reference, 1)[0].rsplit("\n", 1)[-1]:
+                        self.assertTrue((root / "skills" / name / reference).is_file(), reference)
 
     def test_agents_are_told_never_to_print_a_container_environment(self) -> None:
         # Docker keeps a local run's HF_TOKEN in the container's configuration.
         root = shipped_root()
         agents = " ".join((root / "AGENTS.md").read_text(encoding="utf-8").split())
-        self.assertIn("Never run `docker inspect`, `docker exec`, or any other command that prints", agents)
+        self.assertIn("Do not show a container's environment either (`docker inspect`, `docker exec`, reading `/proc/<pid>/environ`)", agents)
         mentions = [
             path for path in root.rglob("*.md")
             for _ in range(path.read_text(encoding="utf-8").count("docker inspect"))

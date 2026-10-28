@@ -85,6 +85,40 @@ class LocalLaunchConfirmationTests(unittest.TestCase):
             self.assertEqual(len(_requests(run_dir)), 1)
 
 
+def _render(*, yes: bool, tty: bool, answer: str = "") -> tuple[int, str]:
+    """Start the compiled local render without following it; the checks before the confirmation pass."""
+    stderr = io.StringIO()
+    with patch.object(launch, "launch_render", return_value=0), \
+            patch.object(runner, "ensure_runner", return_value=False), patch.object(runner, "await_claim", return_value=True), \
+            patch("sys.stdin.isatty", return_value=tty), patch("sys.stdin.readline", return_value=answer), redirect_stderr(stderr):
+        code = launch._launch_render_through_runner("example", follow=False, yes=yes)
+    return code, stderr.getvalue()
+
+
+class LocalRenderConfirmationTests(unittest.TestCase):
+    def test_without_a_terminal_a_local_render_needs_yes(self) -> None:
+        with _docker_run() as run_dir:
+            code, text = _render(yes=False, tty=False)
+            self.assertEqual(code, 1)
+            self.assertIn("kura render launch example --yes", text)
+            self.assertEqual(_requests(run_dir), [])
+
+    def test_yes_starts_it_and_the_request_records_when(self) -> None:
+        with _docker_run() as run_dir:
+            code, _ = _render(yes=True, tty=False)
+            self.assertEqual(code, 0)
+            (request,) = _requests(run_dir)
+            self.assertTrue(request["confirmed_at"])
+
+    def test_at_a_terminal_only_y_starts_it(self) -> None:
+        for answer, expected in (("y\n", 0), ("n\n", 1)):
+            with self.subTest(answer=answer), _docker_run() as run_dir:
+                code, text = _render(yes=False, tty=True, answer=answer)
+                self.assertEqual(code, expected)
+                self.assertIn("Start render run example on this machine?", text)
+                self.assertEqual(len(_requests(run_dir)), 1 if expected == 0 else 0)
+
+
 class OneConfirmationTests(unittest.TestCase):
     def test_local_and_runpod_launches_take_the_same_confirmation(self) -> None:
         from kura.executors import common, runpod

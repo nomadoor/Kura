@@ -86,7 +86,7 @@ dataset, and selecting a subset for one run remains the run's concern under
 - `kura dataset` gains write commands: remove and restore items, replace a
   reference with a derived file, set a caption, and restore a revision.
   Restoring is itself a new revision.
-- The `dataset-prep` skill directs agents to these commands instead of editing
+- The `dataset` skill directs agents to these commands instead of editing
   `items.jsonl` or caption files directly.
 - Storage grows only by derived files and small manifest snapshots.
 - Existing datasets start their history at their current manifest.

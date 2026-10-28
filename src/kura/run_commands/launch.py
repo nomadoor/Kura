@@ -220,8 +220,8 @@ def execute_run(
     if locked.get("type") == "render":
         # A render names its executor in `executor.name`, not in `compute`.
         if render_executor(locked) == "runpod":
-            return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels, runpod={"image": image, "yes": yes, "max_lease": max_lease})
-        return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels)
+            return _launch_render_through_runner(run_id, follow=True, yes=yes, notify_channels=notify_channels, runpod={"image": image, "max_lease": max_lease})
+        return _launch_render_through_runner(run_id, follow=True, yes=yes, notify_channels=notify_channels)
     if executor == "runpod":
         policy = capacity_policy(locked)
         return _launch_runpod_through_runner(run_id, follow=True, yes=yes, options={
@@ -516,11 +516,12 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
     return code
 
 
-def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels: Any = None, runpod: dict[str, Any] | None = None) -> int:
+def _launch_render_through_runner(run_id: str, *, follow: bool, yes: bool = False, notify_channels: Any = None, runpod: dict[str, Any] | None = None) -> int:
     """Hand a render to the job runner after checking it here, then follow it or return.
 
-    For a RunPod render (`runpod` given) the checks include the billing
-    confirmation; the runner creates the Pod from the settings confirmed here.
+    A render takes the one launch confirmation a training run takes (`yes` or `y` at a terminal).
+    For a RunPod render (`runpod` given) that is the billing confirmation; the runner creates the
+    Pod from the settings confirmed here.
     """
     from kura import runner
 
@@ -548,7 +549,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
         if missing:
             print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
                   "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
-        if launch_render_runpod(run_id, dry_run=False, image=runpod.get("image"), yes=bool(runpod.get("yes")),
+        if launch_render_runpod(run_id, dry_run=False, image=runpod.get("image"), yes=yes,
                                 max_lease_sec=max_lease_sec, check_only=True, prepared=prepared):
             return 1
         try:
@@ -567,7 +568,15 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1
         try:
-            request = runner.write_launch_request(run_dir, executor="render-local", notify=notify_channels)
+            confirm_launch(
+                f"Start render run {run_id} on this machine?", yes=yes,
+                refusal=(f"starting a render needs the user's go-ahead: show them what it renders, and once they say to "
+                         f"start, run `kura render launch {run_id} --yes` (or answer y at a terminal)"),
+                cancelled=(f"not started; to start it, answer y at a terminal, or run `kura render launch {run_id} --yes` "
+                           "once the user has said to start"),
+            )
+            request = runner.write_launch_request(run_dir, executor="render-local", notify=notify_channels,
+                                                  confirmed_at=datetime.now().astimezone().isoformat())
         except (OSError, ValueError) as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1
@@ -684,5 +693,6 @@ def cmd_render_launch(args: argparse.Namespace) -> int:
     if args.dry_run:
         return launch_run(args.run_id, executor=executor, dry_run=True, image=getattr(args, "image", None),
                           notify_channels=getattr(args, "notify", None))
-    runpod = {"image": getattr(args, "image", None), "yes": bool(getattr(args, "yes", False)), "max_lease": None} if executor == "runpod" else None
-    return _launch_render_through_runner(args.run_id, follow=True, notify_channels=getattr(args, "notify", None), runpod=runpod)
+    runpod = {"image": getattr(args, "image", None), "max_lease": None} if executor == "runpod" else None
+    return _launch_render_through_runner(args.run_id, follow=True, yes=bool(getattr(args, "yes", False)),
+                                         notify_channels=getattr(args, "notify", None), runpod=runpod)

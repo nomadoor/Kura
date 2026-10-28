@@ -210,9 +210,8 @@ in `knowledge/model-families/` and win where they disagree.
 _Avoid_: knowledge card, baseline card, model card
 
 **Regret**:
-A `trigger -> reminder` entry, shipped in `.kura/knowledge/regrets.md` or the
-user's own in `knowledge/regrets.md`, recorded after a real
-regret and shown at Last look.
+A `trigger -> reminder` entry in the user's own `knowledge/regrets.md`,
+recorded after a real regret and shown at Last look. Kura ships none.
 
 **Last look**:
 The reminder of relevant regrets shown just before plan approval; never a gate.

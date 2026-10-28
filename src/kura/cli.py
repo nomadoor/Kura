@@ -1920,7 +1920,7 @@ def build_parser() -> argparse.ArgumentParser:
     render_launch.add_argument("--dry-run", action="store_true")
     render_launch.add_argument("--image", help="Override the runtime image for this render only")
     render_launch.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
-    render_launch.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
+    render_launch.add_argument("--yes", action="store_true", help="Confirm the start non-interactively (on RunPod, the billed Pod); use only after the user said to start")
     render_launch.set_defaults(func=cmd_render_launch)
     render_status = render_sub.add_parser("status", help="Print the latest render status")
     render_status.add_argument("run_id")
