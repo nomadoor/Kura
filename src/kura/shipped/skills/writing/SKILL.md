@@ -59,11 +59,15 @@ a table, or short bullets
 
 - **First line**: the state, bold, with its marker.
 - **⚠️**: a value that does not match what the user said, a value that changed though they did
-  not ask for it, anything unexpected. It comes first.
+  not ask for it, anything unexpected. It comes first. Nothing else goes under it.
+- **Values you chose** that the user did not name go in the table, marked "(proposed)"; not
+  under ⚠️.
 - **Topic lines** name the topic as the user sees it. Not the writer's words ("questions",
   "next steps").
 - **▶**: for each choice, what happens if it is chosen. Mark the recommended one and say why in
   a few words. With no choice to make, leave out ▶ and end with one line: "Next, I will ...".
+- **One ▶ per message.** When the user decides two things, give each its own line inside it:
+  `- **Backend**: A. AI-Toolkit (recommended) / B. Musubi Tuner`.
 
 ## Tables or bullets
 
@@ -128,6 +132,7 @@ a table, or short bullets
 
 - Ask a question in the middle of the text. Put choices in the one ▶ place.
 - Suggest work nobody asked for as a question ("Shall I also ...?").
+- Say you will go ahead if the user does not answer.
 - Say the same thing twice.
 - Report each step that went as planned.
 - Put a failure or a surprise late and small.
@@ -162,6 +167,31 @@ a table, or short bullets
 ▶ **Choose**
 - **A. Set the learning rate to 7e-5** (recommended) → I fix it and show this again
 - **B. Start as it is** → training starts now (about 9 hours)
+```
+
+**Showing a render**
+
+```text
+✅ **The render is ready (not started yet)**
+
+**This render**
+| | |
+|---|---|
+| Compared | steps 1000 / 2000 / 3000 and no LoRA × 2 prompts = **8 images** |
+| Workflow | workflows/samples/flux2-klein/flux_2_klein_base_4b_text2image_api.json |
+| Seed | 42 for all |
+| LoRA strength | 0.8 (proposed) |
+| Sheet | rows: steps, columns: prompts → the training run's comparisons/ |
+
+**Prompts**
+| Name | Prompt |
+|---|---|
+| kitchen | Ely, cooking in a bright kitchen, ... |
+| pier | Ely, standing on a wooden pier at dusk, ... |
+
+▶ **Choose**
+- **A. Render it** (recommended) → 8 images, about 8 min; then I make the sheet
+- **B. Change it** → tell me what; I make it again and show it
 ```
 
 **Results**

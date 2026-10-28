@@ -87,8 +87,11 @@ Three ways, by what the user wants:
 | `compute` | where it runs; for RunPod, the GPU too |
 | `sampling` | leave as it is (no sample images during training; trying the LoRA is the `render` skill) |
 
-- `kura run capabilities <backend> --arch <value>` lists the `backend.config` fields. AI-Toolkit
-  fills every field you leave out with that model's baseline, so write only what you chose.
+- `kura run capabilities <backend> --arch <value>` lists the `backend.config` fields and, for
+  AI-Toolkit, that model's baseline. AI-Toolkit fills the fields you leave out from the
+  baseline, so write only what you chose.
+- The baseline has no rank or alpha (`network_dim`, `network_alpha`). Always propose both and
+  put them in the plan; without a rank the plan cannot estimate the file sizes.
 - Take each setting from the strongest source:
   1. the user's words
   2. the user's preferences (`knowledge/user-preferences.md`)
@@ -96,7 +99,8 @@ Three ways, by what the user wants:
   4. the card, or the baseline
   5. your own judgment (say it is yours)
 - Propose a save interval (`save_every_n_steps`) and put it in the plan. Every save is kept,
-  and the plan shows how many. The user needs them to compare steps.
+  and the plan shows how many. The user needs them to compare steps. Enough saves to see a
+  trend and few enough to compare: commonly 4 to 10 over the run.
 - Dataset repeats differ by backend: sd-scripts needs `num_repeats` (usually 1); AI-Toolkit and
   Musubi Tuner mean 1 when it is left out. Do not raise it unless the user wants to.
 
@@ -141,7 +145,9 @@ Do not spend long before showing the plan; `kura run plan` itself takes seconds.
 
 - Look up only what a decision needs.
 - Read the model's facts with `kura run capabilities <backend> --arch <value>`, for the model
-  you use only. Do not load the whole output and parse it.
+  you use only. Read it as text; do not parse it. Its selector list is one long line: search it
+  for your model.
+- From `kura doctor docker`, read `diagnosis` (the first line); the rest is detail.
 - Do not check again by hand what the plan reports (disk, downloads, what is cached, what
   changed from the previous run).
 - When trustworthy information (the card, the baseline, the user's earlier runs) is not

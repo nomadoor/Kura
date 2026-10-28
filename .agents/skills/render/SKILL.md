@@ -16,10 +16,10 @@ ask what the user wants to see ─→ choose a workflow ─→ decide the prompt
 kura render new              create the render run
    ↓ write run.yaml and the cases (one image's conditions per line)
 kura render compile          freeze it
-kura render launch --dry-run show it to the user
+kura render launch --dry-run check it, then show the user what it renders
    ├─ change it ─→ make a new run with kura render new (back to the top)
    └─ yes
-kura render launch           generate in ComfyUI; follow it to the end
+kura render launch --yes     generate in ComfyUI; follow it to the end
    ↓
 (if asked) assemble the comparison sheet ─→ give its location
 ```
@@ -37,7 +37,9 @@ kura render launch           generate in ComfyUI; follow it to the end
 ### 1. Ask what the user wants to see
 - A training approval does not approve a render. A render gets its own yes.
 - The user decides what to see. Common ones:
-  - **step comparison**: each step saved during training × a few prompts
+  - **step comparison**: each step saved during training × a few prompts. With a sample
+    workflow, a line without the LoRA shows the base model beside them in the same run; ask
+    whether to add it.
   - **strength comparison**: the LoRA at several strengths
   - **plain generation**: a few images from one checkpoint and prompt
 - The checkpoints are listed in the output of `kura run status <training run>`. Ask which to
@@ -81,11 +83,11 @@ Create the run with `kura render new --slug <words>` and fill in `run.yaml`:
 |---|---|
 | `intent` | what the user wants to see, in one sentence |
 | `inputs.train_run` | the training run (its status then lists this render) |
-| `inputs.workflow.path` | the `_api.json` to use |
-| `inputs.cases.path` | the cases JSONL (put it in `cases/<name>.jsonl`) |
+| `inputs.workflow.path` | the `_api.json` to use, relative to the workspace (`workflows/...`) |
+| `inputs.cases.path` | the cases JSONL, relative to the workspace: `cases/<name>.jsonl` at the top of the workspace, not in the run's folder |
 | `workflow_patches` | which workflow node each case value (prompt, seed...) goes into |
 | `generator.endpoint` | the ComfyUI to use, copied from `workspace.yaml` (see "ComfyUI") |
-| `executor.name` | `local` (ComfyUI on this machine); `runpod` for RunPod (references/runpod.md; launch then needs `--yes`) |
+| `executor.name` | `local` (ComfyUI on this machine); `runpod` for RunPod (references/runpod.md) |
 
 - List every combination; Kura does not multiply them out. `workflow_patches` says which node
   takes each key in `values`. How to find the nodes, and the details, are in
@@ -97,16 +99,18 @@ Create the run with `kura render new --slug <words>` and fill in `run.yaml`:
 - `kura render compile <run-id>`. If it refuses, follow the fix it names.
 
 ### 5. Show it and get a yes
-- Check it with `kura render launch <run-id> --dry-run`.
-- Show it by the `writing` skill: what is compared, the checkpoints, the full prompts, the
-  seeds, how many images.
+- Check it with `kura render launch <run-id> --dry-run`. It prints every case as JSON for you
+  to check, not to show.
+- Show it by the `writing` skill, from your cases: what is compared, the checkpoints, the full
+  prompts, the seeds, how many images, how the sheet is laid out.
 - **On a yes**, go to step 6.
 - **When the user asks for changes**, a compiled run cannot change: make a new one with
   `kura render new` and continue from step 4. Remove the unused one with
   `kura run discard <run-id> --yes`.
 
 ### 6. Generate and follow it
-- `kura render launch <run-id>`, and stay with it until it returns. If your session ends,
+- `kura render launch <run-id> --yes` (the user's yes reaches Kura this way), and stay with it
+  until it returns. If your session ends,
   follow it again with `kura run execute <run-id>` (as for training); it never generates twice.
 - A render cut short does not continue. The rest is a new render run.
 - When it returns, check how many images were made with `kura run status <run-id>`.
@@ -115,8 +119,9 @@ Create the run with `kura render new --slug <words>` and fill in `run.yaml`:
 - Give the folder's path. When the user asks you to open it, `kura open <run-id>` opens it on
   their desktop. Do not open it unasked.
 - **The comparison sheet**, when it was planned, is made without asking again:
-  - lay out only the finished images, with tools already installed. Ask before installing one.
-    Never overwrite the images.
+  - lay out only the finished images, with tools already installed: Pillow, ImageMagick
+    (`montage`), or ffmpeg (scale each image to one size, then `hstack` and `vstack`). Ask
+    before installing one. Never overwrite the images.
   - When all compared checkpoints come from one training run, save it in that run's
     `comparisons/` folder and write the images it used in that run's `notes.md`.
   - `kura run status <training run>` then lists the render and the sheet.

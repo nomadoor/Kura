@@ -24,3 +24,12 @@ If your session ended while a run was going, follow it with `kura run execute <r
 assume it finished and never start it again. A run that ended without completing starts
 again only as a new run: `kura run new --from <run-id> --slug <words>`, with a new plan and
 yes.
+
+## Saves in the plan
+
+`kura run plan` lists two kinds of saves:
+
+| Plan line | What it is |
+|---|---|
+| `checkpoint` `keep_last 0` | the LoRA saves (`save_every_n_steps`); `0` keeps every one |
+| `Training state` `keep` | how many training states are kept to continue the run (`kura run resume`) |

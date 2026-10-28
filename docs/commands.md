@@ -294,7 +294,8 @@ run's end: 0 completed, 1 failed, 130 interrupted, 2 any other end.
 | `uv run kura render compile <run-id>` | Freeze the workflow and the render case queue (`inputs.cases`); a new `inputs.promptset` is refused |
 | `uv run kura render launch <run-id>` | Generate images through ComfyUI, on the `executor.name` the render was compiled for: the local endpoint, or a disposable RunPod ComfyUI Pod with the image frozen at compile. `--executor` is optional and refused unless it matches |
 
-Before approving a RunPod render, use
+A render takes the one start confirmation a training run takes, locally as on
+RunPod. Before approving a RunPod render, use
 `uv run kura render launch <run-id> --dry-run` to show the
 GPU candidates, current hourly prices, maximum lease, and cost ceiling. After the user gives
 the single explicit approval, a non-interactive agent launches with `--yes`;

@@ -1324,8 +1324,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     train_run = _validate_train_run_reference(workspace, inputs.get("train_run"))
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
     source_path = workspace / descriptor["path"]
-    if not workflow_path.is_file() or not source_path.is_file():
-        raise ValueError("render inputs.workflow.path and inputs.cases.path must exist")
+    for name, path in (("workflow", workflow_path), ("cases", source_path)):
+        if not path.is_file():
+            raise ValueError(f"render inputs.{name}.path: {(inputs.get(name) or {}).get('path')} does not exist (paths are relative to the workspace)")
     for name, path in (("workflow", workflow_path), ("cases", source_path)):
         # An authored digest asserts the file; null asserts nothing and compile records the file's.
         authored, actual = inputs[name].get("digest"), digest(path)

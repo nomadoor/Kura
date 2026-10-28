@@ -2,8 +2,8 @@
 
 ## The cases file
 
-`inputs.cases.path` names a JSONL file (put it in `cases/<name>.jsonl`). Each line is one
-image's conditions:
+`inputs.cases.path` names a JSONL file, relative to the workspace (put it in
+`cases/<name>.jsonl` at the top of the workspace). Each line is one image's conditions:
 
 ```json
 {"id":"s1000-kitchen","values":{"prompt":"...","negative_prompt":"","seed":42},"checkpoint":{"id":"s1000","path":"runs/<training run>/outputs/<name>_000001000.safetensors"},"meta":{"step":1000,"prompt":"kitchen"}}
@@ -17,8 +17,10 @@ image's conditions:
 | `meta` | anything to keep with the image to sort results later (step, prompt label). Not used for rendering |
 
 - List every combination in the order you want; Kura does not multiply them out.
-- Either every line names its `checkpoint`, or none does and the run's `inputs.checkpoint`
-  names one for all. Not both.
+- The LoRA is named one of two ways, never both in one run:
+  - in each line's `checkpoint`. With a `lora_insert` (every sample workflow has one), a line
+    without one renders the base model, so a comparison can put it beside the steps.
+  - once, in the run's `inputs.checkpoint`, for every line. No line then names one.
 - Compile freezes the lines; each image's record keeps its whole case.
 
 ## Workflow patches

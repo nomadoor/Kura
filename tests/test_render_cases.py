@@ -147,6 +147,20 @@ class RenderCasesCompileTests(unittest.TestCase):
                 compile_render(root, run_dir)
             self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
 
+    def test_a_missing_input_file_is_named_with_the_path_looked_for(self) -> None:
+        for name, path in (("workflow", "workflows/wf.json"), ("cases", "cases/render.jsonl")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = _workspace(root, cases=[_case("a", step=None, prompt="first", seed=1, strength=1.0, cfg=4.0)])
+                (root / path).unlink()
+                with self.assertRaises(ValueError) as raised:
+                    compile_render(root, run_dir)
+                message = str(raised.exception)
+                self.assertIn(f"render inputs.{name}.path: {path} does not exist", message)
+                self.assertIn("relative to the workspace", message)
+                other = "cases" if name == "workflow" else "workflow"
+                self.assertNotIn(f"inputs.{other}.path", message)
+
     def test_checkpoint_id_must_identify_one_artifact_across_cases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
