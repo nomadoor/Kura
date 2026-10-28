@@ -10,7 +10,7 @@ user decides every cost.
   hourly price. Choose `compute.gpu` (a list, in order of preference) with the user, then
   compile and show the final plan.
 - Show the **cost ceiling** with the hourly price: the most the Pod's GPU time can bill before
-  its lease ends it. When Kura says the ceiling is unknown, say why; do not estimate one.
+  its lease ends it. It does not cover disk storage, which RunPod bills separately; say so. When Kura says the ceiling is unknown, say why; do not estimate one.
 - By default a run waits for its GPU when none is free (nothing bills while waiting); the plan
   says so. Prices may change while it waits.
 - Moving a run from this machine to RunPod, or to a dearer GPU, is a new cost decision, never a

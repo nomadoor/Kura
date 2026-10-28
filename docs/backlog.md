@@ -15,6 +15,15 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-10-28 | cleanup skill | The example's "Temporary files only" choice is the whole free class `kura cleanup --yes` removes (Docker build cache included); name it as that class | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | publish | `kura check secrets` skips `.env.local`, images, and model files; the skill should say the upload folder holds only the files it lists, since `hf upload` sends everything in it | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | P10
+- 2026-10-28 | dataset ADR | `docs/adr/dataset-revisions.md` points to dataset edit commands `kura dataset` does not have; mark them as a decision not yet built | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | render cases | The strength example binds only `strength_model` of a `LoraLoader`; say to bind `strength_clip` too when both should change, and that a loader `lora_insert` adds cannot be patched (it is not there when patches are checked) | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | render skill | The image count shown for approval counts cases; a workflow that saves several images per case makes more | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | render RunPod | On RunPod, `kura render launch --dry-run` shows the GPU and price, not the cases; say to show the cases from the cases file | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | writing | The render example shortens the prompts and shows no negative prompt, though the render skill asks for both in full before the yes | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | writing | The stop example offers to continue from step 2400 before checking that a training state was saved there | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
+- 2026-10-28 | publish | REJECTED: `hf repo create` has no `--public`; the installed `hf` lists `--public` in its help | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
 - 2026-10-28 | render RunPod | `render/references/runpod.md` never says the GPU comes from `compute.gpu` in the render's `run.yaml` (else the workspace's `runpod.gpu_type_ids`) | context-free review of the shipped-skills rebuild | P6
 - 2026-10-28 | render RunPod | `train/references/runpod.md` presents `--max-lease` as a launch flag and the render reference cites it, but `kura render launch` has none; a render's lease is set with `kura run execute <render-id> --max-lease` or `kura run lease` | context-free review of the shipped-skills rebuild | P6
 - 2026-10-28 | writing | `train/references/disk.md` leads a disk shortfall with ⚠️, which the writing skill now keeps for values that do not match the user's words; use ⛔ or ℹ️ | context-free review of the shipped-skills rebuild | -

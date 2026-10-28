@@ -60,6 +60,9 @@ upload (with the user's own login)
   hf repo create <user>/<repository name> --private   # or --public
   hf upload <user>/<repository name> artifacts/publish/<repository name>
   ```
+- If `hf repo create` fails because the repository already exists, stop before uploading: its
+  public or private setting stays as it is. Tell the user, and upload only after they confirm
+  that setting.
 - ModelScope: the same with ModelScope's official tool.
 - If the user is not logged in, ask them to log in from their own terminal (`hf auth login` for
   Hugging Face). Never ask for a token or write one into a file.

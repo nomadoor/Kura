@@ -16,7 +16,7 @@ and is still going.
 | `failed` | the trainer stopped with an error | read `kura run logs <run-id>`; a fix is a new run |
 | `launch_failed` | the trainer never started | read the error; a fix is a new run |
 | `interrupted` | stopped (`kura run stop`, the disk watch, or the machine went away) | report; what a local run wrote stays, what a RunPod Pod had not sent back is gone |
-| `unknown` | the end was not seen | `kura run reconcile <run-id>`, or `kura run stop <run-id>`, so nothing is left running; then report |
+| `unknown` | the end was not seen | `kura run reconcile <run-id>`; if it may still be running, report and stop it (`kura run stop <run-id>`) only after the user's yes |
 | `recovery_required` | trained, but its files could not all be put in place | report the reason `kura run status` gives; collecting again cannot change it |
 | `stopped` | an older Kura's word for `interrupted` | as `interrupted` |
 

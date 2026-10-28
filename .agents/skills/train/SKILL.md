@@ -98,8 +98,9 @@ Three ways, by what the user wants:
   3. an earlier run the user judged (same experiment)
   4. the card, or the baseline
   5. your own judgment (say it is yours)
-- Propose a save interval (`save_every_n_steps`) and put it in the plan. Every save is kept,
-  and the plan shows how many. The user needs them to compare steps.
+- Propose a save interval (`save_every_n_steps`) and put it in the plan. Every save is kept unless
+  the run sets the backend's limit (`kura run capabilities` lists it); the plan shows what is
+  kept. The user needs them to compare steps.
 - Dataset repeats differ by backend: sd-scripts needs `num_repeats` (usually 1); AI-Toolkit and
   Musubi Tuner mean 1 when it is left out. Do not raise it unless the user wants to.
 

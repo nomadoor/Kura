@@ -39,7 +39,9 @@ dataset's shape, do part 2 only.
 
 ### Keep the originals
 - Never move or overwrite the original images or videos.
-- Put what you make (crops, augmented images) in the dataset folder as new files.
+- The dataset folder holds only what is trained: `draft` takes every image in it. Put what you
+  make (crops, augmented images) there as new files, and keep an original you cut or changed
+  outside it unless the user wants it trained too.
 - Write what you did (from which original, how) in `description` in `dataset.yaml`, or in a
   note in the dataset folder.
 - Use tools already installed. Ask before installing one.
@@ -98,8 +100,8 @@ references/rows.md.
   needs.
 
 ### Make it
-- When the user's files are elsewhere, copy them into `datasets/<id>/`; never move the
-  originals.
+- When the user's files are elsewhere, copy the ones to train into `datasets/<id>/`; never move
+  the originals.
 - **Images only**: put the images in `datasets/<id>/` (or `datasets/<id>/images/`) with captions
   as same-name `.txt` files, write `dataset.yaml`, and run `kura dataset draft <id> --write`. It
   writes the list.

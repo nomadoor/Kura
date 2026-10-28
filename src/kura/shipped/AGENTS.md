@@ -47,7 +47,8 @@ make a dataset ─→ train ─→ try it (render) ─→ the user judges ─┐
 - Anything changed after the plan makes a new run. Show its plan and get a yes again.
 
 ### Work through Kura
-- Use only the `kura` command and the files in this workspace.
+- Train, render, and check datasets only through the `kura` command, on the files in this
+  workspace. Other tools only where a skill names them (editing images, uploading a LoRA).
 - Ask Kura instead of guessing:
   - `kura run capabilities <backend>`: the settings a backend accepts
   - `kura doctor docker|disk|runpod|comfyui`: the machine
@@ -66,8 +67,8 @@ make a dataset ─→ train ─→ try it (render) ─→ the user judges ─┐
 - If the user pastes one into the chat, do not repeat it; suggest they replace it.
 
 ### The user's images
-- Images under `datasets/` and `runs/` may be private. Opening one sends it to the service that
-  runs you.
+- The user's images may be private, wherever they are (`datasets/`, `runs/`, a copy you made,
+  a folder outside the workspace). Opening one sends it to the service that runs you.
 - Open them only when `workspace.yaml` sets `agents.view_images: true`.
   - Without it, work from what Kura reports (`kura dataset inspect` and so on). When a task
     needs the content, ask the user to allow it or to do that part.
