@@ -58,8 +58,10 @@ a table, or short bullets
 ```
 
 - **First line**: the state, bold, with its marker.
-- **⚠️**: a value that does not match what the user said, a value that changed though they did
-  not ask for it, anything unexpected. It comes first. Nothing else goes under it.
+- **⚠️**: only two things: a value that does not match what the user said, and a value that
+  changed though they did not ask for it. It comes first.
+- Kura's notices and warnings (a download, no sample images), assumptions, and what you could
+  not check are not ⚠️: put them in the table or under ℹ️. Something that went wrong is ⛔.
 - **Values you chose** that the user did not name go in the table, marked "(proposed)"; not
   under ⚠️.
 - **Topic lines** name the topic as the user sees it. Not the writer's words ("questions",
@@ -83,7 +85,8 @@ a table, or short bullets
 
 **Showing a plan for approval**
 - First line: ✅ ready (not started yet).
-- ⚠️: values that do not match what the user said, or changed unasked.
+- ⚠️: values that do not match what the user said, or changed unasked (if there are none,
+  leave ⚠️ out).
 - "This training" table: model, dataset, main settings, time, disk; on RunPod the hourly price
   and the cost ceiling.
 - "Changed from the previous run" table: the differences `kura run plan` lists.

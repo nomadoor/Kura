@@ -98,6 +98,8 @@ references/rows.md.
   needs.
 
 ### Make it
+- When the user's files are elsewhere, copy them into `datasets/<id>/`; never move the
+  originals.
 - **Images only**: put the images in `datasets/<id>/` (or `datasets/<id>/images/`) with captions
   as same-name `.txt` files, write `dataset.yaml`, and run `kura dataset draft <id> --write`. It
   writes the list.

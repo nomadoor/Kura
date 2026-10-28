@@ -106,8 +106,10 @@ Three ways, by what the user wants:
 ### 5. Show the plan and get a yes
 - `kura run compile <run-id>`, then `kura run plan <run-id>`. If compile refuses, follow the
   fix it names; if the reason is the dataset's shape, go to part 2 of the `dataset` skill.
-- Read in the plan: what changed from the previous run, the disk and checkpoint lines, the
-  time, and on RunPod the GPU, hourly price, and cost ceiling (references/runpod.md).
+- Read in the plan: what changed from the previous run, the disk and checkpoint lines, and on
+  RunPod the GPU, hourly price, and cost ceiling (references/runpod.md).
+- The plan gives no time. Estimate it from the card's measured speed (seconds per step × steps)
+  and say it is an estimate from the card; without a measurement, say it is not known.
 - Read the user's `knowledge/regrets.md` (what they regretted in earlier runs) for anything
   that applies, and add it to the plan.
 - Show the plan by the `writing` skill. A value that does not match what the user said, or that

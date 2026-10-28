@@ -109,8 +109,9 @@ Create the run with `kura render new --slug <words>` and fill in `run.yaml`:
   `kura run discard <run-id> --yes`.
 
 ### 6. Generate and follow it
-- `kura render launch <run-id> --yes` (the user's yes reaches Kura this way), and stay with it
-  until it returns. If your session ends,
+- Run `kura render launch <run-id> --yes` (the user's yes reaches Kura this way) through your
+  host's way of tracking a long command, as for training: a render often takes longer than a
+  command's time limit. Stay with it until it returns. If your session ends,
   follow it again with `kura run execute <run-id>` (as for training); it never generates twice.
 - A render cut short does not continue. The rest is a new render run.
 - When it returns, check how many images were made with `kura run status <run-id>`.
