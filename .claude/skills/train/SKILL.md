@@ -71,8 +71,8 @@ Three ways, by what the user wants:
   those in `run.yaml`.
 - A resume continues from the training state the source run saved. Starting fresh from trained
   weights is a different thing; do not call it a resume. Restoring the state needs
-  `lr_scheduler: constant` and an `adamw` or `adamw8bit` optimizer (`kura run capabilities`
-  says so).
+  `lr_scheduler: constant` on every backend, and on AI-Toolkit also an `adamw` or `adamw8bit`
+  optimizer (`kura run capabilities` says so).
 
 ### 4. Fill in `run.yaml`
 `kura run new` writes a draft with empty fields. Fill each:
@@ -171,6 +171,12 @@ recommend one.
 - A different GPU or machine is always the user's decision and a new plan.
 - After an out-of-memory failure, read the log first.
 - What to do for a given model (speed and memory measured on a GPU) is in its card.
+- AI-Toolkit on a local GPU of about 12 GB: the baseline keeps the text encoder on the GPU,
+  which can spill into shared memory and run tens of times slower without failing. Set
+  `native_config.train.cache_text_embeddings: true`: each caption is then encoded once, so the
+  text encoder cannot be trained and per-step caption shuffling and token dropout stop. Never
+  set `unload_text_encoder: true` without that cache: the trainer then trains on a blank prompt
+  instead of the captions.
 
 ## Model-family cards
 
