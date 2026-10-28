@@ -72,6 +72,24 @@ class TrainRunResultsTests(unittest.TestCase):
             summary = json.loads(stdout.getvalue())["summary"]
             self.assertEqual([render["id"] for render in summary["renders"]], ["20261027-1000_steps_bbbb", "20261027-1100_sheet_cccc"])
             self.assertIsNone(summary["comparisons"])
+            (Path(directory) / "comparisons" / train.name).mkdir(parents=True)
+            stdout = io.StringIO()
+            with patch("kura.cli._run_path", return_value=train), patch("sys.stdout", stdout):
+                cmd_run_status(argparse.Namespace(run_id=train.name))
+            self.assertEqual(json.loads(stdout.getvalue())["summary"]["comparisons"], f"comparisons/{train.name}")
+
+    def test_status_open_and_the_monitor_find_the_sheets_through_one_owner(self) -> None:
+        from kura.monitor import collect_run_summary
+        from kura.tui import _path_targets
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            train = _workspace(root)
+            with patch.object(run_results, "comparisons_dir", wraps=run_results.comparisons_dir) as owner:
+                run_results.train_run_results(train)
+                run_results.results_folder(train)
+                _path_targets(collect_run_summary(root, train.name))
+            self.assertEqual(owner.call_count, 3)
 
     def test_the_experiment_counts_completed_renders_from_the_same_list(self) -> None:
         from kura.run_commands import experiment

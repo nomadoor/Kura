@@ -137,7 +137,7 @@ Three ways, by what the user wants:
   references/states.md.
 - Completed: check the outputs it lists and report, ending with the next steps as choices (the
   `writing` skill): compare the saves with a render (the `render` skill), train again with
-  changes, or publish. Start none without the user's yes.
+  changes, or publish.
 - Failed or interrupted: report what Kura says and the next step it names. A fix is a new run.
 - Write what was learned in the run's `notes.md`: settings, machine, what happened, the user's
   judgment.

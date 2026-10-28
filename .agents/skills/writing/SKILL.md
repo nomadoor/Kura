@@ -81,6 +81,7 @@ a table, or short bullets
 | settings and numbers | table: item / value |
 | differences from the previous run | table: item / before / now |
 | files or runs | table: name / count / location |
+| prompts | bullets, each in full, then the negative prompt (or "none") |
 | choices | ▶ bullets: choice → what happens |
 | reasons, things noticed | short bullets |
 
@@ -106,7 +107,9 @@ a table, or short bullets
   user's.
 - ▶: what Kura can do next in the user's task. After training: render the saves to compare
   them, train again with changes, publish. After a render: render other prompts or strengths,
-  train again. Start none without the user's yes.
+  train again. Each choice leads to that task's skill and its own plan and yes (a render plan,
+  a run plan, the upload folder); choosing one is never the yes that starts or uploads
+  anything.
 
 **Problems, failures, a stop**
 - First line: ⛔ what happened. The harder it is to say, the earlier it goes.
@@ -119,7 +122,7 @@ a table, or short bullets
 | Part | How |
 |---|---|
 | commands | only ones the user types, in a code block; do not list the commands you ran |
-| file locations | the full path from the root (`/home/...`), never one relative to the workspace, so the user can open it; `kura open <run-id>` opens a run's results on their desktop, only when asked |
+| file locations | a place the user may open: the absolute path as this machine shows it (`/home/...`, `C:\...`), not one relative to the workspace; a value quoted from `run.yaml` (workflow, cases): as written there. `kura open <run-id>` opens a run's results on their desktop, only when asked |
 | numbers | with units, rounded (about 32 min, about 20 GB, about $3) |
 | times and dates | in the user's time zone; a date and time, not "earlier" |
 
@@ -159,7 +162,7 @@ a table, or short bullets
 ✅ **The training is ready (not started yet)**
 
 ⚠️ **Please check**
-- The learning rate is **1/71 (7e-7)** of the previous run's. Did you mean 7e-5?
+- The learning rate is **1/71 (7e-7)** of the previous run's; 7e-5 would match it.
 
 **This training**
 | Item | Value |
@@ -172,7 +175,7 @@ a table, or short bullets
 | Disk | about 25 GB (330 GB free) |
 
 **Changed from the previous run (20261026-2309)**
-| | Before | Now |
+| Setting | Before | Now |
 |---|---|---|
 | Learning rate | 5e-5 | **7e-7** (×1/71) |
 | Steps | 3000 | 5000 |
@@ -202,7 +205,7 @@ a table, or short bullets
 - Negative prompt: none (this workflow takes none)
 
 ▶ **How shall I go on?**
-- **A. Render it** (recommended) → 8 images, about 8 min; then I make the sheet
+- **A. Render it** (recommended: it is what you asked for) → 8 images, about 8 min; then I make the sheet
 - **B. Change it** → tell me what; I make it again and show it
 ```
 
@@ -221,7 +224,7 @@ a table, or short bullets
 - The loss barely falls after about step 3000
 
 ▶ **How shall I go on?**
-- **A. Compare the saves** (recommended) → I render steps 1000 to 5000 on a few prompts and make
+- **A. Compare the saves** (recommended: it shows which save to use) → I render steps 1000 to 5000 on a few prompts and make
   a sheet; I show that plan first
 - **B. Train again with changes** → tell me what to change; I show the new plan
 ```

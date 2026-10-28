@@ -21,7 +21,7 @@ kura render launch --dry-run check it, then show the user what it renders
    └─ yes
 kura render launch --yes     generate in ComfyUI; follow it to the end
    ↓
-(if asked) assemble the comparison sheet ─→ give its location
+(when planned) assemble the comparison sheet ─→ give its full path
 ```
 
 ## Who decides
@@ -127,7 +127,8 @@ Create the run with `kura render new --slug <words>` and fill in `run.yaml`:
     before installing one. Never overwrite the images.
   - When all compared checkpoints come from one training run, save it in
     `comparisons/<training run id>/` at the top of the workspace (not inside a run's folder:
-    a run's folder holds its record) and write the images it used in that run's `notes.md`.
+    a run's folder holds its record). Name it after the render run (`<render run id>.png`), never
+    overwrite a sheet that is there, and write the images it used in that run's `notes.md`.
   - `kura run status <training run>` then lists the render and the sheet's folder, and
     `kura open <training run>` opens that folder.
   - Report the sheet's full path; the single images' folder only when asked.
