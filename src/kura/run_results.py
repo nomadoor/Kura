@@ -1,5 +1,5 @@
 """Where a run's results are: a render run's image folder, and for a training run the render runs
-that name it and its comparisons/ folder. Read from the run records each time; nothing records the
+that name it and its folder under the workspace's comparisons/. Read from the run records each time; nothing records the
 link from a training run to its renders a second time."""
 
 from __future__ import annotations
@@ -10,9 +10,14 @@ from typing import Any
 
 from kura.yamlio import YAMLError, load_run_yaml
 
-# Under a training run, the folder for what an agent assembles from its renders (comparison
-# sheets, contact sheets); like notes.md, written after the run, never by the trainer.
+# Under the workspace, one folder per training run for what an agent assembles from its renders
+# (comparison sheets, contact sheets). Outside the run folder: a sheet is not part of the run's record.
 COMPARISONS_DIR = "comparisons"
+
+
+def comparisons_dir(run_dir: Path) -> Path:
+    """A training run's folder for comparison sheets: `comparisons/<run-id>/` in its workspace."""
+    return run_dir.parent.parent / COMPARISONS_DIR / run_dir.name
 
 
 def render_output_dir(run_dir: Path, render_run: dict[str, Any]) -> Path:
@@ -57,13 +62,13 @@ def render_runs_by_training_run(runs_root: Path) -> dict[str, list[dict[str, Any
 
 
 def train_run_results(run_dir: Path) -> dict[str, Any] | None:
-    """A training run's renders and its comparisons/ folder (None when it has none yet); None for
+    """A training run's renders and its comparisons folder (None when it has none yet); None for
     any other run."""
     run = _mapping(run_dir / "run.yaml")
     if not run or run.get("type") != "train":
         return None
     runs_root = run_dir.parent
-    comparisons = run_dir / COMPARISONS_DIR
+    comparisons = comparisons_dir(run_dir)
     return {
         "renders": render_runs_by_training_run(runs_root).get(run_dir.name, []),
         "comparisons": comparisons.relative_to(runs_root.parent).as_posix() if comparisons.is_dir() else None,
@@ -97,9 +102,9 @@ def outputs_folder(run_dir: Path, status: dict[str, Any]) -> Path:
 
 
 def results_folder(run_dir: Path) -> Path:
-    """The one folder to show a user a run's results in: a training run's `comparisons/` when it
-    has one, else the run's outputs folder."""
-    comparisons = run_dir / COMPARISONS_DIR
+    """The one folder to show a user a run's results in: a training run's comparisons folder when
+    it has one, else the run's outputs folder."""
+    comparisons = comparisons_dir(run_dir)
     run = _mapping(run_dir / "run.yaml") or {}
     if run.get("type") == "train" and comparisons.is_dir():
         return comparisons

@@ -1,4 +1,4 @@
-"""A training run's results are found in one way: the render runs that name it, and its comparisons/ folder."""
+"""A training run's results are found in one way: the render runs that name it, and its folder under the workspace's comparisons/."""
 
 from __future__ import annotations
 
@@ -49,8 +49,11 @@ class TrainRunResultsTests(unittest.TestCase):
                 ],
                 "comparisons": None,
             })
+            # A sheet is not part of the run's record: it lives outside the run, under the workspace.
             (train / "comparisons").mkdir()
-            self.assertEqual(run_results.train_run_results(train)["comparisons"], f"runs/{train.name}/comparisons")
+            self.assertIsNone(run_results.train_run_results(train)["comparisons"])
+            (Path(directory) / "comparisons" / train.name).mkdir(parents=True)
+            self.assertEqual(run_results.train_run_results(train)["comparisons"], f"comparisons/{train.name}")
 
     def test_a_render_run_has_no_such_results(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -69,6 +72,24 @@ class TrainRunResultsTests(unittest.TestCase):
             summary = json.loads(stdout.getvalue())["summary"]
             self.assertEqual([render["id"] for render in summary["renders"]], ["20261027-1000_steps_bbbb", "20261027-1100_sheet_cccc"])
             self.assertIsNone(summary["comparisons"])
+            (Path(directory) / "comparisons" / train.name).mkdir(parents=True)
+            stdout = io.StringIO()
+            with patch("kura.cli._run_path", return_value=train), patch("sys.stdout", stdout):
+                cmd_run_status(argparse.Namespace(run_id=train.name))
+            self.assertEqual(json.loads(stdout.getvalue())["summary"]["comparisons"], f"comparisons/{train.name}")
+
+    def test_status_open_and_the_monitor_find_the_sheets_through_one_owner(self) -> None:
+        from kura.monitor import collect_run_summary
+        from kura.tui import _path_targets
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            train = _workspace(root)
+            with patch.object(run_results, "comparisons_dir", wraps=run_results.comparisons_dir) as owner:
+                run_results.train_run_results(train)
+                run_results.results_folder(train)
+                _path_targets(collect_run_summary(root, train.name))
+            self.assertEqual(owner.call_count, 3)
 
     def test_the_experiment_counts_completed_renders_from_the_same_list(self) -> None:
         from kura.run_commands import experiment
@@ -87,9 +108,9 @@ class TrainRunResultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             train = _workspace(root)
-            (train / "comparisons").mkdir()
+            (root / "comparisons" / train.name).mkdir(parents=True)
             labels = {target.label: target.path for target in _path_targets(collect_run_summary(root, train.name))}
-            self.assertEqual(labels["comparisons"], train / "comparisons")
+            self.assertEqual(labels["comparisons"], root / "comparisons" / train.name)
             self.assertEqual(labels["render 20261027-1000_steps_bbbb"], root / "runs" / "20261027-1000_steps_bbbb" / "samples" / "images")
             self.assertEqual(labels["render 20261027-1100_sheet_cccc"], root / "runs" / "20261027-1100_sheet_cccc" / "samples" / "grid")
 

@@ -114,8 +114,10 @@ class KuraOpenTests(unittest.TestCase):
             (train / "outputs").mkdir()
             (train / "outputs" / "lora.safetensors").write_bytes(b"x")
             self.assertEqual(_kura_open("t1")[:2], (0, [train / "outputs"]))
-            (train / "comparisons").mkdir()
-            self.assertEqual(_kura_open("t1")[:2], (0, [train / "comparisons"]))
+            (train / "comparisons").mkdir()  # the old place inside the run is not read
+            self.assertEqual(_kura_open("t1")[:2], (0, [train / "outputs"]))
+            (root / "comparisons" / "t1").mkdir(parents=True)
+            self.assertEqual(_kura_open("t1")[:2], (0, [root / "comparisons" / "t1"]))
 
     def test_a_render_run_opens_the_folder_it_wrote_images_to(self) -> None:
         with _workspace() as root:
