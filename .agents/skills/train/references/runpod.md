@@ -40,10 +40,11 @@ user decides every cost.
 kura doctor runpod                    # the account, the key, Pods Kura knows about
 kura run reconcile <run-id>           # look at the Pod and record what is true
 kura run download <run-id> --force    # collect the outputs by hand
-kura run stop <run-id>                # delete the Pod
+kura run stop <run-id>                # delete the Pod, only after the user's yes
 ```
 
-`kura run stop` refuses while the Pod holds work not collected yet and says how to collect
+`kura run stop` ends the training. Tell the user what stops and what is kept, and run it only
+on their word. It refuses while the Pod holds work not collected yet and says how to collect
 it; tell the user what would be lost, and add `--yes` only on their word. Report the cause
 `runs/<run-id>/logs/runner.log` names. A missing or refused `RUNPOD_API_KEY` is the user's to
 set with `kura secrets set RUNPOD_API_KEY`. If a request fails with a permission error before

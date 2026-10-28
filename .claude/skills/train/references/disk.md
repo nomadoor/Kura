@@ -19,7 +19,7 @@ it runs.
 Say it by effect, in the user's words, for example:
 
 ```text
-⚠️ The workspace has 18 GB free, and this run needs about 30 GB for the model and checkpoints;
+⛔ The workspace has 18 GB free, and this run needs about 30 GB for the model and checkpoints;
 it could crash Docker partway through.
 
 ▶ Choose
