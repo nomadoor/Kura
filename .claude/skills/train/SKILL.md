@@ -99,8 +99,7 @@ Three ways, by what the user wants:
   4. the card, or the baseline
   5. your own judgment (say it is yours)
 - Propose a save interval (`save_every_n_steps`) and put it in the plan. Every save is kept,
-  and the plan shows how many. The user needs them to compare steps. Enough saves to see a
-  trend and few enough to compare: commonly 4 to 10 over the run.
+  and the plan shows how many. The user needs them to compare steps.
 - Dataset repeats differ by backend: sd-scripts needs `num_repeats` (usually 1); AI-Toolkit and
   Musubi Tuner mean 1 when it is left out. Do not raise it unless the user wants to.
 
