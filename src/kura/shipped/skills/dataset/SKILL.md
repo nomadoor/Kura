@@ -113,7 +113,7 @@ references/rows.md.
   `items.v2.candidate.jsonl`. Decide with the user which to keep.
 
 ### Check it
-- `kura dataset validate <id>`: whether the shape is valid. If not, show the user the fix it names;
+- `kura dataset validate <id>`: whether the shape is valid. If not, show the user the fix its message names;
   change `items.jsonl` only after their yes, keeping the previous file as a copy.
 - `kura dataset inspect <id>`: counts, resolutions, missing or duplicate captions, trigger-word
   coverage, missing pairs, aspect-ratio mismatches. It does not look at image content.
