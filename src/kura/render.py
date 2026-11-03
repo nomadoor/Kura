@@ -1458,7 +1458,6 @@ def launch_render(
     dry_run: bool = False,
     *,
     endpoint_override: str | None = None,
-    lora_name_override: str | None = None,
     lora_name_overrides: dict[str, str] | None = None,
     image_name_overrides: dict[str, str] | None = None,
     executor_name: str | None = None,
@@ -1554,10 +1553,10 @@ def launch_render(
             lora_stage = lora_stages.setdefault(str(lora_stage["target"]), lora_stage)
         if model_patch_stage:
             model_patch_stage = model_patch_stages.setdefault(str(model_patch_stage["target"]), model_patch_stage)
-        checkpoint_id = checkpoint.get("id")
-        case_override = lora_name_overrides.get(checkpoint_id) if lora_name_overrides and isinstance(checkpoint_id, str) else None
-        # A RunPod render names its remotely staged files; a local one names what it staged here.
-        lora_name = case_override or lora_name_override or (lora_stage["lora_name"] if lora_stage else None)
+        # A RunPod render names its remotely staged files by checkpoint path; a local one names what it staged here.
+        # Either way only a case with a checkpoint gets a LoRA.
+        remote_name = lora_name_overrides.get(checkpoint.get("path")) if lora_name_overrides and checkpoint else None
+        lora_name = remote_name or (lora_stage["lora_name"] if lora_stage else None)
         model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else None
         runtime_cases.append({
             "case": case,

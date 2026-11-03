@@ -732,6 +732,77 @@ class RenderCasesLaunchTests(unittest.TestCase):
             self.assertEqual(staged_during_queue, [True])
             self.assertEqual(list((input_dir / "Kura_tmp").glob("*")), [])
 
+    def _render_baseline_and_lora(self, root: Path, executor: str, *, shared: bool = False) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Render through the executor's own launch path; return each queued workflow with its image record."""
+        from kura.run_commands.render_runpod import _render_runpod_loras, remote_lora_names
+
+        patches = {key: value for key, value in PATCHES.items() if key != "lora"}
+        if shared:
+            # One checkpoint for the whole run (inputs.checkpoint), which needs no id.
+            checkpoint = {"path": "runs/train-1/outputs/model.safetensors", "hash": None}
+            only = _case("only", step=None, prompt="same", seed=42, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[only], shared_checkpoint=checkpoint, patches=patches)
+            _write_checkpoint(root, checkpoint, b"lora")
+        else:
+            baseline = _case("baseline", step=None, prompt="same", seed=42, strength=1.0, cfg=4.0)
+            lora = _case("lora", step=1800, prompt="same", seed=42, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[baseline, lora], patches=patches)
+            _write_checkpoint(root, lora["checkpoint"], b"lora")
+        (root / "workflows" / "wf.kura.yaml").write_text("lora_insert:\n  kind: model_only\n  model_node: '12'\n", encoding="utf-8")
+        run_config = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+        run_config["executor"] = {"name": executor}
+        (run_dir / "run.yaml").write_text(yaml.safe_dump(run_config, sort_keys=False), encoding="utf-8")
+        compile_render(root, run_dir)
+        queued: list[dict[str, Any]] = []
+        lora_dir = root / "comfyui" / "models" / "loras"
+
+        class FakeClient:
+            def __init__(self, endpoint: str, timeout: int) -> None:
+                pass
+
+            def lora_names(self) -> set[str]:
+                return {f"Kura_tmp/{path.name}" for path in (lora_dir / "Kura_tmp").glob("*")}
+
+            def queue(self, workflow: dict[str, Any]) -> str:
+                queued.append(workflow)
+                return f"prompt-{len(queued)}"
+
+            def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                return [{"filename": f"{prompt_id}.png", "subfolder": "", "type": "output"}]
+
+            def download(self, image: dict[str, Any]) -> bytes:
+                return b"png"
+
+        with patch("kura.render.ComfyUIClient", FakeClient):
+            if executor == "runpod":
+                frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+                names = remote_lora_names(_render_runpod_loras(root, run_dir, frozen))
+                code = launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188", executor_name="runpod",
+                                     manage_lora_stage=False, lora_name_overrides=names)
+            else:
+                code = launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188")
+        self.assertEqual(code, 0)
+        records = [json.loads(line) for line in (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8").splitlines()]
+        return list(zip(queued, records))
+
+    def test_a_baseline_case_renders_without_the_lora_on_every_executor(self) -> None:
+        for executor in ("local", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
+                (baseline, baseline_record), (lora, lora_record) = self._render_baseline_and_lora(Path(directory), executor)
+                loaders = lambda workflow: [node for node in workflow.values() if node.get("class_type") == "LoraLoaderModelOnly"]
+                self.assertEqual(loaders(baseline), [])
+                self.assertEqual(baseline_record["checkpoint_application"], {"kind": "none"})
+                self.assertIsNone(baseline_record["comfyui_lora_name"])
+                self.assertEqual(len(loaders(lora)), 1)
+                self.assertEqual(lora_record["checkpoint_application"]["kind"], "lora_insert")
+                self.assertTrue(lora_record["comfyui_lora_name"].startswith("Kura_tmp/"))
+
+    def test_a_shared_checkpoint_without_an_id_still_gets_its_lora_on_runpod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            [(workflow, record)] = self._render_baseline_and_lora(Path(directory), "runpod", shared=True)
+            self.assertEqual(len([node for node in workflow.values() if node.get("class_type") == "LoraLoaderModelOnly"]), 1)
+            self.assertTrue(record["comfyui_lora_name"].startswith("Kura_tmp/"))
+
     def test_runpod_uses_remote_image_names_without_local_staging(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
