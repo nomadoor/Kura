@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -732,10 +734,41 @@ class RenderCasesLaunchTests(unittest.TestCase):
             self.assertEqual(staged_during_queue, [True])
             self.assertEqual(list((input_dir / "Kura_tmp").glob("*")), [])
 
+    @staticmethod
+    def _launch_on_a_fake_pod(root: Path, run_dir: Path) -> int:
+        """launch_render_runpod as written, with the Pod, SSH, and uploads replaced; launch_render runs for real."""
+        from kura.run_commands.render_runpod import launch_render_runpod
+
+        class FakeTunnel:
+            def terminate(self) -> None:
+                pass
+
+            def wait(self, timeout: int) -> int:
+                return 0
+
+            def kill(self) -> None:
+                pass
+
+        config = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
+        config.update({"images": {"comfyui": "remote/comfy"}, "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000"]}})
+        (root / "workspace.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        module = "kura.run_commands.render_runpod"
+        previous = Path.cwd()
+        try:
+            os.chdir(root)
+            with patch(f"{module}.launch_runpod_session"), patch(f"{module}._runpod_ssh_details", return_value=details), \
+                    patch(f"{module}.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")), \
+                    patch(f"{module}._scp_to_runpod"), patch(f"{module}._start_runpod_comfyui"), \
+                    patch(f"{module}._free_local_port", return_value=18888), patch(f"{module}.subprocess.Popen", return_value=FakeTunnel()), \
+                    patch(f"{module}._wait_http_ready"), patch(f"{module}._sync_runpod_remote_stdout"), patch(f"{module}.stop_runpod"), \
+                    patch(f"{module}.record_pod_lease_deadline"), patch(f"{module}._notify"):
+                return launch_render_runpod(run_dir.name, dry_run=False, yes=True)
+        finally:
+            os.chdir(previous)
+
     def _render_baseline_and_lora(self, root: Path, executor: str, *, shared: bool = False) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         """Render through the executor's own launch path; return each queued workflow with its image record."""
-        from kura.run_commands.render_runpod import _render_runpod_loras, remote_lora_names
-
         patches = {key: value for key, value in PATCHES.items() if key != "lora"}
         if shared:
             # One checkpoint for the whole run (inputs.checkpoint), which needs no id.
@@ -775,10 +808,7 @@ class RenderCasesLaunchTests(unittest.TestCase):
 
         with patch("kura.render.ComfyUIClient", FakeClient):
             if executor == "runpod":
-                frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
-                names = remote_lora_names(_render_runpod_loras(root, run_dir, frozen))
-                code = launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188", executor_name="runpod",
-                                     manage_lora_stage=False, lora_name_overrides=names)
+                code = self._launch_on_a_fake_pod(root, run_dir)
             else:
                 code = launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188")
         self.assertEqual(code, 0)

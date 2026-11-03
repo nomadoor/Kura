@@ -15,6 +15,8 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-04 | render RunPod | The single-LoRA path survives beside the path-to-name map: `launch_render_runpod` still computes `lora_name` and `lora_remote_path` for exactly one LoRA, `_start_runpod_comfyui` keeps a `lora_remote_name`/`lora_remote_path` fallback no caller reaches, and the dry-run plan shows `lora_name` for one LoRA but `loras` for several; always show `loras` and drop the rest (changes the dry-run plan output) | context-free review of the RunPod baseline-LoRA fix | -
+- 2026-11-04 | render | `launch_render` looks up the Pod's LoRA name with `checkpoint.get("path")`, which may be None; guard on the path itself so the code reads as "no path, no LoRA" | context-free review of the RunPod baseline-LoRA fix | -
 - 2026-10-28 | cleanup skill | The example's "Temporary files only" choice is the whole free class `kura cleanup --yes` removes (Docker build cache included); name it as that class | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -
 - 2026-10-28 | publish | `kura check secrets` skips `.env.local`, images, and model files; the skill should say the upload folder holds only the files it lists, since `hf upload` sends everything in it | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | P10
 - 2026-10-28 | dataset ADR | `docs/adr/dataset-revisions.md` points to dataset edit commands `kura dataset` does not have; mark them as a decision not yet built | CodeRabbit on the shipped-skills rebuild (not yet checked against the code) | -

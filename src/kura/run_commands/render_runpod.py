@@ -89,7 +89,7 @@ def _render_runpod_loras(workspace: Path, run_dir: Path, frozen: dict[str, Any])
     return list(items.values())
 
 
-def remote_lora_names(loras: list[dict[str, Any]]) -> dict[str, str]:
+def _remote_lora_names(loras: list[dict[str, Any]]) -> dict[str, str]:
     """The Pod's LoRA name for each checkpoint path as the cases write it; a case without a checkpoint has none."""
     return {path: item["name"] for item in loras for path in item["paths"]}
 
@@ -340,7 +340,7 @@ def launch_render_runpod(
                 workspace,
                 run_dir,
                 endpoint_override=endpoint,
-                lora_name_overrides=remote_lora_names(loras),
+                lora_name_overrides=_remote_lora_names(loras),
                 executor_name="runpod",
                 manage_lora_stage=False,
                 image_name_overrides={str(item["frozen"]): str(item["name"]) for item in images},
