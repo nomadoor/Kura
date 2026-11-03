@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import tempfile
 import unittest
 import time
@@ -177,6 +178,26 @@ class TuiMetricsTests(unittest.TestCase):
             self.assertEqual(tui._state_style(screen.active_runs[0]), tui.RUN)
             self.assertIn("1 running", _status_bar(screen.summaries, width=200).plain)
             self.assertIn("0 queued", _status_bar(screen.summaries, width=200).plain)
+
+    def test_active_runs_stay_newest_created_first_while_their_logs_grow(self) -> None:
+        from kura.monitor import collect_run_summaries
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for run_id, created in (("older-run", "2026-07-13T09:00:00+09:00"), ("newer-run", "2026-07-13T10:00:00+09:00")):
+                run_dir = root / "runs" / run_id
+                (run_dir / "logs").mkdir(parents=True)
+                (run_dir / "run.yaml").write_text(f"id: {run_id}\ntype: train\ncreated: '{created}'\n", encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            screen = MonitorScreen()
+            # Running trainers append to their logs in turn; whichever wrote last must not jump to the top.
+            for offset, writer in enumerate(("older-run", "newer-run", "older-run"), start=1):
+                log = root / "runs" / writer / "logs" / "stdout.log"
+                log.write_text("step\n" * offset, encoding="utf-8")
+                written = time.time() + 60 * offset
+                os.utime(log, (written, written))
+                screen.summaries = collect_run_summaries(root)
+                self.assertEqual([item.id for item in screen.active_runs], ["newer-run", "older-run"])
 
     def test_a_failed_run_still_publishing_training_state_is_active(self) -> None:
         from kura.monitor import collect_run_summaries
