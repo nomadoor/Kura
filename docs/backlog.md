@@ -15,6 +15,8 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-04 | monitor | The Datasets tab's list of runs using a dataset (`_runs_using_dataset`) still orders by `last_updated`, so running runs there swap places as their logs grow | context-free review of the monitor active-order fix | -
+- 2026-11-04 | tests | The monitor active-order test sets log mtimes in the future (`time.time() + 60 * offset`); anchor them in the past so a later STALE assertion in the same fixture is not misled | context-free review of the monitor active-order fix | -
 - 2026-11-04 | tests | The RunPod baseline-LoRA tests check only the `Kura_tmp/` prefix of the recorded LoRA name; compare it with the name staged on the Pod (the mocked `_start_runpod_comfyui` call) | CodeRabbit on the RunPod baseline-LoRA fix | -
 - 2026-11-04 | render RunPod | The single-LoRA path survives beside the path-to-name map: `launch_render_runpod` still computes `lora_name` and `lora_remote_path` for exactly one LoRA, `_start_runpod_comfyui` keeps a `lora_remote_name`/`lora_remote_path` fallback no caller reaches, and the dry-run plan shows `lora_name` for one LoRA but `loras` for several; always show `loras` and drop the rest (changes the dry-run plan output) | context-free review of the RunPod baseline-LoRA fix | -
 - 2026-11-04 | render | `launch_render` looks up the Pod's LoRA name with `checkpoint.get("path")`, which may be None; guard on the path itself so the code reads as "no path, no LoRA" | context-free review of the RunPod baseline-LoRA fix | -

@@ -1057,7 +1057,9 @@ class MonitorScreen(Screen[None]):
     @property
     def active_runs(self) -> list[RunSummary]:
         active = [item for item in self.summaries if item.unfinished]
-        active.sort(key=lambda item: _aware_datetime(item.last_updated or item.created) or AWARE_MIN, reverse=True)
+        # Newest created first, and fixed: a running run writes its logs all the time, so ordering
+        # by the last write would move the rows under the cursor on every refresh.
+        active.sort(key=lambda item: (_aware_datetime(item.created) or AWARE_MIN, item.id), reverse=True)
         return active
 
     @property
