@@ -64,8 +64,7 @@ def _render_runpod_loras(workspace: Path, run_dir: Path, frozen: dict[str, Any])
     else:
         checkpoint = frozen.get("inputs", {}).get("checkpoint")
         cases = [{"id": "legacy", "checkpoint": checkpoint}] if isinstance(checkpoint, dict) else []
-    items: list[dict[str, Any]] = []
-    seen: set[tuple[Any, str]] = set()
+    items: dict[str, dict[str, Any]] = {}
     for case in cases:
         checkpoint = case.get("checkpoint")
         if not isinstance(checkpoint, dict):
@@ -79,16 +78,20 @@ def _render_runpod_loras(workspace: Path, run_dir: Path, frozen: dict[str, Any])
         source = source.resolve()
         if not source.is_file() or source.suffix != ".safetensors":
             raise ValueError(f"runpod ComfyUI render case {case['id']!r} requires checkpoint.path to point to a local .safetensors file")
-        identity = (checkpoint.get("id"), str(source))
-        if identity in seen:
-            continue
-        seen.add(identity)
-        items.append({
+        item = items.setdefault(str(source), {
             "id": checkpoint.get("id"),
             "source": source,
             "name": "Kura_tmp/" + _safe_stage_name(run_dir.name, source),
+            "paths": [],
         })
-    return items
+        if path_value not in item["paths"]:
+            item["paths"].append(path_value)
+    return list(items.values())
+
+
+def _remote_lora_names(loras: list[dict[str, Any]]) -> dict[str, str]:
+    """The Pod's LoRA name for each checkpoint path as the cases write it; a case without a checkpoint has none."""
+    return {path: item["name"] for item in loras for path in item["paths"]}
 
 
 def _render_runpod_images(run_dir: Path, frozen: dict[str, Any]) -> list[dict[str, Any]]:
@@ -333,17 +336,11 @@ def launch_render_runpod(
             endpoint = f"http://127.0.0.1:{local_port}"
             ready_timeout = render_timeout_sec(frozen)
             _wait_http_ready(endpoint, timeout_sec=max(ready_timeout, 180))
-            lora_name_overrides = {
-                str(item["id"]): str(item["name"])
-                for item in loras
-                if isinstance(item.get("id"), str)
-            }
             code = launch_render(
                 workspace,
                 run_dir,
                 endpoint_override=endpoint,
-                lora_name_override=lora_name,
-                lora_name_overrides=lora_name_overrides,
+                lora_name_overrides=_remote_lora_names(loras),
                 executor_name="runpod",
                 manage_lora_stage=False,
                 image_name_overrides={str(item["frozen"]): str(item["name"]) for item in images},
