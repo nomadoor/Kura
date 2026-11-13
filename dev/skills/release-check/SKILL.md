@@ -81,6 +81,16 @@ works from the shipped `AGENTS.md`, skills, CLI help, and errors alone, and
 reports every place it hesitated, guessed, or was misled. RunPod tasks need the
 maintainer's approval with the cost shown.
 
+The agent must also start without the maintainer's own context: no user-level
+instructions (such as `~/.claude/CLAUDE.md`), memory, personal skills, plugins,
+or MCP tools. Put the workspace outside every repository, so no parent
+`AGENTS.md` or `CLAUDE.md` is found. For Claude Code, point `CLAUDE_CONFIG_DIR`
+at a fresh empty directory (log in there once) and pass `--strict-mcp-config`.
+Launch options do not prove isolation, so the agent's first step is to list
+every instruction file, skill, and tool source it loaded; if anything comes from
+outside the workspace and Kura's shipped files, discard the run and fix the
+launch.
+
 **Whole-codebase audit.** Give the agent the repository and the root
 `AGENTS.md`, not a diff. It looks for decisions made in more than one place
 (between executors, between training and render, between commands), for
