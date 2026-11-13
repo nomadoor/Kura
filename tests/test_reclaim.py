@@ -285,6 +285,29 @@ class ReclaimApplyTests(unittest.TestCase):
             self.assertEqual(record["action"], "remove-checkpoints")
             self.assertEqual(sorted(record["removed"]), ["outputs/pick-step00000100.safetensors", "outputs/pick-step00000300.safetensors"])
 
+    def test_a_checkpoint_kept_by_its_path_in_a_subfolder_stays_and_is_recorded_as_kept(self) -> None:
+        with _workspace() as root:
+            run_dir = _run(root, "nested", ended="2026-10-01T00:00:00+00:00")
+            for step in ("100", "200"):
+                _write(run_dir / "outputs" / "nested" / f"nested-step00000{step}.safetensors", b"w")
+            keep = "nested/nested-step00000200.safetensors"
+            code, _, err = _cleanup(["--checkpoints", "nested", "--keep", keep, "--yes"])
+            self.assertEqual(code, 0, err)
+            self.assertTrue((run_dir / "outputs" / keep).is_file())
+            self.assertFalse((run_dir / "outputs" / "nested" / "nested-step00000100.safetensors").exists())
+            record = json.loads(next((run_dir / "realizations").glob("r1.reclaim-*.json")).read_text(encoding="utf-8"))
+            self.assertEqual((record["removed"], record["kept"]), (["outputs/nested/nested-step00000100.safetensors"], [f"outputs/{keep}"]))
+
+    def test_archive_into_the_run_itself_is_refused_and_moves_nothing(self) -> None:
+        with _workspace() as root:
+            run_dir = _run(root, "keep", ended="2026-10-01T00:00:00+00:00")
+            checkpoint = _write(run_dir / "outputs" / "keep.safetensors", b"w")
+            code, _, err = _cleanup(["--archive-outputs", "keep", "--to", str(run_dir / "outputs"), "--yes"])
+            self.assertEqual(code, 1)
+            self.assertIn("is inside the run itself", err)
+            self.assertTrue(checkpoint.is_file())
+            self.assertEqual(list((run_dir / "realizations").glob("r1.reclaim-*.json")), [])
+
     def test_archive_moves_outputs_records_the_move_and_status_still_loads(self) -> None:
         with _workspace() as root, tempfile.TemporaryDirectory() as archive:
             run_dir = _run(root, "keep", ended="2026-10-01T00:00:00+00:00")
@@ -395,6 +418,50 @@ class FailClosedTests(unittest.TestCase):
             self.assertEqual(became_in_use(root, item), ["done"])
             _write(run_dir / "status.json", json.dumps({"state": "completed", "ended": "2026-10-01T00:00:00+00:00"}))
             _run(root, "later", state="compiled", repos=("org/model",))
+            self.assertEqual(became_in_use(root, item), ["later"])
+
+
+class RemovalRecheckTests(unittest.TestCase):
+    """`became_in_use`, read right before each removal, sees a run that started using an item after the listing."""
+
+    def test_a_run_restarted_after_the_listing_keeps_its_outputs_resume_data_and_scratch(self) -> None:
+        from kura.reclaim import became_in_use
+
+        with _workspace() as root:
+            run_dir = _run(root, "again", ended="2026-10-01T00:00:00+00:00")
+            _write(run_dir / "outputs" / "again.safetensors", b"w")
+            _write(run_dir / "outputs" / "again-step00000010-state" / "optimizer.bin", b"o")
+            _write(run_dir / "tmp" / "scratch.bin")
+            items = {item["class"] if item["class"] != "free" else item["kind"]: item
+                     for item in _items(root, outputs=True) if item["id"] == "again"}
+            self.assertEqual(sorted(items), ["outputs", "resume", "run-scratch"])
+            for item in items.values():
+                self.assertEqual(became_in_use(root, item), [])
+            _write(run_dir / "status.json", json.dumps({"state": "running"}))
+            for name, item in items.items():
+                with self.subTest(item=name):
+                    self.assertEqual(became_in_use(root, item), ["again"])
+
+    def test_model_links_wait_for_a_run_that_started_after_the_listing(self) -> None:
+        from kura.reclaim import became_in_use
+
+        with _workspace() as root:
+            run_dir = _run(root, "links", ended="2026-10-01T00:00:00+00:00")
+            _write(root / "cache" / "models" / "dit.safetensors")
+            item = next(item for item in _items(root) if item["kind"] == "model-links")
+            self.assertNotIn("in_use_by", item)
+            self.assertEqual(became_in_use(root, item), [])
+            _write(run_dir / "status.json", json.dumps({"state": "running"}))
+            self.assertEqual(became_in_use(root, item), ["links"])
+
+    def test_an_image_a_run_froze_after_the_listing_is_kept(self) -> None:
+        from kura.reclaim import became_in_use
+
+        with _workspace() as root:
+            reference = "example/kura-old@sha256:" + "a" * 64
+            item = {"class": "download", "kind": "image", "id": reference, "docker_ids": [reference], "referenced_by": []}
+            self.assertEqual(became_in_use(root, item), [])
+            _run(root, "later", state="compiled", image=reference)
             self.assertEqual(became_in_use(root, item), ["later"])
 
 

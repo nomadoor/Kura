@@ -126,6 +126,9 @@ class SecretFlagTests(unittest.TestCase):
         # never appears in what is reported.
         self.assertEqual(secret_flags(["--wandb_api_key 0123456789abcdef", "/some/long/path"]), ["--wandb_api_key"])
         self.assertEqual(secret_flags(["--wandb_api_key\t0123456789abcdef", "/some/long/path"]), ["--wandb_api_key"])
+        # The value inside the item is what is found, not the argument after it: last, or before a flag.
+        self.assertEqual(secret_flags(["--wandb_api_key 0123456789abcdef"]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["--wandb_api_key 0123456789abcdef", "--seed"]), ["--wandb_api_key"])
         self.assertEqual(secret_flags(["env", "WANDB_API_KEY=0123456789abcdef", "python"]), ["WANDB_API_KEY"])
         self.assertEqual(secret_flags(["env", "TOKENIZERS_PARALLELISM=false", "MAX_TOKEN_LENGTH=225"]), [])
 

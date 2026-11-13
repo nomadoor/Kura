@@ -15,6 +15,12 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-13 | tests | `select_reclaim`'s refusals of `--keep` without `--checkpoints`, `--to` without `--archive-outputs`, `--archive-outputs` without `--to`, and a `--checkpoints` run with no outputs are untested: deleting any of them passes the suite | mutation audit of the accident guards | P11
+- 2026-11-13 | tests | `select_reclaim` adds an item named twice (`--models a a`, `--resume-data finished <run>`) once; no test names an item twice | mutation audit of the accident guards | -
+- 2026-11-13 | tests | `redact` of a tuple is untested: dropping the tuple branch passes the suite | mutation audit of the accident guards | P10
+- 2026-11-13 | tests | `unstopped_recovered_pod` returning None for a realization that was not recovered is untested (a mutant that blocks every launch with `pods_left` passes) | mutation audit of the accident guards | P6
+- 2026-11-13 | tests | `stop_runpod`'s refusal during a capacity wait is untested; without it the stop fails later with "run has no RunPod pod ID" | mutation audit of the accident guards | P11
+- 2026-11-13 | tests | `ensure_free_bytes` creating the store directory and passing `risk_accepted=True` are untested | mutation audit of the accident guards | P8
 - 2026-11-04 | monitor | The Datasets tab's list of runs using a dataset (`_runs_using_dataset`) still orders by `last_updated`, so running runs there swap places as their logs grow | context-free review of the monitor active-order fix | -
 - 2026-11-04 | tests | The monitor active-order test sets log mtimes in the future (`time.time() + 60 * offset`); anchor them in the past so a later STALE assertion in the same fixture is not misled | context-free review of the monitor active-order fix | -
 - 2026-11-04 | tests | The RunPod baseline-LoRA tests check only the `Kura_tmp/` prefix of the recorded LoRA name; compare it with the name staged on the Pod (the mocked `_start_runpod_comfyui` call) | CodeRabbit on the RunPod baseline-LoRA fix | -

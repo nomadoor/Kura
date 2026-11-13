@@ -54,6 +54,13 @@ class RedactionTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
+    def test_a_secret_holding_a_shorter_one_is_hidden_whole(self) -> None:
+        from kura.secrets import redact_text
+
+        longer = f"{VALUE}-and-more-of-the-key"
+        with patch.dict(os.environ, {"HF_TOKEN": VALUE, "RUNPOD_API_KEY": longer}):
+            self.assertEqual(redact_text(f"failed with {longer}"), "failed with ***")
+
     def test_an_ordinary_variable_is_left_alone(self) -> None:
         self.assertIn(VALUE, self._redact({"KURA_NTFY_PRIORITY": VALUE}))
 
