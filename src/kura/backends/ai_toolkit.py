@@ -44,22 +44,23 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553"
-AI_TOOLKIT_PINNED_COMMIT = "9d408eb64d61e7b47e509e29f5da99bfab1afac0"
+AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0"
+AI_TOOLKIT_PINNED_COMMIT = "bdd55603e05a7a59e8112c0a0623798754ce9b69"
 
-# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.32,
+# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.43,
 # embedded commit AI_TOOLKIT_PINNED_COMMIT).
 # It is the union of
 # toolkit.util.get_model.LEGACY_ARCHS and the archs of get_model.get_all_models().
 # Keep this backend-local and refresh it whenever the pinned image changes.
-MINIMAX_H3_ARCHS = frozenset({"minimax_h3", "minimax_h3_ref2va", "minimax_h3_vsa"})
+MINIMAX_H3_ARCHS = frozenset({"minimax_h3", "minimax_h3_image", "minimax_h3_ref2va", "minimax_h3_vsa"})
 AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "ace_step_15", "ace_step_15_xl", "anima", "auraflow", "boogu_image", "boogu_image_edit",
-    "chroma", "chroma_radiance", "cogview4", "ernie_image", "f-lite", "flex2", "flux",
+    "chroma", "chroma_radiance", "cogview4", "ernie_image", "f-lite", "fibo2", "flex2", "flux",
     "flux2", "flux2_klein_4b", "flux2_klein_9b", "flux3", "flux_kontext", "hidream", "hidream_e1",
     "hidream_o1", "ideogram4", "iris3b", "krea2", "ltx2", "ltx2.3", "ltx2.5", "lumina2",
-    "mageflow", "mageflow_edit", "ming_image", "minimax_h3", "minimax_h3_ref2va", "minimax_h3_vsa",
-    "moss_image", "nucleus_image", "omnigen2", "pixart", "pixart_sigma", "prx_pixel", "qwen25_omni",
+    "mageflow", "mageflow_edit", "ming_image", "minimax_h3", "minimax_h3_image", "minimax_h3_omni",
+    "minimax_h3_ref2va", "minimax_h3_vsa", "moss_image", "nucleus_image", "omnigen2", "p_h3_image",
+    "pixart", "pixart_sigma", "prx_pixel", "qwen25_omni", "qwen38",
     "qwen_image", "qwen_image_2", "qwen_image_edit", "qwen_image_edit_plus", "sd1", "sd2",
     "sd3", "sdxl", "ssd", "vega", "wan21", "wan21_i2v", "wan22_14b",
     "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
@@ -67,7 +68,7 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
 # Every model_arch value Kura accepts: a pinned arch, or a UI entry name the trainer reads as one.
 AI_TOOLKIT_MODEL_ARCH_VALUES = tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS)}))
 
-# Pinned AI-Toolkit 9d408eb6, toolkit/data_loader.py:40-42. These
+# Pinned AI-Toolkit bdd55603, toolkit/data_loader.py:40-42. These
 # are the folder loader's exact lowercase extension lists.
 AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
 AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
@@ -97,7 +98,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": (
             "anima", "chroma", "chroma_radiance", "flex2", "flux", "flux2",
             "flux2_klein_4b", "flux2_klein_9b", "flux3", "flux_kontext", "hidream", "hidream_o1",
-            "iris3b", "krea2", "ltx2.5", "mageflow", "ming_image", "minimax_h3", "minimax_h3_vsa",
+            "iris3b", "krea2", "ltx2.5", "mageflow", "ming_image", "minimax_h3", "minimax_h3_image", "minimax_h3_vsa",
             "moss_image", "qwen_image", "qwen_image_2", "sd1", "sdxl", "zimage", "zimage_l2p",
         ),
         "shape": "image",
@@ -143,7 +144,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         # The pinned flux3 reads every reference of a sample: get_noise_prediction unpacks the
         # loader's (B, N, C, H, W) stack into N references, and use_raw_control_images keeps each
         # unresized for _fit_reference to size by area (extensions_built_in/diffusion_models/flux3/
-        # flux3.py:114-115 and 514-538, pinned 0.13.32). Kura projects one reference because no
+        # flux3.py:114-115 and 515-539, pinned 0.13.43). Kura projects one reference because no
         # run has verified several.
         "architectures": ("flux3", "flux_kontext", "hidream_e1", "qwen_image_edit"),
         "shape": "image-control",
@@ -460,8 +461,8 @@ def _resolve_ai_toolkit_projection_blocks(
 def _native_config_architecture(value: str) -> str:
     """The architecture the pinned trainer runs for a native_config.model.arch value.
 
-    ModelConfig strips a display tag and maps flex1 to flux (toolkit/config_modules.py:774-778 at
-    9d408eb6). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
+    ModelConfig strips a display tag and maps flex1 to flux (toolkit/config_modules.py:776-781 at
+    bdd55603). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
     """
     architecture = value.split(":", 1)[0]
     return "flux" if architecture == "flex1" else architecture

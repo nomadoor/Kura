@@ -861,8 +861,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        base_pin = "ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0"
-        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553"
+        base_pin = "ostris/aitoolkit:0.13.43@sha256:ba3327cebd5aa9ad3f539c52a1c4fa30831d3365d12844deda9c9a14f61411c6"
+        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0"
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
         self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
@@ -1388,6 +1388,67 @@ class BackendSurfaceContractTests(unittest.TestCase):
         # model.base never chooses the entry: the Base model names the Base entries.
         with self.assertRaisesRegex(ValueError, "model.base 'OpenMOSS-Team/MOSS-Image-Base' is the model of UI entry moss_image:base, moss_image:base_edit, but model_arch 'moss_image:edit' selects entry 'moss_image:edit'"):
             compiled("OpenMOSS-Team/MOSS-Image-Base", ())
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_projects_the_0_13_42_minimax_h3_image_text_to_image(self) -> None:
+        adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+
+        def compiled(arch: str, base: str, controls: tuple[str, ...], **authored):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = {
+                    "id": f"new-{arch.replace('_', '-')}",
+                    "backend": {"name": "ai-toolkit", "config": {"model_arch": arch, "dataset_config": {}, **authored}},
+                    "model": {"base": base}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                }
+                self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=controls)
+                BACKENDS["ai-toolkit"].compile(run, root)
+                return yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+
+        # Image and caption: the baseline fills the pinned UI entry's pre-quantized load and caches.
+        process = compiled(
+            "minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", (),
+            native_config={"model": {"assistant_lora_path": adapter}},
+        )
+        model = process["model"]
+        self.assertEqual(model["arch"], "minimax_h3_image")
+        self.assertEqual(
+            (model["quantize"], model["qtype"], model["quantize_te"], model["qtype_te"], model["low_vram"]),
+            (True, "convrot8", True, "nvfp4", False),
+        )
+        self.assertTrue(process["train"]["cache_text_embeddings"])
+        self.assertTrue(process["datasets"][0]["cache_latents_to_disk"])
+        self.assertFalse(process["datasets"][0].get("control_path"))
+        # The training adapter is still authored in this pin (a declared model input is a separate design).
+        self.assertEqual(model["assistant_lora_path"], adapter)
+        # Reference editing is not projected yet, so a reference is refused rather than dropped.
+        with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile matches architecture='minimax_h3_image'"):
+            compiled("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", ("a.png",))
+        # The other archs new since 0.13.32 are accepted values with no projection profile.
+        for arch, base in (
+            ("p_h3_image", "PrunaAI/P-H3-Image-Comfy"), ("minimax_h3_omni", "FastVideo/FastH3-Omni-Comfy"),
+            ("fibo2", "Comfy-Org/Fibo-2.0"),
+        ):
+            with self.subTest(arch=arch):
+                validate_backend_config({"backend": {"name": "ai-toolkit", "config": {"model_arch": arch}}, "model": {"base": base}})
+                with self.assertRaisesRegex(ValueError, f"no verified AI-Toolkit projection profile matches architecture='{arch}'"):
+                    compiled(arch, base, ())
+
+    def test_ai_toolkit_minimax_h3_image_is_a_minimax_h3_arch(self) -> None:
+        from kura.backends.ai_toolkit import MINIMAX_H3_ARCHS
+
+        self.assertIn("minimax_h3_image", MINIMAX_H3_ARCHS)
+        run = {
+            "id": "h3-image-checkpointing", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "minimax_h3_image", "gradient_checkpointing": True,
+            }},
+            "model": {"base": "Comfy-Org/MiniMax-H3-Image"},
+            "datasets": [{"id": "image"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "gradient_checkpointing=false"):
+                BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
     @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture(self) -> None:
