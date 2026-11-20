@@ -1,7 +1,8 @@
 # ADR: Unset trainer settings come from the pinned upstream baseline
 
 Status: accepted owner decision (2026-09-29). Amended 2026-11-20: a model
-reference the upstream UI names is a declared model input (decision 7).
+reference the upstream UI names is a declared model input (decision 7), and
+the fill carries the UI's LoRA module filter (`network.network_kwargs`).
 
 Date: 2026-09-29
 
@@ -90,8 +91,21 @@ the pinned source and records it. Kura does not author these values.
 - The baseline fills only listed native keys: `train` scheduler, timestep type,
   precision, optimizer and its parameters, learning rate, loss, and
   text-encoder caching; `model` quantization, `low_vram`, and `model_kwargs`
-  (missing subkeys only); and each dataset's `cache_latents_to_disk`. Paths,
-  steps, seed, and sampling stay Kura-owned.
+  (missing subkeys only); `network.network_kwargs` (missing subkeys only); and
+  each dataset's `cache_latents_to_disk`. Paths, steps, seed, and sampling stay
+  Kura-owned.
+- `network.network_kwargs` (added 2026-11-20) carries the UI's LoRA module
+  filter, `ignore_if_contains`: the modules an entry leaves out of the LoRA
+  (`adaln_proj` on the MiniMax-H3 entries, whose `MiniMaxH3AdalnProj.forward`
+  reads the linear's weight directly, so a LoRA on it never trains). The UI's
+  base job sets an empty list, which every other entry records and compile
+  writes; the trainer reads it as it reads an absent one
+  (`toolkit/lora_special.py:362-364`). An authored
+  `native_config.network.network_kwargs.ignore_if_contains` wins whole, and an
+  empty list there puts a LoRA on every module. Rank, alpha, and conv are not
+  filled. Before this amendment the fill did not carry the filter, so an unset
+  run put a LoRA on those modules too; records of those runs are read as they
+  are.
 - The extractor records each entry's `model.assistant_lora_path` beside its
   model path, outside the sections the fill reads. One function,
   `ai_toolkit_training_adapter`, decides the adapter a run loads: the authored

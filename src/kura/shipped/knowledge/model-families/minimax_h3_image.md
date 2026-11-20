@@ -33,6 +33,11 @@
   upload it). `assistant_lora_path: none` trains without one. It cannot be
   written in `native_config`.
   source: AI-Toolkit commit 5b1670a (ui.tsx entry `minimax_h3_image`, minimax_h3_image.py)
+- The baseline leaves the `adaln_proj` layers out of the LoRA, as the
+  upstream UI does (`network.network_kwargs.ignore_if_contains: [adaln_proj]`
+  in `kura run plan`). A LoRA on those layers never trains: the model reads
+  their weights directly, so the saved weights stay zero.
+  source: AI-Toolkit baseline entry `minimax_h3_image` (pinned commit bdd55603); minimax_h3 transformer.py `MiniMaxH3AdalnProj.forward`
 - Training draws only the model's 6 sampling timesteps, each through its own
   output head, so `timestep_type` has no effect.
   source: AI-Toolkit commit 5b1670a (minimax_h3_image.py `get_train_scheduler`)

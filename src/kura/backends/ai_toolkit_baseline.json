@@ -15,6 +15,11 @@
     "quantize_te": true
    },
    "name_or_path": "ostris/ace_step_1.5_ComfyUI_files/ace_step_1.5_base_aio.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -45,6 +50,11 @@
     "quantize_te": true
    },
    "name_or_path": "ostris/ace_step_1.5_ComfyUI_files/ace_step_1.5_xl_base_aio.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -75,6 +85,11 @@
     "quantize_te": false
    },
    "name_or_path": "circlestone-labs/Anima-Base-v1.0-Diffusers",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -105,6 +120,11 @@
     "quantize_te": true
    },
    "name_or_path": "Boogu/Boogu-Image-0.1-Base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -137,6 +157,11 @@
     "quantize_te": true
    },
    "name_or_path": "Boogu/Boogu-Image-0.1-Edit",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -167,6 +192,11 @@
     "quantize_te": true
    },
    "name_or_path": "lodestones/Chroma1-Base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -197,6 +227,11 @@
     "quantize_te": true
    },
    "name_or_path": "baidu/ERNIE-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -229,6 +264,11 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/Fibo-2.0",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -259,6 +299,11 @@
     "quantize_te": true
    },
    "name_or_path": "ostris/Flex.1-alpha",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -297,6 +342,11 @@
     "quantize_te": true
    },
    "name_or_path": "ostris/Flex.2-preview",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -327,6 +377,11 @@
     "quantize_te": true
    },
    "name_or_path": "black-forest-labs/FLUX.1-dev",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -359,6 +414,11 @@
     "quantize_te": true
    },
    "name_or_path": "black-forest-labs/FLUX.2-dev",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -391,6 +451,11 @@
     "quantize_te": true
    },
    "name_or_path": "black-forest-labs/FLUX.2-klein-base-4B",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -423,6 +488,11 @@
     "quantize_te": true
    },
    "name_or_path": "black-forest-labs/FLUX.2-klein-base-9B",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -455,6 +525,11 @@
     "quantize_te": true
    },
    "name_or_path": "black-forest-labs/flux-3-image-klein-base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -485,6 +560,11 @@
     "quantize_te": true
    },
    "name_or_path": "black-forest-labs/FLUX.1-Kontext-dev",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -515,6 +595,14 @@
     "quantize_te": true
    },
    "name_or_path": "HiDream-ai/HiDream-I1-Full",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "ff_i.experts",
+      "ff_i.gate"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -545,6 +633,14 @@
     "quantize_te": true
    },
    "name_or_path": "HiDream-ai/HiDream-E1-1",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "ff_i.experts",
+      "ff_i.gate"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -578,6 +674,15 @@
     "quantize_te": false
    },
    "name_or_path": "HiDream-ai/HiDream-O1-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "lm_head",
+      "patch_embed",
+      "visual"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -608,6 +713,11 @@
     "quantize_te": true
    },
    "name_or_path": "ideogram-ai/ideogram-4-fp8",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -638,6 +748,11 @@
     "quantize_te": true
    },
    "name_or_path": "speridlabs/iris-3b",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -668,6 +783,11 @@
     "quantize_te": true
    },
    "name_or_path": "krea/Krea-2-Raw",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -702,6 +822,11 @@
     "quantize_te": true
    },
    "name_or_path": "krea/Krea-2-Raw",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -736,6 +861,11 @@
     "quantize_te": true
    },
    "name_or_path": "krea/Krea-2-Turbo",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -766,6 +896,11 @@
     "quantize_te": true
    },
    "name_or_path": "krea/Krea-2-Turbo",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -796,6 +931,11 @@
     "quantize_te": true
    },
    "name_or_path": "Lightricks/LTX-2",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -826,6 +966,11 @@
     "quantize_te": true
    },
    "name_or_path": "Lightricks/LTX-2.3/ltx-2.3-22b-dev.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -856,6 +1001,11 @@
     "quantize_te": true
    },
    "name_or_path": "Lightricks/LTX-2.5",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -886,6 +1036,11 @@
     "quantize_te": true
    },
    "name_or_path": "Alpha-VLLM/Lumina-Image-2.0",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -916,6 +1071,11 @@
     "quantize_te": true
    },
    "name_or_path": "microsoft/Mage-Flow-Base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -946,6 +1106,11 @@
     "quantize_te": true
    },
    "name_or_path": "microsoft/Mage-Flow-Edit-Base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -978,6 +1143,11 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/Ming-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1008,6 +1178,13 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/MiniMax-H3",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "adaln_proj"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": true,
     "content_or_style": "balanced",
@@ -1038,6 +1215,13 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/MiniMax-H3-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "adaln_proj"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": true,
     "content_or_style": "balanced",
@@ -1068,6 +1252,13 @@
     "quantize_te": true
    },
    "name_or_path": "FastVideo/FastH3-Omni-Comfy",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "adaln_proj"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": true,
     "content_or_style": "balanced",
@@ -1098,6 +1289,13 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/MiniMax-H3",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "adaln_proj"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": true,
     "content_or_style": "balanced",
@@ -1128,6 +1326,13 @@
     "quantize_te": true
    },
    "name_or_path": "FastVideo/FastVideo-FastH3-Comfy",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "adaln_proj"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": true,
     "content_or_style": "balanced",
@@ -1162,6 +1367,13 @@
     "quantize_te": true
    },
    "name_or_path": "OpenMOSS-Team/MOSS-Image-SFT",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "layers.22."
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1196,6 +1408,13 @@
     "quantize_te": true
    },
    "name_or_path": "OpenMOSS-Team/MOSS-Image-Base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "layers.22."
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1233,6 +1452,13 @@
     "quantize_te": true
    },
    "name_or_path": "OpenMOSS-Team/MOSS-Image-Base",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "layers.22."
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1270,6 +1496,13 @@
     "quantize_te": true
    },
    "name_or_path": "OpenMOSS-Team/MOSS-Image-SFT",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "layers.22."
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1300,6 +1533,14 @@
     "quantize_te": true
    },
    "name_or_path": "NucleusAI/Nucleus-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "img_mlp.experts",
+      "img_mlp.gate"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1330,6 +1571,11 @@
     "quantize_te": true
    },
    "name_or_path": "OmniGen2/OmniGen2",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1360,6 +1606,13 @@
     "quantize_te": true
    },
    "name_or_path": "PrunaAI/P-H3-Image-Comfy",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": [
+      "adaln_proj"
+     ]
+    }
+   },
    "train": {
     "cache_text_embeddings": true,
     "content_or_style": "balanced",
@@ -1390,6 +1643,11 @@
     "quantize_te": true
    },
    "name_or_path": "Photoroom/prxpixel-t2i",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1422,6 +1680,11 @@
     "quantize_te": false
    },
    "name_or_path": "ai-toolkit/Qwen2.5-Omni-7B/qwen2_5_omni_7b_convrot8.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1454,6 +1717,11 @@
     "quantize_te": false
    },
    "name_or_path": "Comfy-Org/Qwen3.8-27B/text_encoders/qwen3.8_27b_w4a8.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1484,6 +1752,11 @@
     "quantize_te": true
    },
    "name_or_path": "Qwen/Qwen-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1514,6 +1787,11 @@
     "quantize_te": true
    },
    "name_or_path": "Qwen/Qwen-Image-2512",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1546,6 +1824,11 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/Qwen-Image-2.1",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1579,6 +1862,11 @@
     "quantize_te": true
    },
    "name_or_path": "Comfy-Org/Qwen-Image-2.1/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1609,6 +1897,11 @@
     "quantize_te": true
    },
    "name_or_path": "Qwen/Qwen-Image-Edit",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1641,6 +1934,11 @@
     "quantize_te": true
    },
    "name_or_path": "Qwen/Qwen-Image-Edit-2509",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1673,6 +1971,11 @@
     "quantize_te": true
    },
    "name_or_path": "Qwen/Qwen-Image-Edit-2511",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1703,6 +2006,11 @@
     "quantize_te": false
    },
    "name_or_path": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1733,6 +2041,11 @@
     "quantize_te": false
    },
    "name_or_path": "stabilityai/stable-diffusion-xl-base-1.0",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1763,6 +2076,11 @@
     "quantize_te": true
    },
    "name_or_path": "Wan-AI/Wan2.1-T2V-14B-Diffusers",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1793,6 +2111,11 @@
     "quantize_te": true
    },
    "name_or_path": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1823,6 +2146,11 @@
     "quantize_te": true
    },
    "name_or_path": "Wan-AI/Wan2.1-I2V-14B-720P-Diffusers",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1853,6 +2181,11 @@
     "quantize_te": true
    },
    "name_or_path": "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1886,6 +2219,11 @@
     "quantize_te": true
    },
    "name_or_path": "ai-toolkit/Wan2.2-T2V-A14B-Diffusers-bf16",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1919,6 +2257,11 @@
     "quantize_te": true
    },
    "name_or_path": "ai-toolkit/Wan2.2-I2V-A14B-Diffusers-bf16",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1949,6 +2292,11 @@
     "quantize_te": true
    },
    "name_or_path": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -1984,6 +2332,11 @@
     "quantize_te": false
    },
    "name_or_path": "Comfy-Org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -2014,6 +2367,11 @@
     "quantize_te": true
    },
    "name_or_path": "lodestones/Zeta-Chroma/zeta-chroma-base-x0-pixel-dino-distance.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -2044,6 +2402,11 @@
     "quantize_te": true
    },
    "name_or_path": "Tongyi-MAI/Z-Image",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -2074,6 +2437,11 @@
     "quantize_te": true
    },
    "name_or_path": "ostris/Z-Image-De-Turbo",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -2104,6 +2472,11 @@
     "quantize_te": true
    },
    "name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
@@ -2134,6 +2507,11 @@
     "quantize_te": true
    },
    "name_or_path": "zhen-nan/L2P/model-1k-merge.safetensors",
+   "network": {
+    "network_kwargs": {
+     "ignore_if_contains": []
+    }
+   },
    "train": {
     "cache_text_embeddings": false,
     "content_or_style": "balanced",
