@@ -164,7 +164,7 @@ replaces any delegation given earlier in a conversation or in memory.
    none of your context the design and the whole branch diff (principle 6),
    and fix what it finds on the same branch. Other changes rely on the tests,
    the gate, and the pull request's review.
-5. **Open one pull request**, ready for review. Its body states the design,
+5. **Open one pull request** to `dev`, ready for review. Its body states the design,
    `Owner:` (the function), `Copies removed:` (or none), `Behavior changed:`,
    the promises touched, validation, and risks. The pull request runs CI on
    every OS. The maintainer merges it when CI passes and the context-free
@@ -216,7 +216,7 @@ Skills for development: `kura-core` for run records, paths, and surfaces;
 `training-backends` for adapter work; `backend-upgrade-audit` for pinned trainer
 updates; `monitor-tui` for the monitor; `release-check` before a pull request or
 a milestone. Add a usage skill only when the change touches its domain.
-Repository language and branch names are in `docs/agents/workflow.md`.
+Repository language, branch names, and which branch a pull request targets (`dev`) are in `docs/agents/workflow.md`.
 Workspace configuration keys are in `docs/workspace-config.md`.
 
 Validation: focused tests first, then before a pull request
