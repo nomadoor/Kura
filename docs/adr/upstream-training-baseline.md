@@ -1,6 +1,7 @@
 # ADR: Unset trainer settings come from the pinned upstream baseline
 
-Status: accepted owner decision (2026-09-29).
+Status: accepted owner decision (2026-09-29). Amended 2026-11-20: a model
+reference the upstream UI names is a declared model input (decision 7).
 
 Date: 2026-09-29
 
@@ -65,6 +66,17 @@ the pinned source and records it. Kura does not author these values.
    missing architecture fails regeneration, and the old baseline is not kept
    silently. The UI source is not a stable API. This brittleness is accepted as
    a bridge until upstream exposes a supported configuration API.
+7. **A model reference the UI names is a declared model input** (amended
+   2026-11-20). Some UI entries name a second model the run loads: the
+   training adapter of a distilled entry (`model.assistant_lora_path`). Such a
+   reference is not a trainer setting and is not filled like one. It becomes a
+   declared model input of the run, with its own typed field, and the baseline
+   value is that field's default. An authored value wins, and the field's
+   value `none` loads no such model. The input is listed in the run's model
+   requirements with every other model, so the plan shows it, the frozen
+   record names it, and a local file is mounted. It cannot be authored through
+   the native escape hatch, which would bypass that list. Every other path
+   stays Kura-owned.
 
 ## Implementation notes
 
@@ -80,6 +92,20 @@ the pinned source and records it. Kura does not author these values.
   text-encoder caching; `model` quantization, `low_vram`, and `model_kwargs`
   (missing subkeys only); and each dataset's `cache_latents_to_disk`. Paths,
   steps, seed, and sampling stay Kura-owned.
+- The extractor records each entry's `model.assistant_lora_path` beside its
+  model path, outside the sections the fill reads. One function,
+  `ai_toolkit_training_adapter`, decides the adapter a run loads: the authored
+  `backend.config.assistant_lora_path`, else the entry's, else none. The
+  requirement list (role `training_adapter`) and the native config both take
+  it from that function. `native_config.model.assistant_lora_path` is refused,
+  naming the field. Before this amendment the baseline did not fill the
+  adapter, so a run of a distilled entry trained without it unless the author
+  wrote the native key; records of those runs are read as they are. The
+  function decides for a run.yaml only: the plan and the launch check of a
+  compiled run read its frozen `model-requirements.lock.yaml`
+  (`frozen_model_requirements`), so a run compiled earlier shows no adapter it
+  did not load; an adapter an older manifest wrote in the native key shows as
+  that authored native setting.
 - Several UI entries can share one arch (`zimage`, `zimage:turbo`). The entry
   whose model path equals `model.base` wins, then the entry named like the
   authored selector, then the entry named after the arch, then a sole entry.
@@ -112,7 +138,9 @@ the pinned source and records it. Kura does not author these values.
   `backend-upgrade-audit` flow rather than CI. The regeneration script shows
   the diff; the upgrade review reads that diff.
 - Adapter tests prove three things: an unset value takes the baseline value; an
-  authored value overrides it; an architecture without an entry refuses.
+  authored value overrides it; an architecture without an entry refuses. For
+  the training adapter they prove that the listed requirement and the native
+  config agree in each case (unset, authored, `none`, no adapter in the entry).
 - The real-smoke harness stops re-deriving UI defaults. It relies on the
   adapter baseline, so a smoke exercises what a user gets with no native
   overrides.

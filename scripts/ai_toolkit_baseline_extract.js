@@ -134,6 +134,9 @@ for (const [name, entry] of [...archs.entries()].sort()) {
   entries[name] = {
     arch: name.split(':')[0] === 'flex1' ? 'flux' : name.split(':')[0],
     name_or_path: Array.isArray(nameOrPath) ? nameOrPath[0] : null,
+    // The training adapter the entry loads: a model input Kura declares, kept beside the model
+    // path and outside the sections the baseline fills.
+    assistant_lora_path: process.model.assistant_lora_path ?? null,
     train: pick(process.train, TRAIN_KEYS),
     model: pick(process.model, MODEL_KEYS),
     dataset: pick(process.datasets[0], DATASET_KEYS),

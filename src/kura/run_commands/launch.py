@@ -344,7 +344,7 @@ def launch_run(
         if input_path.is_file():
             input_lock = json.loads(input_path.read_text(encoding="utf-8"))
         config = _workspace_config()
-        enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
+        enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor, run_dir=run_dir))
         spec = _load_frozen_command(run_dir, locked)
         if isinstance(input_lock, dict) and input_lock.get("schema_version") == 2:
             from kura.dataset_handoff import inspect_dataset_sources

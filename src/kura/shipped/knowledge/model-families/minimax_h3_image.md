@@ -21,10 +21,13 @@
   images (editing) are not accepted yet.
   source: AI-Toolkit baseline entry `minimax_h3_image` (pinned commit bdd55603)
 - The model is step and guidance distilled (6 steps, no CFG), and upstream
-  trains it with its training adapter live. Kura does not add the adapter by
-  itself yet: write it in `backend.config.native_config.model`:
-  `assistant_lora_path: ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors`.
-  The trainer downloads it at the start of the run.
+  trains it with its training adapter live. A run loads that adapter by
+  default (`ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors`,
+  from the baseline entry): `kura run plan` lists it as the model input
+  `training_adapter`, and the trainer downloads it at the start of the run.
+  `backend.config.assistant_lora_path` names another adapter (a Hugging Face
+  `user/repo/file` path or a local file), and `assistant_lora_path: none`
+  trains without one. It cannot be written in `native_config`.
   source: AI-Toolkit commit 5b1670a (ui.tsx entry `minimax_h3_image`, minimax_h3_image.py)
 - Training draws only the model's 6 sampling timesteps, each through its own
   output head, so `timestep_type` has no effect.

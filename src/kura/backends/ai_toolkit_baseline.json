@@ -2,6 +2,7 @@
  "entries": {
   "ace_step_15": {
    "arch": "ace_step_15",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -31,6 +32,7 @@
   },
   "ace_step_15_xl": {
    "arch": "ace_step_15_xl",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -60,6 +62,7 @@
   },
   "anima": {
    "arch": "anima",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -89,6 +92,7 @@
   },
   "boogu_image": {
    "arch": "boogu_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -118,6 +122,7 @@
   },
   "boogu_image_edit": {
    "arch": "boogu_image_edit",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -149,6 +154,7 @@
   },
   "chroma": {
    "arch": "chroma",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -178,6 +184,7 @@
   },
   "ernie_image": {
    "arch": "ernie_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -207,6 +214,7 @@
   },
   "fibo2": {
    "arch": "fibo2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -238,6 +246,7 @@
   },
   "flex1": {
    "arch": "flux",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -267,6 +276,7 @@
   },
   "flex2": {
    "arch": "flex2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -304,6 +314,7 @@
   },
   "flux": {
    "arch": "flux",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -333,6 +344,7 @@
   },
   "flux2": {
    "arch": "flux2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -364,6 +376,7 @@
   },
   "flux2_klein_4b": {
    "arch": "flux2_klein_4b",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -395,6 +408,7 @@
   },
   "flux2_klein_9b": {
    "arch": "flux2_klein_9b",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -426,6 +440,7 @@
   },
   "flux3": {
    "arch": "flux3",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -457,6 +472,7 @@
   },
   "flux_kontext": {
    "arch": "flux_kontext",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -486,6 +502,7 @@
   },
   "hidream": {
    "arch": "hidream",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -515,6 +532,7 @@
   },
   "hidream_e1": {
    "arch": "hidream_e1",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -544,6 +562,7 @@
   },
   "hidream_o1": {
    "arch": "hidream_o1",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -576,6 +595,7 @@
   },
   "ideogram4": {
    "arch": "ideogram4",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -605,6 +625,7 @@
   },
   "iris3b": {
    "arch": "iris3b",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -634,6 +655,7 @@
   },
   "krea2": {
    "arch": "krea2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -663,6 +685,7 @@
   },
   "krea2:o_edit": {
    "arch": "krea2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -696,6 +719,7 @@
   },
   "krea2:o_edit_turbo": {
    "arch": "krea2",
+   "assistant_lora_path": "ostris/krea2_turbo_training_adapter/krea2_turbo_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -729,6 +753,7 @@
   },
   "krea2:turbo": {
    "arch": "krea2",
+   "assistant_lora_path": "ostris/krea2_turbo_training_adapter/krea2_turbo_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -758,6 +783,7 @@
   },
   "ltx2": {
    "arch": "ltx2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -787,6 +813,7 @@
   },
   "ltx2.3": {
    "arch": "ltx2.3",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -816,6 +843,7 @@
   },
   "ltx2.5": {
    "arch": "ltx2.5",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -845,6 +873,7 @@
   },
   "lumina2": {
    "arch": "lumina2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -874,6 +903,7 @@
   },
   "mageflow": {
    "arch": "mageflow",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -903,6 +933,7 @@
   },
   "mageflow_edit": {
    "arch": "mageflow_edit",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -932,6 +963,7 @@
   },
   "ming_image": {
    "arch": "ming_image",
+   "assistant_lora_path": "ostris/ming_image_training_adapter/ming_image_01_design_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -963,6 +995,7 @@
   },
   "minimax_h3": {
    "arch": "minimax_h3",
+   "assistant_lora_path": "ostris/minimax_h3_training_adapter/minimax_h3_training_adapter_v3.safetensors",
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -992,6 +1025,7 @@
   },
   "minimax_h3_image": {
    "arch": "minimax_h3_image",
+   "assistant_lora_path": "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -1021,6 +1055,7 @@
   },
   "minimax_h3_omni": {
    "arch": "minimax_h3_omni",
+   "assistant_lora_path": "ostris/minimax_h3_training_adapter/fastvideo_fasth3_omni_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -1050,6 +1085,7 @@
   },
   "minimax_h3_ref2va": {
    "arch": "minimax_h3_ref2va",
+   "assistant_lora_path": "ostris/minimax_h3_training_adapter/minimax_h3_ref2va_training_adapter_v2.safetensors",
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -1079,6 +1115,7 @@
   },
   "minimax_h3_vsa": {
    "arch": "minimax_h3_vsa",
+   "assistant_lora_path": "ostris/minimax_h3_training_adapter/fastvideo_fasth3_8step_v2_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -1108,6 +1145,7 @@
   },
   "moss_image": {
    "arch": "moss_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1141,6 +1179,7 @@
   },
   "moss_image:base": {
    "arch": "moss_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1174,6 +1213,7 @@
   },
   "moss_image:base_edit": {
    "arch": "moss_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1210,6 +1250,7 @@
   },
   "moss_image:edit": {
    "arch": "moss_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1246,6 +1287,7 @@
   },
   "nucleus_image": {
    "arch": "nucleus_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1275,6 +1317,7 @@
   },
   "omnigen2": {
    "arch": "omnigen2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1304,6 +1347,7 @@
   },
   "p_h3_image": {
    "arch": "p_h3_image",
+   "assistant_lora_path": "ostris/minimax_h3_training_adapter/p_h3_image_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -1333,6 +1377,7 @@
   },
   "prx_pixel": {
    "arch": "prx_pixel",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1362,6 +1407,7 @@
   },
   "qwen25_omni": {
    "arch": "qwen25_omni",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1393,6 +1439,7 @@
   },
   "qwen38": {
    "arch": "qwen38",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1424,6 +1471,7 @@
   },
   "qwen_image": {
    "arch": "qwen_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1453,6 +1501,7 @@
   },
   "qwen_image:2512": {
    "arch": "qwen_image",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1482,6 +1531,7 @@
   },
   "qwen_image_2": {
    "arch": "qwen_image_2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1513,6 +1563,7 @@
   },
   "qwen_image_2:turbo": {
    "arch": "qwen_image_2",
+   "assistant_lora_path": "ostris/qwen_image_2_turbo_training_adapter/qwen_image_2_turbo_training_adapter_v1.safetensors",
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1545,6 +1596,7 @@
   },
   "qwen_image_edit": {
    "arch": "qwen_image_edit",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1574,6 +1626,7 @@
   },
   "qwen_image_edit_plus": {
    "arch": "qwen_image_edit_plus",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1605,6 +1658,7 @@
   },
   "qwen_image_edit_plus:2511": {
    "arch": "qwen_image_edit_plus",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1636,6 +1690,7 @@
   },
   "sd15": {
    "arch": "sd1",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1665,6 +1720,7 @@
   },
   "sdxl": {
    "arch": "sdxl",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1694,6 +1750,7 @@
   },
   "wan21:14b": {
    "arch": "wan21",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1723,6 +1780,7 @@
   },
   "wan21:1b": {
    "arch": "wan21",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1752,6 +1810,7 @@
   },
   "wan21_i2v:14b": {
    "arch": "wan21_i2v",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1781,6 +1840,7 @@
   },
   "wan21_i2v:14b480p": {
    "arch": "wan21_i2v",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1810,6 +1870,7 @@
   },
   "wan22_14b:t2v": {
    "arch": "wan22_14b",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1842,6 +1903,7 @@
   },
   "wan22_14b_i2v": {
    "arch": "wan22_14b_i2v",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1874,6 +1936,7 @@
   },
   "wan22_5b": {
    "arch": "wan22_5b",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1903,6 +1966,7 @@
   },
   "yue2": {
    "arch": "yue2",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": true
    },
@@ -1937,6 +2001,7 @@
   },
   "zeta_chroma": {
    "arch": "zeta_chroma",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1966,6 +2031,7 @@
   },
   "zimage": {
    "arch": "zimage",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -1995,6 +2061,7 @@
   },
   "zimage:deturbo": {
    "arch": "zimage",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -2024,6 +2091,7 @@
   },
   "zimage:turbo": {
    "arch": "zimage",
+   "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
    "dataset": {
     "cache_latents_to_disk": false
    },
@@ -2053,6 +2121,7 @@
   },
   "zimage_l2p": {
    "arch": "zimage_l2p",
+   "assistant_lora_path": null,
    "dataset": {
     "cache_latents_to_disk": false
    },

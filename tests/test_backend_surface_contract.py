@@ -1283,10 +1283,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ("ming_image", "inclusionAI/Ming-Image-0.1-Design", (), {}),
             ("moss_image", "OpenMOSS-Team/MOSS-Image-SFT", (), {}),
             ("moss_image:base_edit", "OpenMOSS-Team/MOSS-Image-Base", ("a.png", "b.png"), {"model_edit": True}),
-            # Turbo trains the distilled checkpoint through a training adapter the author supplies.
-            ("qwen_image_2:turbo", "Comfy-Org/Qwen-Image-2.1/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors", (), {
-                "native_config": {"model": {"assistant_lora_path": "ostris/qwen_image_2_turbo_training_adapter/qwen_image_2_turbo_training_adapter_v1.safetensors"}},
-            }),
+            # Turbo trains the distilled checkpoint through the training adapter its UI entry names.
+            ("qwen_image_2:turbo", "Comfy-Org/Qwen-Image-2.1/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors", (), {}),
         )
         for arch, model, controls, authored in cases:
             with self.subTest(arch=arch, controls=len(controls)), tempfile.TemporaryDirectory() as directory:
@@ -1304,7 +1302,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertEqual(len(process["datasets"][0].get("control_path") or []), len(controls))
                 if arch == "qwen_image_2:turbo":
                     self.assertTrue(process["model"]["model_kwargs"]["turbo"])
-                    self.assertEqual(process["model"]["assistant_lora_path"], authored["native_config"]["model"]["assistant_lora_path"])
+                    self.assertEqual(
+                        process["model"]["assistant_lora_path"],
+                        "ostris/qwen_image_2_turbo_training_adapter/qwen_image_2_turbo_training_adapter_v1.safetensors",
+                    )
                 if arch.startswith("moss_image"):
                     self.assertEqual(process["model"].get("model_kwargs", {}).get("edit", False), bool(controls))
         # Kura projects one flux3 reference (no run has verified several), so a second one is refused.
@@ -1389,6 +1390,208 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "model.base 'OpenMOSS-Team/MOSS-Image-Base' is the model of UI entry moss_image:base, moss_image:base_edit, but model_arch 'moss_image:edit' selects entry 'moss_image:edit'"):
             compiled("OpenMOSS-Team/MOSS-Image-Base", ())
 
+    def _ai_toolkit_adapter_run(self, arch: str, base: str, **authored: object) -> dict[str, object]:
+        return {
+            "id": "adapter-run",
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": arch, "dataset_config": {}, **authored}},
+            "model": {"base": base}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+        }
+
+    def _ai_toolkit_adapter_outcome(self, run: dict[str, object]) -> tuple[list[dict[str, object]], dict[str, object]]:
+        """The training-adapter requirements a run declares and the model section compile writes."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=())
+            BACKENDS["ai-toolkit"].compile(run, root)
+            model = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]["model"]
+        requirements = BACKENDS["ai-toolkit"].requirements(run, None, declared=True)
+        return [item for item in requirements if item["role"] == "training_adapter"], model
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_training_adapter_is_a_declared_model_input(self) -> None:
+        h3_adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+        h3 = ("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image")
+
+        # Unset: the pinned UI entry's adapter is listed as a model input and written to the config.
+        listed, model = self._ai_toolkit_adapter_outcome(self._ai_toolkit_adapter_run(*h3))
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["acquisition"], "backend")
+        self.assertEqual(listed[0]["identity"], {"kind": "backend-resolved-selector", "value": h3_adapter})
+        self.assertEqual(listed[0]["runtime_reference"], h3_adapter)
+        self.assertEqual(listed[0]["selected_by"], "baseline")
+        self.assertEqual(model["assistant_lora_path"], h3_adapter)
+
+        # An authored reference wins over the baseline's.
+        own = "someone/own-adapter/own_adapter.safetensors"
+        listed, model = self._ai_toolkit_adapter_outcome(self._ai_toolkit_adapter_run(*h3, assistant_lora_path=own))
+        self.assertEqual([(item["runtime_reference"], item["selected_by"]) for item in listed], [(own, "authored")])
+        self.assertEqual(model["assistant_lora_path"], own)
+
+        # `none` loads no adapter: nothing is listed and nothing is written.
+        listed, model = self._ai_toolkit_adapter_outcome(self._ai_toolkit_adapter_run(*h3, assistant_lora_path="none"))
+        self.assertEqual(listed, [])
+        self.assertNotIn("assistant_lora_path", model)
+
+        # An entry whose UI names no adapter lists none; an authored one is still listed there.
+        for arch, base in (("sd1", "stable-diffusion-v1-5/stable-diffusion-v1-5"), ("flux", "black-forest-labs/FLUX.1-dev")):
+            with self.subTest(arch=arch):
+                listed, model = self._ai_toolkit_adapter_outcome(self._ai_toolkit_adapter_run(arch, base))
+                self.assertEqual(listed, [])
+                self.assertNotIn("assistant_lora_path", model)
+        listed, model = self._ai_toolkit_adapter_outcome(
+            self._ai_toolkit_adapter_run("flux", "black-forest-labs/FLUX.1-dev", assistant_lora_path=own),
+        )
+        self.assertEqual([item["runtime_reference"] for item in listed], [own])
+        self.assertEqual(model["assistant_lora_path"], own)
+
+        # A local file is a local-path requirement, exactly as a local model.base is.
+        local = "/workspace/models/own_adapter.safetensors"
+        run = self._ai_toolkit_adapter_run(*h3, assistant_lora_path=local)
+        listed, model = self._ai_toolkit_adapter_outcome(run)
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["acquisition"], "local-path")
+        self.assertEqual(listed[0]["identity"], {"kind": "path", "path": local})
+        self.assertEqual(model["assistant_lora_path"], local)
+        run["model"] = {"base": "/workspace/models/base"}
+        by_role = {item["role"]: item for item in BACKENDS["ai-toolkit"].requirements(run, None, declared=True)}
+        differing = {"role", "identity", "runtime_reference", "pinning", "selected_by"}
+        self.assertEqual(
+            {key: value for key, value in by_role["training_adapter"].items() if key not in differing},
+            {key: value for key, value in by_role["base_model"].items() if key not in differing},
+        )
+
+    def test_ai_toolkit_training_adapter_in_native_config_is_refused_naming_the_field(self) -> None:
+        adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+        run = self._ai_toolkit_adapter_run(
+            "minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", native_config={"model": {"assistant_lora_path": adapter}},
+        )
+        with self.assertRaisesRegex(ValueError, r"native_config\.model\.assistant_lora_path.*use backend\.config\.assistant_lora_path"):
+            validate_backend_config(run)
+        # A manifest an earlier Kura froze with the native key is still read.
+        validate_backend_config(run, frozen=True)
+        for value in ("", "   ", 3, True, ["a"]):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "backend.config.assistant_lora_path must be"):
+                validate_backend_config(self._ai_toolkit_adapter_run("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", assistant_lora_path=value))
+        # No adapter has one spelling: a near miss is refused naming it, never forwarded as a file name.
+        for value in ("None", "NONE", " none", "none ", "null", "Null"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "backend.config.assistant_lora_path.*write none"):
+                validate_backend_config(self._ai_toolkit_adapter_run("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", assistant_lora_path=value))
+        validate_backend_config(self._ai_toolkit_adapter_run("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", assistant_lora_path="none"))
+        self.assertIn("assistant_lora_path", BACKENDS["ai-toolkit"].surface.fields)
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_training_adapter_is_decided_once_for_both_executors(self) -> None:
+        from kura.backends import ai_toolkit  # noqa: PLC0415
+
+        outcomes = {}
+        for executor in ("docker", "runpod"):
+            run = self._ai_toolkit_adapter_run("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image")
+            run["compute"] = {"executor": executor}
+            real, callers = ai_toolkit.ai_toolkit_training_adapter, set()
+
+            def owner(asked: dict[str, object]) -> dict[str, str] | None:
+                callers.add(sys._getframe(1).f_code.co_name)
+                return real(asked)
+
+            with patch.object(ai_toolkit, "ai_toolkit_training_adapter", owner):
+                listed, model = self._ai_toolkit_adapter_outcome(run)
+            # Compile and the requirement list each ask the one owner; neither decides by itself.
+            self.assertLessEqual({"compile_ai_toolkit", "requirements_ai_toolkit"}, callers, executor)
+            outcomes[executor] = (listed, model["assistant_lora_path"])
+        self.assertEqual(outcomes["docker"], outcomes["runpod"])
+        # The owner's answer is the only source of both: a different answer changes both the same way.
+        for executor in ("docker", "runpod"):
+            run = self._ai_toolkit_adapter_run("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image")
+            run["compute"] = {"executor": executor}
+            with patch.object(ai_toolkit, "ai_toolkit_training_adapter", return_value={"reference": "x/y/z.safetensors", "selected_by": "authored"}):
+                listed, model = self._ai_toolkit_adapter_outcome(run)
+            self.assertEqual([item["runtime_reference"] for item in listed], ["x/y/z.safetensors"], executor)
+            self.assertEqual(model["assistant_lora_path"], "x/y/z.safetensors", executor)
+            with patch.object(ai_toolkit, "ai_toolkit_training_adapter", return_value=None):
+                listed, model = self._ai_toolkit_adapter_outcome(run)
+            self.assertEqual(listed, [], executor)
+            self.assertNotIn("assistant_lora_path", model, executor)
+
+    def test_a_compiled_runs_plan_reads_its_frozen_model_requirements(self) -> None:
+        from kura.run_commands.plan import collect_run_preflight, format_run_plan, plan_run  # noqa: PLC0415
+
+        baseline_adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+        old_adapter = "someone/old-adapter/old_adapter.safetensors"
+        base = {
+            "role": "base_model", "acquisition": "backend", "runtime_reference": "Comfy-Org/MiniMax-H3-Image",
+            "identity": {"kind": "backend-resolved-selector", "value": "Comfy-Org/MiniMax-H3-Image"},
+            "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"},
+        }
+        frozen_adapter = {
+            **base, "role": "training_adapter", "runtime_reference": "frozen/adapter/frozen.safetensors",
+            "identity": {"kind": "backend-resolved-selector", "value": "frozen/adapter/frozen.safetensors"}, "selected_by": "authored",
+        }
+        cases = {
+            # Compiled before the adapter was a model input: the frozen config loads none.
+            "old": ({}, [base]),
+            # Compiled when the adapter was authored in native_config: the frozen config loads that one.
+            "old-native": ({"native_config": {"model": {"assistant_lora_path": old_adapter}}}, [base]),
+            # Compiled since: the lock names the adapter, whatever the baseline says today.
+            "new": ({}, [base, frozen_adapter]),
+        }
+        previous = Path.cwd()
+        plans, drafts, launch_facts = {}, {}, {}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            (root / "datasets" / "tiny").mkdir(parents=True)
+            os.chdir(root)
+            try:
+                for run_id, (authored, requirements) in cases.items():
+                    run = {
+                        "schema_version": 2, "id": run_id, "type": "train", "model": {"base": "Comfy-Org/MiniMax-H3-Image"},
+                        "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+                        "backend": {"name": "ai-toolkit", "config": {"model_arch": "minimax_h3_image", **authored}},
+                    }
+                    resolved = root / "runs" / run_id / "resolved"
+                    resolved.mkdir(parents=True)
+                    (resolved.parent / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+                    if run_id != "old-native":  # the native key is refused in a draft
+                        drafts[run_id] = format_run_plan(plan_run(run_id))
+                    (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+                    (resolved / "model-requirements.lock.yaml").write_text(
+                        yaml.safe_dump({"schema_version": 1, "requirements": requirements}), encoding="utf-8",
+                    )
+                    plans[run_id] = format_run_plan(plan_run(run_id))
+                    launch_facts[run_id] = " ".join(
+                        str(record.get("fact")) for record in collect_run_preflight(run, root, config={}, executor="docker", run_dir=resolved.parent)
+                    )
+            finally:
+                os.chdir(previous)
+        # A draft is decided now: the baseline adapter is a model input the trainer downloads.
+        self.assertIn("- training_adapter", drafts["old"])
+        self.assertIn("selected_by  the pinned upstream UI baseline", drafts["old"])
+        for run_id in ("old", "old-native"):
+            with self.subTest(run=run_id):
+                for text in (plans[run_id], launch_facts[run_id]):
+                    self.assertNotIn("training_adapter", text)
+                    self.assertNotIn("training adapter", text)
+                    self.assertNotIn(baseline_adapter, text)
+                self.assertIn("- base_model", plans[run_id])
+        self.assertIn(f"model.assistant_lora_path  {old_adapter}  authored", plans["old-native"])
+        for text in (plans["new"], launch_facts["new"]):
+            self.assertIn("frozen/adapter/frozen.safetensors", text)
+            self.assertNotIn(baseline_adapter, text)
+        self.assertIn("selected_by  authored", plans["new"])
+
+    def test_ai_toolkit_baseline_names_the_adapter_of_exactly_the_pinned_ui_entries(self) -> None:
+        from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline  # noqa: PLC0415
+
+        entries = load_baseline()["entries"]
+        self.assertEqual(
+            sorted(name for name, entry in entries.items() if entry["assistant_lora_path"] is not None),
+            ["krea2:o_edit_turbo", "krea2:turbo", "ming_image", "minimax_h3", "minimax_h3_image", "minimax_h3_omni",
+             "minimax_h3_ref2va", "minimax_h3_vsa", "p_h3_image", "qwen_image_2:turbo", "zimage:turbo"],
+        )
+        # The adapter is a model input, never a value the scalar fill writes.
+        self.assertNotIn("assistant_lora_path", BASELINE_KEYS["model"])
+        self.assertTrue(all("assistant_lora_path" not in entry["model"] for entry in entries.values()))
+
     @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_the_0_13_42_minimax_h3_image_text_to_image(self) -> None:
         adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
@@ -1406,10 +1609,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 return yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
 
         # Image and caption: the baseline fills the pinned UI entry's pre-quantized load and caches.
-        process = compiled(
-            "minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", (),
-            native_config={"model": {"assistant_lora_path": adapter}},
-        )
+        process = compiled("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", ())
         model = process["model"]
         self.assertEqual(model["arch"], "minimax_h3_image")
         self.assertEqual(
@@ -1419,7 +1619,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertTrue(process["train"]["cache_text_embeddings"])
         self.assertTrue(process["datasets"][0]["cache_latents_to_disk"])
         self.assertFalse(process["datasets"][0].get("control_path"))
-        # The training adapter is still authored in this pin (a declared model input is a separate design).
+        # The training adapter is the one the pinned UI entry names (test_ai_toolkit_training_adapter_*).
         self.assertEqual(model["assistant_lora_path"], adapter)
         # Reference editing is not projected yet, so a reference is refused rather than dropped.
         with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile matches architecture='minimax_h3_image'"):

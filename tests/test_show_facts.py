@@ -389,6 +389,30 @@ class AiToolkitEffectiveSettingsTests(unittest.TestCase):
         self.assertIn("train.cache_text_embeddings  true  authored", text)
         self.assertIn("model.qtype  convrot8  baseline", text)
 
+    def test_plan_lists_the_training_adapter_as_a_model_input_and_says_who_chose_it(self) -> None:
+        from kura.run_commands.plan import _plan_requirements, _resources_payload  # noqa: PLC0415
+
+        adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+
+        def plan(**authored: Any) -> str:
+            run = self._run({"model_arch": "minimax_h3_image", **authored})
+            run["model"] = {"base": "Comfy-Org/MiniMax-H3-Image"}
+            return format_run_plan({"resources": _resources_payload(run, {}, _plan_requirements(run, {}))})
+
+        text = plan()
+        self.assertIn("- training_adapter", text)
+        self.assertIn(adapter, text)
+        self.assertIn("selected_by  the pinned upstream UI baseline", text)
+        # The adapter is a model input, shown once: it is not also a trainer-settings row.
+        self.assertNotIn("model.assistant_lora_path", text)
+        text = plan(assistant_lora_path="someone/own/own.safetensors")
+        self.assertIn("selected_by  authored", text)
+        self.assertIn("someone/own/own.safetensors", text)
+        self.assertNotIn(adapter, text)
+        text = plan(assistant_lora_path="none")
+        self.assertNotIn("training_adapter", text)
+        self.assertNotIn("assistant_lora_path", text)
+
     def test_an_arch_with_no_baseline_entry_reports_why(self) -> None:
         settings = display_ai_toolkit(self._run({"model_arch": "sd2"}))["effective_settings"]
         self.assertIn("noise scheduler", settings["error"])

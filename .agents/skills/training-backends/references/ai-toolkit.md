@@ -19,6 +19,12 @@ Use this reference only for `backend.name: ai-toolkit`.
   to change it deliberately; do not copy baseline values into `native_config`.
   An architecture without a baseline entry needs an authored
   `native_config.train.noise_scheduler` and `mixed_precision`.
+- The training adapter (`model.assistant_lora_path`) is a declared model
+  input, not a trainer setting: `ai_toolkit_training_adapter` decides it
+  (authored `backend.config.assistant_lora_path`, else the baseline entry's,
+  else none; `none` loads no adapter), and the requirement list (role
+  `training_adapter`) and the native config both read it there.
+  `native_config.model.assistant_lora_path` is refused.
 - After a pin upgrade, regenerate the baseline with
   `uv run python scripts/extract_ai_toolkit_baseline.py` and review its diff.
 - Keep Hugging Face cache paths configurable and inside the mounted workspace.
