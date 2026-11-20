@@ -14,6 +14,50 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-minimax-h3-image-edit-a100-runpod-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: e86c53f3ab72adb3966bed48b75db68eeb04193bc8678e19e93353e74bd4373d
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: minimax_h3_image
+      mode: image-control
+      references: 1
+      executor: runpod
+      transfer: selected-files
+      gpu: A100 SXM 80GB
+      gradient_checkpointing: false
+      optimizer_steps: 1
+      finite_nonzero_lora_b: 208/208
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-minimax-h3-image-edit-runpod.yaml
+  - id: ai-toolkit-minimax-h3-image-edit-a40-runpod-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: e86c53f3ab72adb3966bed48b75db68eeb04193bc8678e19e93353e74bd4373d
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: minimax_h3_image
+      mode: image-control
+      references: 1
+      executor: runpod
+      transfer: selected-files
+      gpu: A40 48GB
+      gradient_checkpointing: false
+      optimizer_steps: 1
+      failure: CUDA OOM in the training step
+    evidence_kind: real-runtime
+    outcome: failed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-minimax-h3-image-edit-runpod.yaml
   - id: ai-toolkit-network-filter-conformance-docker-2026-11-20
     backend: ai-toolkit
     adapter_source:

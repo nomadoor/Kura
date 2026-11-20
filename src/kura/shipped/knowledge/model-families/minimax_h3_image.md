@@ -24,8 +24,16 @@
   `reference_min_short_edge` and `reference_max_short_edge` change the
   bounds); the text encoder sees it at a 1024 short edge. Samples may have
   different numbers of references at batch size 1; at a larger batch the
-  trainer refuses a batch whose counts or reference sizes differ. Untested:
-  no editing run is recorded yet.
+  trainer refuses a batch whose counts or reference sizes differ.
+- Recorded: editing with one reference completed one real optimizer step on
+  RunPod on an A100 80 GB (2026-11-20), at 256×256 with the default training
+  adapter; the container's memory peaked at about 81 GB. The same run on a
+  48 GB A40 ran out of GPU memory in the training step, because a reference
+  is encoded at a short edge of at least 1024 whatever the training
+  resolution. Not recorded yet: two or more references, a smaller GPU with
+  lower reference bounds, or output quality.
+  source: evidence ai-toolkit-minimax-h3-image-edit-a100-runpod-2026-11-20
+  source: evidence ai-toolkit-minimax-h3-image-edit-a40-runpod-2026-11-20
   source: AI-Toolkit commit bdd55603 (minimax_h3_image.py reference sizing, minimax_h3.py `get_noise_prediction`); Kura profile `multi-control-image`
 - The trainer labels the references `Picture 1`, `Picture 2`, and so on for
   the text encoder, so a caption can name them as `<Picture 1>`; upstream
