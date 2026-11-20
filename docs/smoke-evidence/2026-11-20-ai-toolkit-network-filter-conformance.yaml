@@ -1,0 +1,28 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-11-20'
+executor: docker
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --yes
+hardware:
+  local_gpu: NVIDIA GeForce RTX 4090 (24564 MiB)
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit from
+  commit ea913d6 on the branch feat/ai-toolkit-network-filter-baseline, where the baseline carries
+  the upstream UI's network.network_kwargs. The scenario's sd1 entry has an empty filter, so its
+  compiled config gains ignore_if_contains [] and trains the same modules; this checks that
+  ordinary runs stay as they were. RunPod was not run, as the change has no executor-specific path.
+backends:
+  ai-toolkit:
+    executor: docker
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    adapter_source: e53748409c3dde033460b3ce3c3c28d407866e57f6d5b74df0d363b7d03b8c1b
+    runs: [20261120-1033_conf-ai-one-control_0347, 20261120-1033_conf-ai-one-control-2_62db, 20261120-1033_conf-ai-one-split_d08a, 20261120-1034_conf-ai-one-resume_8f93, 20261120-1034_conf-ai-multi-fresh_5fc1, 20261120-1035_conf-ai-multi-split_b0d1, 20261120-1035_conf-ai-multi-resume_c99b, 20261120-1035_conf-ai-multi-accum-2_e355, 20261120-1036_conf-ai-one-many-saves_f7c3]
+results:
+  P1: pass (including gradient accumulation 2)
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: not run (local Docker)
+  P7: pass, including a 12-step run that keeps all six step saves
+  P8: pass
