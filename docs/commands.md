@@ -166,8 +166,10 @@ pinned upstream UI entry names) is a model requirement of its own, role
 `training_adapter`, with `selected_by` saying `authored` or `baseline`; the
 trainer downloads a Hugging Face one into
 `ai-toolkit-models/loras/training_adapters/` unless a file of its name is
-already below `ai-toolkit-models/loras/`, and a local file is mounted like any
-local model path. Locks written before this list no adapter, and those runs
+already below `ai-toolkit-models/loras/`. A local file is mounted like any
+local model path on local Docker; a RunPod run forwards the path as written
+without uploading it, as it does a local `model.base`, so on RunPod name a
+Hugging Face adapter. Locks written before this list no adapter, and those runs
 loaded one only if `native_config.model.assistant_lora_path` named it. After the
 trainer ends, Kura lists every file under `MODELS_PATH` (path, size, and mtime,
 without dot-named entries) in `realizations/<id>.ai-toolkit-models.json`: the
