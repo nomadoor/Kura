@@ -9,10 +9,8 @@
   killed. Not recorded yet: a 24 GB GPU, output quality, or settings for a
   real dataset.
   source: evidence ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
-- In that run the 50 `adaln_proj` layers got LoRA weights that stayed zero.
-  The upstream UI leaves them out of the LoRA
-  (`network_kwargs.ignore_if_contains: [adaln_proj]`); Kura does not do that
-  yet.
+- That run predates the module filter below, so its 50 `adaln_proj` layers
+  got LoRA weights that stayed zero.
   source: evidence ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
 - Backend and model: AI-Toolkit `model_arch: minimax_h3_image` with
   `model.base: Comfy-Org/MiniMax-H3-Image`, from image and caption datasets.
@@ -33,6 +31,11 @@
   upload it). `assistant_lora_path: none` trains without one. It cannot be
   written in `native_config`.
   source: AI-Toolkit commit 5b1670a (ui.tsx entry `minimax_h3_image`, minimax_h3_image.py)
+- The baseline leaves the `adaln_proj` layers out of the LoRA, as the
+  upstream UI does (`network.network_kwargs.ignore_if_contains: [adaln_proj]`
+  in `kura run plan`). A LoRA on those layers never trains: the model reads
+  their weights directly, so the saved weights stay zero.
+  source: AI-Toolkit baseline entry `minimax_h3_image` (pinned commit bdd55603); minimax_h3 transformer.py `MiniMaxH3AdalnProj.forward`
 - Training draws only the model's 6 sampling timesteps, each through its own
   output head, so `timestep_type` has no effect.
   source: AI-Toolkit commit 5b1670a (minimax_h3_image.py `get_train_scheduler`)

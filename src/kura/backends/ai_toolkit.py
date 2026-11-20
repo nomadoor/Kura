@@ -1364,12 +1364,15 @@ _AI_TOOLKIT_AUTHORED_BASELINE_KEYS = {
     for section, fields in _AI_TOOLKIT_TYPED_FIELDS.items() for key, field in fields.items()
     if key in BASELINE_KEYS.get(section, ())
 }
+# The process sections the baseline fills key by key; its dataset keys go onto each dataset.
+_AI_TOOLKIT_FILLED_SECTIONS = tuple(section for section in BASELINE_KEYS if section != "dataset")
 # How backend.config.native_config reaches the trainer, for `kura run capabilities`.
 AI_TOOLKIT_NATIVE_CONFIG_MERGE = (
     "each native_config section (train, model, network, save, ...) merges key by key into the process "
     "Kura generates; authored values win (native_config keys and the typed fields, which may not both set "
     "one key), and the pinned upstream UI baseline of the selected model_arch fills only the baseline keys "
-    "left unset, a mapping such as model_kwargs or optimizer_params only its missing subkeys. A key Kura "
+    "left unset, a mapping such as model_kwargs, optimizer_params, or network.network_kwargs (the LoRA "
+    "module filter ignore_if_contains) only its missing subkeys. A key Kura "
     "owns (paths, datasets, steps, seed, saving, schedule, the training adapter) is refused there"
 )
 
@@ -1405,7 +1408,7 @@ def _ai_toolkit_authored_sections(override: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ai_toolkit_effective_settings(run: dict[str, Any]) -> dict[str, Any] | None:
-    """Each train and model value the generated process gets from the run or from the pinned
+    """Each train, model, and network value the generated process gets from the run or from the pinned
     upstream UI baseline, marked by where it came from. Display only: compile decides."""
     if _ai_toolkit_backend_override(run).get("command") is not None:
         return None
@@ -1426,7 +1429,7 @@ def _ai_toolkit_effective_settings(run: dict[str, Any]) -> dict[str, Any] | None
         return found
 
     settings: dict[str, Any] = {"entry": baseline["entry"], "commit": baseline["commit"]}
-    for section in ("train", "model"):
+    for section in _AI_TOOLKIT_FILLED_SECTIONS:
         section_values = authored.get(section) if isinstance(authored.get(section), dict) else {}
         rows = {key: {"value": value, "source": "authored"} for key, value in leaves(section_values).items()}
         rows.update({key: {"value": value, "source": "baseline"} for key, value in leaves(baseline[section]).items()})
@@ -1439,7 +1442,7 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
 
     Authored values win: a Kura field or a ``native_config`` key removes the
     matching baseline value. Mapping values (``model_kwargs``,
-    ``optimizer_params``) fill only their missing subkeys. Returns None for an
+    ``optimizer_params``, ``network_kwargs``) fill only their missing subkeys. Returns None for an
     explicit ``command`` run, which owns its native configuration. An
     architecture without a baseline entry refuses unless the values that decide
     whether training runs at all are authored.
@@ -1465,10 +1468,13 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
                 f"AI-Toolkit model_arch {arch!r} has no unambiguous entry in the pinned UI training baseline, "
                 "so Kura cannot choose its noise scheduler or precision; author " + ", ".join(missing)
             )
-        return {"entry": None, "commit": load_baseline()["upstream"]["commit"], "train": {}, "model": {}, "dataset": {}}
+        return {
+            "entry": None, "commit": load_baseline()["upstream"]["commit"],
+            **{section: {} for section in _AI_TOOLKIT_FILLED_SECTIONS}, "dataset": {},
+        }
     name, entry = selected
     values: dict[str, Any] = {"entry": name, "commit": load_baseline()["upstream"]["commit"]}
-    for section in ("train", "model"):
+    for section in _AI_TOOLKIT_FILLED_SECTIONS:
         authored = native.get(section) if isinstance(native.get(section), dict) else {}
         filled: dict[str, Any] = {}
         for key in BASELINE_KEYS[section]:
@@ -1515,7 +1521,7 @@ def _apply_ai_toolkit_baseline(run: dict[str, Any], process: dict[str, Any]) -> 
     baseline = ai_toolkit_baseline(run)
     if baseline is None:
         return
-    for section in ("train", "model"):
+    for section in _AI_TOOLKIT_FILLED_SECTIONS:
         target = process.setdefault(section, {})
         for key, value in baseline[section].items():
             if isinstance(value, dict):

@@ -1786,7 +1786,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 _append_kv(lines, "error", settings["error"], indent=4)
             else:
                 _append_kv(lines, "baseline", f"entry {_format_plan_value(settings.get('entry'))}, commit {_format_plan_value(settings.get('commit'))}", indent=4)
-                for section in ("train", "model"):
+                for section in ("train", "model", "network"):
                     rows = settings.get(section) if isinstance(settings.get(section), dict) else {}
                     for key, row in rows.items():
                         if isinstance(row, dict):

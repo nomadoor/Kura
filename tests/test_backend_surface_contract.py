@@ -1078,7 +1078,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                 self.assertEqual(process, {
                     "type": "sd_trainer", "training_folder": f"/workspace/runs/{run_id}/outputs", "device": "cuda:0",
-                    "network": {"type": "lora", "linear": 1, "linear_alpha": 1},
+                    # The UI's base job leaves no module out of the LoRA; the trainer reads the
+                    # empty list as it reads an absent one (toolkit/lora_special.py:362-364).
+                    "network": {"type": "lora", "linear": 1, "linear_alpha": 1, "network_kwargs": {"ignore_if_contains": []}},
                     "save": {"save_every": 1, "max_step_saves_to_keep": 1},
                     "datasets": [{
                         "folder_path": f"/workspace/runs/{run_id}/cache/dataset-view/ai-toolkit/flux2-klein-tiny", "caption_ext": ".txt",
@@ -1591,6 +1593,82 @@ class BackendSurfaceContractTests(unittest.TestCase):
         # The adapter is a model input, never a value the scalar fill writes.
         self.assertNotIn("assistant_lora_path", BASELINE_KEYS["model"])
         self.assertTrue(all("assistant_lora_path" not in entry["model"] for entry in entries.values()))
+
+    def _ai_toolkit_compiled_network(self, run: dict[str, object]) -> dict[str, object]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_ai_toolkit_manifest_projection(run, root, target="sample.png", controls=())
+            BACKENDS["ai-toolkit"].compile(run, root)
+            return yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]["network"]
+
+    @posix_only(DATASET_IO)
+    def test_ai_toolkit_baseline_fills_the_ui_lora_module_filter(self) -> None:
+        from kura.backends import ai_toolkit  # noqa: PLC0415
+
+        h3 = ("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image")
+
+        # Unset: the modules the pinned UI entry leaves out of the LoRA are left out, on every
+        # executor, and compile takes them from the one owner of the baseline fill.
+        outcomes = {}
+        for executor in ("docker", "runpod"):
+            run = self._ai_toolkit_adapter_run(*h3, network_dim=16, network_alpha=16)
+            run["compute"] = {"executor": executor}
+            real, callers = ai_toolkit.ai_toolkit_baseline, set()
+
+            def owner(asked: dict[str, object]) -> dict[str, object] | None:
+                callers.add(sys._getframe(1).f_code.co_name)
+                return real(asked)
+
+            with patch.object(ai_toolkit, "ai_toolkit_baseline", owner):
+                outcomes[executor] = self._ai_toolkit_compiled_network(run)
+            self.assertIn("_apply_ai_toolkit_baseline", callers, executor)
+            with patch.object(ai_toolkit, "ai_toolkit_baseline", return_value={
+                "entry": "x", "commit": "x", "train": {}, "model": {}, "dataset": {},
+                "network": {"network_kwargs": {"ignore_if_contains": ["from_the_owner"]}},
+            }):
+                self.assertEqual(self._ai_toolkit_compiled_network(run)["network_kwargs"], {"ignore_if_contains": ["from_the_owner"]}, executor)
+        self.assertEqual(outcomes["docker"], outcomes["runpod"])
+        self.assertEqual(
+            outcomes["docker"],
+            {"type": "lora", "linear": 16, "linear_alpha": 16, "network_kwargs": {"ignore_if_contains": ["adaln_proj"]}},
+        )
+
+        def kwargs(arch: str, base: str, authored: dict[str, object] | None = None) -> object:
+            native = {} if authored is None else {"native_config": {"network": {"network_kwargs": authored}}}
+            return self._ai_toolkit_compiled_network(self._ai_toolkit_adapter_run(arch, base, **native))["network_kwargs"]
+
+        # An authored filter wins whole: an empty list targets every module, and lists are not merged.
+        self.assertEqual(kwargs(*h3, {"ignore_if_contains": []}), {"ignore_if_contains": []})
+        self.assertEqual(kwargs(*h3, {"ignore_if_contains": ["attn"]}), {"ignore_if_contains": ["attn"]})
+        # An authored sibling subkey still gets the baseline filter.
+        self.assertEqual(
+            kwargs(*h3, {"only_if_contains": ["blocks.1."]}),
+            {"only_if_contains": ["blocks.1."], "ignore_if_contains": ["adaln_proj"]},
+        )
+        # An entry whose UI leaves no module out compiles the UI's empty filter.
+        self.assertEqual(kwargs("flux", "black-forest-labs/FLUX.1-dev"), {"ignore_if_contains": []})
+
+    def test_ai_toolkit_baseline_names_a_module_filter_for_exactly_the_pinned_ui_entries(self) -> None:
+        from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline  # noqa: PLC0415
+
+        self.assertEqual(BASELINE_KEYS["network"], ("network_kwargs",))
+        entries = load_baseline()["entries"]
+        filters = {name: entry["network"]["network_kwargs"]["ignore_if_contains"] for name, entry in entries.items()}
+        self.assertEqual(
+            {name: value for name, value in filters.items() if value},
+            {
+                **dict.fromkeys(
+                    ("minimax_h3", "minimax_h3_image", "minimax_h3_omni", "minimax_h3_ref2va", "minimax_h3_vsa", "p_h3_image"),
+                    ["adaln_proj"],
+                ),
+                **dict.fromkeys(("hidream", "hidream_e1"), ["ff_i.experts", "ff_i.gate"]),
+                **dict.fromkeys(("moss_image", "moss_image:base", "moss_image:base_edit", "moss_image:edit"), ["layers.22."]),
+                "nucleus_image": ["img_mlp.experts", "img_mlp.gate"],
+                "hidream_o1": ["lm_head", "patch_embed", "visual"],
+            },
+        )
+        # The fill carries only the filter mapping: rank, alpha, and conv stay authored.
+        self.assertTrue(all(set(entry["network"]) == {"network_kwargs"} for entry in entries.values()))
 
     @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_the_0_13_42_minimax_h3_image_text_to_image(self) -> None:

@@ -31,6 +31,8 @@ BASELINE_KEYS = {
     "train": ("noise_scheduler", "timestep_type", "dtype", "optimizer", "optimizer_params", "lr",
               "content_or_style", "loss_type", "unload_text_encoder", "cache_text_embeddings"),
     "model": ("quantize", "qtype", "quantize_te", "qtype_te", "low_vram", "model_kwargs"),
+    # The LoRA module filter (``ignore_if_contains``): the modules the UI entry leaves out.
+    "network": ("network_kwargs",),
     "dataset": ("cache_latents_to_disk",),
 }
 

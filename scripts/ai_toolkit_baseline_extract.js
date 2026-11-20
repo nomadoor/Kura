@@ -23,6 +23,7 @@ const TRAIN_KEYS = [
   'content_or_style', 'loss_type', 'unload_text_encoder', 'cache_text_embeddings',
 ];
 const MODEL_KEYS = ['quantize', 'qtype', 'quantize_te', 'qtype_te', 'low_vram', 'model_kwargs'];
+const NETWORK_KEYS = ['network_kwargs'];
 const DATASET_KEYS = ['cache_latents_to_disk'];
 
 const sources = {};
@@ -139,6 +140,7 @@ for (const [name, entry] of [...archs.entries()].sort()) {
     assistant_lora_path: process.model.assistant_lora_path ?? null,
     train: pick(process.train, TRAIN_KEYS),
     model: pick(process.model, MODEL_KEYS),
+    network: pick(process.network, NETWORK_KEYS),
     dataset: pick(process.datasets[0], DATASET_KEYS),
   };
 }
