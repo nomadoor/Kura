@@ -9,10 +9,8 @@
   killed. Not recorded yet: a 24 GB GPU, output quality, or settings for a
   real dataset.
   source: evidence ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
-- In that run the 50 `adaln_proj` layers got LoRA weights that stayed zero.
-  The upstream UI leaves them out of the LoRA
-  (`network_kwargs.ignore_if_contains: [adaln_proj]`); Kura does not do that
-  yet.
+- That run predates the module filter below, so its 50 `adaln_proj` layers
+  got LoRA weights that stayed zero.
   source: evidence ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
 - Backend and model: AI-Toolkit `model_arch: minimax_h3_image` with
   `model.base: Comfy-Org/MiniMax-H3-Image`, from image and caption datasets.
