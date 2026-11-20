@@ -967,6 +967,7 @@ class DatasetHandoffTests(unittest.TestCase):
             "flux2_klein_9b": ("multi-control-image", (1, None), "all-in-order"),
             "krea2": ("multi-control-image", (1, None), "all-in-order"),
             "mageflow_edit": ("multi-control-image", (1, None), "all-in-order"),
+            "minimax_h3_image": ("multi-control-image", (1, None), "all-in-order"),
             "minimax_h3_ref2va": ("ref2va-image-control", (1, None), "all-in-order"),
             "flex2": ("flex2-random-control", (1, None), "random-one-per-step"),
         }

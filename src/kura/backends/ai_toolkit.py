@@ -184,7 +184,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "multi-control-image": {
         "architectures": (
             "flux2", "flux2_klein_4b", "flux2_klein_9b", "krea2",
-            "mageflow_edit", "moss_image",
+            "mageflow_edit", "minimax_h3_image", "moss_image",
         ),
         "shape": "image-control",
         "target_media": "image",
