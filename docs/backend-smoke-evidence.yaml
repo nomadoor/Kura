@@ -14,6 +14,58 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-0.13.43-conformance-runpod-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-0.13.43-conformance.yaml
+  - id: ai-toolkit-0.13.43-conformance-docker-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-0.13.43-conformance.yaml
+  - id: ai-toolkit-0.13.43-class-import-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      probe: registered-diffusion-class-imports
+      imported_classes: 54
+    evidence_kind: parser
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-0.13.43-class-import.yaml
   - id: ai-toolkit-0.13.42-conformance-runpod-2026-11-14
     backend: ai-toolkit
     adapter_source:
