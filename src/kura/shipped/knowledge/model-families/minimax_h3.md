@@ -15,6 +15,8 @@
   step on RunPod in the modes the records name `lora` (2026-09-21) and
   `image-lora` (2026-09-22), both without gradient checkpointing, on trainer
   image sha256:9aa6861b0f54, an image older than the one Kura 0.7.0 pins.
+  Both ran without the training adapter, which a run now loads by default
+  (`backend.config.assistant_lora_path: none` trains without it).
   source: evidence ai-toolkit-minimax-h3-runpod-2026-09-21
   source: evidence ai-toolkit-minimax-h3-image-runpod-2026-09-22
 - Not recorded yet: model files, VRAM, speed, and quality settings. The records

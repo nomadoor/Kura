@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS, AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_OPTIMIZER_DECIDED, AI_TOOLKIT_PINNED_MODEL_ARCHS, AI_TOOLKIT_PROFILE_REQUIREMENTS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS, AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_MODEL_ARCH_VALUES, AI_TOOLKIT_OPTIMIZER_DECIDED, AI_TOOLKIT_PINNED_MODEL_ARCHS, AI_TOOLKIT_TRAINING_ADAPTER_DECIDED, AI_TOOLKIT_PROFILE_REQUIREMENTS, ai_toolkit_model_facts, command_ai_toolkit, ai_toolkit_disk_cache, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, runtime_checks_ai_toolkit, training_state_contract_ai_toolkit, training_state_contract_ai_toolkit_before_frozen_decision, validate_ai_toolkit_config
 from kura.backends.ai_toolkit_baseline import trained_arch, ui_entry_values
 from kura.backends.common import MUSUBI_ARCHITECTURES
 from kura.backends.musubi_command import MUSUBI_RESOLVED_DIR, command_musubi_tuner, musubi_disk_cache, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
@@ -186,7 +186,7 @@ def _ai_toolkit_required_field_conditions() -> tuple[FieldCondition, ...]:
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
         "batch_size", "dataset_config", "dataset_options", "flatten_groups", "gradient_accumulation_steps", "gradient_checkpointing",
-        "bypass_guidance_embedding", "extras_name_or_path", "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch", "model_edit",
+        "assistant_lora_path", "bypass_guidance_embedding", "extras_name_or_path", "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch", "model_edit",
         "network_alpha", "network_dim", "optimizer_type", "quantize", "quantize_te", "resolution",
         "save_every_n_steps", "save_last_n_steps",
     }),
@@ -209,7 +209,10 @@ AI_TOOLKIT_SURFACE = BackendSurface(
     # A max_step_saves_to_keep of 0 keeps every save in the pinned trainer. Its -1 accumulation
     # (a whole epoch) is refused: Kura counts and resumes by optimizer steps.
     integer_minimums=(("save_every_n_steps", 1), ("save_last_n_steps", 0), ("gradient_accumulation_steps", 1)),
-    decided=(("lr_scheduler", LR_SCHEDULER_DECIDED), ("optimizer_type", AI_TOOLKIT_OPTIMIZER_DECIDED)),
+    decided=(
+        ("assistant_lora_path", AI_TOOLKIT_TRAINING_ADAPTER_DECIDED),
+        ("lr_scheduler", LR_SCHEDULER_DECIDED), ("optimizer_type", AI_TOOLKIT_OPTIMIZER_DECIDED),
+    ),
 )
 
 MUSUBI_SURFACE = BackendSurface(

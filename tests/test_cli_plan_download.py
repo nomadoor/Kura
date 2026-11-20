@@ -30,6 +30,24 @@ class BackendResolvedModelTests(unittest.TestCase):
             self.assertIn("estimate (often 10–30 GB)", fact)
             self.assertIn("not counted", fact)
 
+    def test_the_acquisition_line_names_where_the_trainer_caches_a_hub_training_adapter(self) -> None:
+        adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+        run = {
+            "type": "train", "model": {"base": "Comfy-Org/MiniMax-H3-Image"},
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "minimax_h3_image"}},
+        }
+        cache = Path("/mnt/e/hf-cache")
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor):
+                fact = _model_download_preflight_report(run, {}, _plan_requirements(run, {}), executor=executor, local_cache=cache)[0]["fact"]
+                self.assertIn(adapter, fact)
+                self.assertIn("the training adapter in ai-toolkit-models/loras/training_adapters/", fact)
+        # A local adapter file is not downloaded, so no cache directory is named for it.
+        run["backend"]["config"]["assistant_lora_path"] = "/workspace/models/adapter.safetensors"
+        fact = _model_download_preflight_report(run, {}, _plan_requirements(run, {}), executor="docker", local_cache=cache)[0]["fact"]
+        self.assertNotIn("training_adapters", fact)
+        self.assertNotIn("adapter.safetensors", fact)
+
 
 class UnnamedModelTests(unittest.TestCase):
     def test_a_run_that_names_no_model_files_yet_says_its_downloads_are_unknown(self) -> None:

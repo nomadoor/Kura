@@ -160,7 +160,17 @@ uses and are shared by every workspace using that cache; runs compiled earlier
 keep their frozen `cache/ai-toolkit/models` path, which `kura cleanup plan`
 lists as a download (`cache/ai-toolkit`). The model requirement records `model.base` as a
 `backend-resolved-selector` (older locks say `huggingface-repository`), and the
-settings that steer resolution stay in `resolved/ai-toolkit.yaml`. After the
+settings that steer resolution stay in `resolved/ai-toolkit.yaml`. A training
+adapter (`backend.config.assistant_lora_path`, or by default the one the
+pinned upstream UI entry names) is a model requirement of its own, role
+`training_adapter`, with `selected_by` saying `authored` or `baseline`; the
+trainer downloads a Hugging Face one into
+`ai-toolkit-models/loras/training_adapters/` unless a file of its name is
+already below `ai-toolkit-models/loras/`. A local file is mounted like any
+local model path on local Docker; a RunPod run forwards the path as written
+without uploading it, as it does a local `model.base`, so on RunPod name a
+Hugging Face adapter. Locks written before this list no adapter, and those runs
+loaded one only if `native_config.model.assistant_lora_path` named it. After the
 trainer ends, Kura lists every file under `MODELS_PATH` (path, size, and mtime,
 without dot-named entries) in `realizations/<id>.ai-toolkit-models.json`: the
 host lists it for a local Docker run, and the RunPod job lists it on the Pod and

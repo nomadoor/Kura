@@ -21,6 +21,7 @@ from kura.yamlio import YAMLError
 from kura.secrets import bearer_request, declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
+    frozen_model_requirements,
     inspect_dataset_sources,
     inspect_dataset_view,
     load_frozen_dataset_projection,
@@ -607,27 +608,45 @@ def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
             f"{parts}{uncounted}")
 
 
-def _plan_requirements(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
-    """The run's model requirements, read once per plan or launch check and passed to every part that shows them."""
-    return model_requirements(run, download_estimate) if _run_adapter(run) is not None else []
+def _plan_requirements(run: dict[str, Any], download_estimate: dict[str, Any], run_dir: Path | None = None) -> list[dict[str, Any]]:
+    """The run's model requirements, read once per plan or launch check and passed to every part that shows them.
+
+    A compiled run (`run_dir` holds its lock) has the inputs compile froze; only the size measured
+    now is added to an input the estimate still measures. A draft is decided from its run.yaml."""
+    current = model_requirements(run, download_estimate) if _run_adapter(run) is not None else []
+    frozen = frozen_model_requirements(run_dir) if run_dir is not None else None
+    if frozen is None:
+        return current
+
+    def same_input(item: dict[str, Any]) -> str:
+        return json.dumps([item.get("role"), item.get("identity")], sort_keys=True, default=str)
+
+    measured = {same_input(item): item["measurement"] for item in current if "measurement" in item}
+    return [{**item, "measurement": measured[same_input(item)]} if same_input(item) in measured else item for item in frozen]
 
 
 def _trainer_downloads(requirements: list[dict[str, Any]], *, executor: str, local_cache: Path) -> str | None:
-    """What a trainer downloads itself (AI-Toolkit resolves `model.base` on its own), which Kura does not
-    size and the estimate does not count; None when the trainer downloads nothing itself."""
+    """What a trainer downloads itself (AI-Toolkit resolves `model.base` and a hub training adapter on its
+    own), which Kura does not size and the estimate does not count; None when the trainer downloads nothing itself."""
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
     if not backend_managed:
         return None
     sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
     # The trainer's MODELS_PATH sits at the same place inside the cache on every executor.
     inside_cache = PurePosixPath(AI_TOOLKIT_MODELS_PATH).relative_to(HF_CACHE_CONTAINER_PATH)
+    places = f"diffusers repositories in hub/, single files in {inside_cache}/"
+    if any(item.get("role") == "training_adapter" for item in backend_managed):
+        # The pinned trainer takes a file of the adapter's name already below loras/, else it downloads
+        # into loras/training_adapters/ (load_training_adapter in each arch, e.g. minimax_h3.py:354-382).
+        places += (f", the training adapter in {inside_cache}/loras/training_adapters/ unless a file of its name "
+                   f"is already below {inside_cache}/loras/")
     if executor == "runpod":
         return (f"the trainer downloads {sources} itself before the first step into the Pod's Hugging Face cache at "
-                f"{HF_CACHE_CONTAINER_PATH} (diffusers repositories in hub/, single files in {inside_cache}/), on every run, "
+                f"{HF_CACHE_CONTAINER_PATH} ({places}), on every run, "
                 "while the Pod bills: each Pod starts with an empty cache; not counted in the container-disk estimate "
                 "(often 10–30 GB), so leave room in runpod.container_disk_gb")
     return (f"the trainer downloads {sources} itself before the first step into the Hugging Face cache at {local_cache} "
-            f"(diffusers repositories in hub/, single files in {inside_cache}/), reusing files an earlier run left there; "
+            f"({places}), reusing files an earlier run left there; "
             "not counted in the disk estimate (often 10–30 GB): the disk watch stops the run before the store falls below the reserve")
 
 
@@ -822,6 +841,7 @@ def collect_run_preflight(
     executor: str | None = None,
     download_estimate: dict[str, Any] | None = None,
     requirements: list[dict[str, Any]] | None = None,
+    run_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     workspace_config = config if isinstance(config, dict) else {}
     resolved_executor = executor or run_executor(run)
@@ -830,7 +850,7 @@ def collect_run_preflight(
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(
-        run, estimate, _plan_requirements(run, estimate) if requirements is None else requirements,
+        run, estimate, _plan_requirements(run, estimate, run_dir) if requirements is None else requirements,
         executor=str(resolved_executor), local_cache=local_hf_cache(workspace, workspace_config),
     ))
     records.extend(_disk_cache_preflight_report(run))
@@ -1360,7 +1380,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace), config=workspace_config)
     display_path = run_dir / "resolved" / "backend-display.lock.json"
     frozen_display = _load_yaml(display_path) if display_path.is_file() else None
-    requirements = _plan_requirements(run, download_estimate)
+    requirements = _plan_requirements(run, download_estimate, run_dir if source == manifest else None)
     resources = _resources_payload(run, workspace_config, requirements, adapter_display=frozen_display)
     preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate, requirements=requirements)
     if run_executor(run) == "docker":
@@ -1736,6 +1756,10 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 lines.append(f"      - {_format_plan_value(role)}")
                 _append_kv(lines, "acquisition", acquisition, indent=8)
                 _append_kv(lines, "source", source, indent=8)
+                selected_by = item.get("selected_by")
+                if selected_by is not None:
+                    # Who chose this input: the run, or the pinned upstream UI baseline as its default.
+                    _append_kv(lines, "selected_by", "the pinned upstream UI baseline" if selected_by == "baseline" else selected_by, indent=8)
                 measurement = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
                 if measurement:
                     _append_kv(lines, "measured_at", measurement.get("scope"), indent=8)

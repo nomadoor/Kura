@@ -514,6 +514,7 @@ def _print_model_facts(facts: dict[str, Any]) -> None:
             else:
                 print(
                     f"  {value} (entry {entry['entry']}): name_or_path {entry['name_or_path']}; "
+                    f"training adapter {entry['assistant_lora_path'] or 'none'} (backend.config.assistant_lora_path changes it); "
                     + "; ".join(f"{section} {compact(entry[section])}" for section in ("train", "model", "dataset"))
                 )
     if "native_config" in facts:

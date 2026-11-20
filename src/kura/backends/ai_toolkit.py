@@ -1014,6 +1014,28 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
         raise ValueError(
             "AI-Toolkit backend.config.extras_name_or_path must be a nonempty model reference"
         )
+    if "assistant_lora_path" in native_model:
+        # A model input is declared, so the plan lists it, the record names it, and a local file is mounted.
+        raise ValueError(
+            "AI-Toolkit backend.config.native_config.model.assistant_lora_path is not an escape hatch: the training "
+            "adapter is a declared model input; use backend.config.assistant_lora_path "
+            f"({AI_TOOLKIT_TRAINING_ADAPTER_DECIDED})"
+        )
+    assistant_lora_path = native.get("assistant_lora_path")
+    if assistant_lora_path is not None and (not isinstance(assistant_lora_path, str) or not assistant_lora_path.strip()):
+        raise ValueError(
+            "AI-Toolkit backend.config.assistant_lora_path must be a nonempty training-adapter reference "
+            f"({AI_TOOLKIT_TRAINING_ADAPTER_DECIDED})"
+        )
+    if (
+        isinstance(assistant_lora_path, str) and assistant_lora_path != AI_TOOLKIT_NO_TRAINING_ADAPTER
+        and assistant_lora_path.strip().lower() in {AI_TOOLKIT_NO_TRAINING_ADAPTER, "null"}
+    ):
+        # Forwarded as written, this would be looked up as an adapter file of that name.
+        raise ValueError(
+            f"AI-Toolkit backend.config.assistant_lora_path {assistant_lora_path!r} is not accepted; "
+            f"write {AI_TOOLKIT_NO_TRAINING_ADAPTER} (lowercase, no spaces) to load no training adapter"
+        )
     gradient_checkpointing = native.get(
         "gradient_checkpointing", native_train.get("gradient_checkpointing", False)
     )
@@ -1162,6 +1184,39 @@ def _first_set(*values: Any) -> Any:
     return next((value for value in values if value is not None), None)
 
 
+# The backend.config.assistant_lora_path value that loads no training adapter.
+AI_TOOLKIT_NO_TRAINING_ADAPTER = "none"
+AI_TOOLKIT_TRAINING_ADAPTER_DECIDED = (
+    "the training adapter the trainer loads (its model.assistant_lora_path): a Hugging Face user/repo/file path "
+    "or a local file path, forwarded as written; unset takes the adapter the pinned upstream UI entry of "
+    f"model_arch names, if it names one; {AI_TOOLKIT_NO_TRAINING_ADAPTER} loads no adapter"
+)
+
+
+def ai_toolkit_training_adapter(run: dict[str, Any]) -> dict[str, str] | None:
+    """The training adapter the run's trainer loads, or None for no adapter.
+
+    It is the authored ``backend.config.assistant_lora_path`` (``none`` loads no adapter), else the
+    adapter the pinned UI entry of ``model_arch`` names, else none
+    (docs/adr/upstream-training-baseline.md, decision 7). ``selected_by`` says which: ``authored``
+    or ``baseline``. The requirement list and the native config both read it here.
+    None for an explicit ``command`` run, which owns its native configuration.
+
+    This decides for a run.yaml. A compiled run's adapter is the one its frozen files name
+    (``kura.dataset_handoff.frozen_model_requirements``).
+    """
+    override = _ai_toolkit_backend_override(run)
+    if override.get("command") is not None:
+        return None
+    if "assistant_lora_path" in override:
+        authored = override["assistant_lora_path"]
+        return None if authored == AI_TOOLKIT_NO_TRAINING_ADAPTER else {"reference": authored, "selected_by": "authored"}
+    arch = override.get("model_arch")
+    selected = select_baseline_entry(arch, (run.get("model") or {}).get("base")) if isinstance(arch, str) else None
+    reference = selected[1].get("assistant_lora_path") if selected is not None else None
+    return {"reference": reference, "selected_by": "baseline"} if reference is not None else None
+
+
 def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display."""
     native = _ai_toolkit_backend_override(run)
@@ -1212,10 +1267,9 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     # local candidates), so the record names the selector, not a repository.
     # Settings that steer the resolution, such as qtype, are frozen in
     # resolved/ai-toolkit.yaml; locks written before this keep huggingface-repository.
-    def requirement(role: str, reference: Any) -> dict[str, Any] | None:
+    def requirement(role: str, reference: Any, **extra: Any) -> dict[str, Any] | None:
         if not isinstance(reference, str) or not reference:
             return None
-        extra: dict[str, Any] = {}
         if reference.startswith(("/", "./", "../", "~")):
             acquisition = "local-path"
             identity: dict[str, Any] = {"kind": "path", "path": reference}
@@ -1224,7 +1278,7 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
             acquisition = "backend"
             identity = {"kind": "backend-resolved-selector", "value": reference}
             expected_format, observable = "backend-native-repository", False
-            extra = {"settings": "resolved/ai-toolkit.yaml"}
+            extra = {"settings": "resolved/ai-toolkit.yaml", **extra}
         return {"role": role, "acquisition": acquisition, "identity": identity, "runtime_reference": reference, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable), **extra}
 
     requirements = []
@@ -1234,6 +1288,16 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     extras = requirement("model_extras", override.get("extras_name_or_path"))
     if extras is not None:
         requirements.append(extras)
+    try:
+        adapter = ai_toolkit_training_adapter(run)
+    except ValueError:
+        # model_arch selects no single baseline entry: compile refuses the run and the plan's
+        # trainer settings carry the reason, so the list names only what is certain.
+        adapter = None
+    if adapter is not None:
+        training_adapter = requirement("training_adapter", adapter["reference"], selected_by=adapter["selected_by"])
+        if training_adapter is not None:
+            requirements.append(training_adapter)
     return requirements
 
 
@@ -1306,7 +1370,7 @@ AI_TOOLKIT_NATIVE_CONFIG_MERGE = (
     "Kura generates; authored values win (native_config keys and the typed fields, which may not both set "
     "one key), and the pinned upstream UI baseline of the selected model_arch fills only the baseline keys "
     "left unset, a mapping such as model_kwargs or optimizer_params only its missing subkeys. A key Kura "
-    "owns (paths, datasets, steps, seed, saving, schedule) is refused there"
+    "owns (paths, datasets, steps, seed, saving, schedule, the training adapter) is refused there"
 )
 
 
@@ -1576,6 +1640,9 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         else:
             process[section] = values
     _apply_ai_toolkit_baseline(run, process)
+    training_adapter = ai_toolkit_training_adapter(run)
+    if training_adapter is not None:
+        process["model"]["assistant_lora_path"] = training_adapter["reference"]
     if override.get("resolution") is not None:
         for dataset in process.get("datasets", []):
             if isinstance(dataset, dict):
