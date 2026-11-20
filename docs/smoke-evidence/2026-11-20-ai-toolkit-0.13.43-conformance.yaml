@@ -1,0 +1,36 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-11-20'
+executor: docker and runpod
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --yes; then the same with --runpod
+hardware:
+  local_gpu: NVIDIA GeForce RTX 4090 (24564 MiB)
+  runpod_gpus: RTX A5000 (4 Pods, $0.27/h), RTX 4000 Ada (3 Pods, $0.28/h), RTX 3090 (2 Pods, $0.50/h)
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit after
+  the image moved on to 0.13.43 (embedded commit bdd55603e05a7a59e8112c0a0623798754ce9b69) with
+  Kura's step-save patch and the MiniMax-H3 finite-gradient patch applied, run from commit 5eafa88
+  on the branch feat/ai-toolkit-0.13.42.
+backends:
+  ai-toolkit:
+    executor: docker
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    adapter_source: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runs: [20261120-0821_conf-ai-one-control_7fb1, 20261120-0822_conf-ai-one-control-2_670f, 20261120-0822_conf-ai-one-split_b79f, 20261120-0823_conf-ai-one-resume_0ccc, 20261120-0823_conf-ai-multi-fresh_7a42, 20261120-0824_conf-ai-multi-split_c349, 20261120-0825_conf-ai-multi-resume_18e6, 20261120-0825_conf-ai-multi-accum-2_f4cd, 20261120-0826_conf-ai-one-many-saves_39cd]
+  ai-toolkit-runpod:
+    executor: runpod
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    adapter_source: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runs: [20261120-0826_conf-ai-one-control_0136, 20261120-0833_conf-ai-one-control-2_ae3d, 20261120-0836_conf-ai-one-split_e9c9, 20261120-0837_conf-ai-one-resume_f062, 20261120-0843_conf-ai-multi-fresh_6550, 20261120-0845_conf-ai-multi-split_045e, 20261120-0851_conf-ai-multi-resume_ac3a, 20261120-0853_conf-ai-multi-accum-2_7e61, 20261120-0855_conf-ai-one-many-saves_8071]
+    pod_minutes: about 33 across 9 Pods (1.5 to 6.9 minutes each, from the create request to deletion), about $0.17 GPU
+    pods_left: none (every run's stop record says deleted)
+results:
+  P1: pass on both executors (including gradient accumulation 2)
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass on RunPod (every Pod deleted after collection); not run on local Docker
+  P7: pass, including a 12-step run that keeps all six step saves
+  P8: pass on local Docker; not run on RunPod

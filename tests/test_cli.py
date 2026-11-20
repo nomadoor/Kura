@@ -556,7 +556,7 @@ class ImageCommandTests(unittest.TestCase):
             build = calls[0]
             self.assertEqual(build[build.index("--file") + 1], str(REPOSITORY / "docker/ai-toolkit/Dockerfile"))
             self.assertIn(
-                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0",
+                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.43@sha256:ba3327cebd5aa9ad3f539c52a1c4fa30831d3365d12844deda9c9a14f61411c6",
                 build,
             )
             self.assertEqual(build[-1], str(REPOSITORY))

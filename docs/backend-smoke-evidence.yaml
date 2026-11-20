@@ -14,6 +14,132 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: minimax_h3_image
+      mode: text-to-image
+      executor: runpod
+      transfer: selected-files
+      gradient_checkpointing: false
+      training_adapter: minimax_h3_image_training_adapter_v1
+      optimizer_steps: 1
+      finite_lora_b: 258/258
+      nonzero_lora_b: 208/258 (the 50 zero are adaln_proj)
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-minimax-h3-image-runpod.yaml
+  - id: ai-toolkit-0.13.43-conformance-runpod-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-0.13.43-conformance.yaml
+  - id: ai-toolkit-0.13.43-conformance-docker-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-0.13.43-conformance.yaml
+  - id: ai-toolkit-0.13.43-class-import-2026-11-20
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+    native_path:
+      probe: registered-diffusion-class-imports
+      imported_classes: 54
+    evidence_kind: parser
+    outcome: passed
+    observed_at: '2026-11-20'
+    artifact: smoke-evidence/2026-11-20-ai-toolkit-0.13.43-class-import.yaml
+  - id: ai-toolkit-0.13.42-conformance-runpod-2026-11-14
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 575ddac6540b99f5ab80c25d186208099859bd7af6a004f825752779177fae67
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:acb5233771b13f13259fa544643e4b9379d06c3c73f70738a6fd21dbf15bd6a8
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-14'
+    artifact: smoke-evidence/2026-11-14-ai-toolkit-0.13.42-conformance.yaml
+  - id: ai-toolkit-0.13.42-conformance-docker-2026-11-14
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 575ddac6540b99f5ab80c25d186208099859bd7af6a004f825752779177fae67
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:acb5233771b13f13259fa544643e4b9379d06c3c73f70738a6fd21dbf15bd6a8
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-14'
+    artifact: smoke-evidence/2026-11-14-ai-toolkit-0.13.42-conformance.yaml
+  - id: ai-toolkit-0.13.42-class-import-2026-11-14
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 575ddac6540b99f5ab80c25d186208099859bd7af6a004f825752779177fae67
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:acb5233771b13f13259fa544643e4b9379d06c3c73f70738a6fd21dbf15bd6a8
+    native_path:
+      probe: registered-diffusion-class-imports
+      imported_classes: 54
+    evidence_kind: parser
+    outcome: passed
+    observed_at: '2026-11-14'
+    artifact: smoke-evidence/2026-11-14-ai-toolkit-0.13.42-class-import.yaml
   - id: musubi-tuner-release-conformance-runpod-2026-10-29
     backend: musubi-tuner
     adapter_source:

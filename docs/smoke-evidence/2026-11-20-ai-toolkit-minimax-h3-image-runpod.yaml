@@ -1,0 +1,49 @@
+schema_version: 1
+run_id: 20261120-0821_h3-image-1step_70ab
+executor: runpod
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+  embedded_commit: bdd55603e05a7a59e8112c0a0623798754ce9b69
+  adapter_source: a2bc2a922bd96cc99f46aa4ca271b25221c041ea952b2f050237aa1f8264e230
+  gpu: NVIDIA A40 (46068 MiB)
+  cost_per_hour_usd: 0.59
+  gradient_checkpointing: false
+model:
+  model_arch: minimax_h3_image
+  base: 'Comfy-Org/MiniMax-H3-Image (baseline load: qtype convrot8, qtype_te nvfp4, low_vram false)'
+  files: diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors, text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors, vae/minimax_h3_image_vae_fp16.safetensors (downloaded by the trainer on the Pod)
+  training_adapter: 'ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors (authored in native_config.model; the log shows "Loading assistant LoRA")'
+dataset:
+  items: 1
+  kind: image
+  resolution: 256x256
+observed:
+  optimizer_steps: 1
+  loss: 0.4012
+  remote_exit_code: 0
+  output_safetensors: 1
+  output_bytes: 309964672
+  output_sha256: 9fee8777e698a3b5bc8042727a3f7ed84b1ba95fdf7c475bf3efd0265d4f7710
+  lora_b_tensors: 258
+  finite_lora_b_tensors: 258
+  nonzero_lora_b_tensors: 208
+  zero_lora_b_tensors: 50 (exactly the 50 blocks.N.adaln_proj.linear modules; the upstream UI entry excludes them with network.network_kwargs.ignore_if_contains [adaln_proj], which Kura does not carry)
+  durable_training_state: step00000001 state collected
+  container_memory_peak_bytes: 49999998976 (equal to the container limit; oom_kill 0)
+  text_encoder: unloaded after caching the text embedding
+  wall_time: 5m 54s (training including model download 5m 02s)
+  pod_cost_usd: about 0.09 for 9m 22s (GPU price times Pod time; storage not included)
+  pod: deleted (stop record result deleted)
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  finite_lora_update: true
+  output_recovered: true
+  pod_deleted: true
+scope: >-
+  Establishes that AI-Toolkit 0.13.43 trains MiniMax-H3-Image text-to-image through Kura for one
+  optimizer step on a 48 GB GPU with the upstream baseline load and the training adapter live,
+  and that Kura collects the output and state and deletes the Pod. It does not establish output
+  quality, a 24 GB local run, reference editing, or a run without the adapter. The container's
+  memory reached its 50 GB limit without an OOM kill, so host RAM is a constraint to measure.
