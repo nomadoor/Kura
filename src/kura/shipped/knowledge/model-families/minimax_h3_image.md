@@ -2,8 +2,18 @@
 
 ## Training
 
-- Untested: Kura only compiles it. No run has trained MiniMax-H3-Image
-  through Kura yet.
+- Recorded: AI-Toolkit `model_arch: minimax_h3_image` completed one real
+  optimizer step of text-to-image on RunPod (A40, 48 GB) on 2026-11-20, with
+  the baseline load and the training adapter, at 256×256 on one image. The
+  container's memory reached its 50 GB limit while loading, without being
+  killed. Not recorded yet: a 24 GB GPU, output quality, or settings for a
+  real dataset.
+  source: evidence ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
+- In that run the 50 `adaln_proj` layers got LoRA weights that stayed zero.
+  The upstream UI leaves them out of the LoRA
+  (`network_kwargs.ignore_if_contains: [adaln_proj]`); Kura does not do that
+  yet.
+  source: evidence ai-toolkit-minimax-h3-image-t2i-runpod-2026-11-20
 - Backend and model: AI-Toolkit `model_arch: minimax_h3_image` with
   `model.base: Comfy-Org/MiniMax-H3-Image`, from image and caption datasets.
   The baseline fills the upstream UI's pre-quantized load (`qtype: convrot8`,
