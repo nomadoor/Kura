@@ -126,7 +126,11 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn('-                    raise RuntimeError("OOM during training step 3 times in a row, aborting training")\n', patch_text)
         self.assertIn("+                raise RuntimeError(\n", patch_text)
         self.assertIn("+                ) from oom_error\n", patch_text)
+        # Both OOM branches bind the error the raise chains to.
+        self.assertIn("+            except torch.cuda.OutOfMemoryError as e:\n", patch_text)
+        self.assertEqual(patch_text.count("+                oom_error = e\n") + patch_text.count("+                    oom_error = e\n"), 2)
         dockerfile = (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"COPY docker/ai-toolkit/patches/{name} /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
         self.assertIn(f"git apply --check /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
         self.assertIn(f"git apply /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
         self.assertIn('io.kura.patch.training-step-oom="fail-v1"', dockerfile)
