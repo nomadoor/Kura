@@ -336,8 +336,8 @@ def publish_generation(process, step, spec):
         fail(f"cannot inspect paired optimizer/RNG state: {exc}")
     # The image's patch names a step save by the optimizer updates it holds (upstream named it
     # one below, by the 0-based iteration index). A save named one above is that patch missing;
-    # fewer updates than the name otherwise means the trainer skipped iterations, as it does up
-    # to three times after an out-of-memory error.
+    # fewer updates than the name otherwise means the trainer skipped iterations, as upstream does
+    # after an out-of-memory error in an image without Kura's patch 0002, which stops instead.
     if step is not None and int(step) != logical_step:
         cause = (
             "this image lacks Kura's step-naming patch" if int(step) == logical_step - 1

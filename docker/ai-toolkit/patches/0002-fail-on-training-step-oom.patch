@@ -1,0 +1,50 @@
+Kura: stop on a CUDA out-of-memory error in a training step instead of skipping the batch.
+
+Upstream jobs/process/BaseSDTrainProcess.py (ostris/aitoolkit:0.13.43, commit
+bdd55603e05a7a59e8112c0a0623798754ce9b69, lines 2637-2663) catches an out-of-memory error in
+`hook_train_loop`, discards that batch, and continues, aborting only after the fourth OOM in a
+row. The loop step still advances for the discarded batch, so the progress bar, the final save's
+`training_info.step`, and Kura's status claim updates the run did not make; Kura's state runner
+catches the difference only at a step save. This raises on the first OOM instead. Applied after
+0001, whose hunks this one does not touch.
+
+diff --git a/jobs/process/BaseSDTrainProcess.py b/jobs/process/BaseSDTrainProcess.py
+index 22d7205..6bbc0d1 100644
+--- a/jobs/process/BaseSDTrainProcess.py
++++ b/jobs/process/BaseSDTrainProcess.py
+@@ -2643,26 +2643,22 @@ class BaseSDTrainProcess(BaseTrainProcess):
+             try:
+                 with self.accelerator.accumulate(self.modules_being_trained):
+                     loss_dict = self.hook_train_loop(batch_list)
+-            except torch.cuda.OutOfMemoryError:
++            except torch.cuda.OutOfMemoryError as e:
+                 did_oom = True
++                oom_error = e
+             except RuntimeError as e:
+                 if "CUDA out of memory" in str(e):
+                     did_oom = True
++                    oom_error = e
+                 else:
+                     raise  # not an OOM; surface real errors
+             if did_oom:
+-                self.num_consecutive_oom += 1
+-                if self.num_consecutive_oom > 3:
+-                    raise RuntimeError("OOM during training step 3 times in a row, aborting training")
+-                optimizer.zero_grad(set_to_none=True)
+-                flush()
+-                torch.cuda.ipc_collect()
+-                # skip this step and keep going
+-                print_acc("")
+-                print_acc("################################################")
+-                print_acc(f"# OOM during training step, skipping batch {self.num_consecutive_oom}/3 #")
+-                print_acc("################################################")
+-                print_acc("")
++                # Kura: a discarded batch still advances the loop step, so the run would claim an
++                # update it did not make; stop instead of skipping it.
++                raise RuntimeError(
++                    "[kura] CUDA out of memory in a training step; stopping instead of skipping the batch. "
++                    "Lower memory use (resolution, batch size, quantization) or use a larger GPU."
++                ) from oom_error
+             else:
+                 self.num_consecutive_oom = 0
+             if self.torch_profiler is not None:

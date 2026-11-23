@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 PINNED_IMAGES: dict[str, str] = {
-    "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0",
+    "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86",
     "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9",
     "sd-scripts": "nomadoor/kura-sd-scripts@sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea",
     "comfyui": "nomadoor/kura-comfyui@sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4",
@@ -50,6 +50,7 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553": "13.0",
     "sha256:acb5233771b13f13259fa544643e4b9379d06c3c73f70738a6fd21dbf15bd6a8": "13.0",
     "sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0": "13.0",
+    "sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86": "13.0",
     "sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9": "13.0",
     "sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea": "12.8",
     "sha256:ba833cb949303d5cde6b422e73ec9bcdaca6168d41de7b1c187749e7fe22b0c4": "13.0",
