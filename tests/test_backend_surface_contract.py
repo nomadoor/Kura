@@ -1671,7 +1671,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertTrue(all(set(entry["network"]) == {"network_kwargs"} for entry in entries.values()))
 
     @posix_only(DATASET_IO)
-    def test_ai_toolkit_projects_the_0_13_42_minimax_h3_image_text_to_image(self) -> None:
+    def test_ai_toolkit_projects_minimax_h3_image_text_to_image_and_references(self) -> None:
         adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
 
         def compiled(arch: str, base: str, controls: tuple[str, ...], **authored):
@@ -1699,9 +1699,16 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertFalse(process["datasets"][0].get("control_path"))
         # The training adapter is the one the pinned UI entry names (test_ai_toolkit_training_adapter_*).
         self.assertEqual(model["assistant_lora_path"], adapter)
-        # Reference editing is not projected yet, so a reference is refused rather than dropped.
-        with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile matches architecture='minimax_h3_image'"):
-            compiled("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", ("a.png",))
+        # Reference editing: each reference goes to its own control folder in order, at its own size
+        # (upstream sizes references itself, so Kura writes no resize key).
+        for references in (("a.png",), ("a.png", "b.png")):
+            with self.subTest(references=len(references)):
+                dataset = compiled("minimax_h3_image", "Comfy-Org/MiniMax-H3-Image", references)["datasets"][0]
+                self.assertEqual(
+                    [Path(path).name for path in dataset["control_path"]],
+                    [f"control-{slot}" for slot in range(len(references))],
+                )
+                self.assertFalse({"resize_control", "full_size_control_images", "control_size"} & set(dataset))
         # The other archs new since 0.13.32 are accepted values with no projection profile.
         for arch, base in (
             ("p_h3_image", "PrunaAI/P-H3-Image-Comfy"), ("minimax_h3_omni", "FastVideo/FastH3-Omni-Comfy"),

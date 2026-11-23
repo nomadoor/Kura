@@ -15,9 +15,31 @@
 - Backend and model: AI-Toolkit `model_arch: minimax_h3_image` with
   `model.base: Comfy-Org/MiniMax-H3-Image`, from image and caption datasets.
   The baseline fills the upstream UI's pre-quantized load (`qtype: convrot8`,
-  `qtype_te: nvfp4`) and its text-embedding and latent caches. Reference
-  images (editing) are not accepted yet.
+  `qtype_te: nvfp4`) and its text-embedding and latent caches.
   source: AI-Toolkit baseline entry `minimax_h3_image` (pinned commit bdd55603)
+- Editing: a dataset whose samples each have a target, one or more `control`
+  images, and a caption trains it with references, passed in the item's
+  order. The trainer keeps each reference at its own size and scales it to a
+  short edge between 1024 and 2048 (`native_config.model.model_kwargs`
+  `reference_min_short_edge` and `reference_max_short_edge` change the
+  bounds); the text encoder sees it at a 1024 short edge. Samples may have
+  different numbers of references at batch size 1; at a larger batch the
+  trainer refuses a batch whose counts or reference sizes differ.
+- Recorded: editing with one reference completed one real optimizer step on
+  RunPod on an A100 80 GB (2026-11-20), at 256×256 with the default training
+  adapter; the container's memory peaked at about 81 GB. The same run on a
+  48 GB A40 ran out of GPU memory in the training step, because a reference
+  is encoded at a short edge of at least 1024 whatever the training
+  resolution. Not recorded yet: two or more references, a smaller GPU with
+  lower reference bounds, or output quality.
+  source: evidence ai-toolkit-minimax-h3-image-edit-a100-runpod-2026-11-20
+  source: evidence ai-toolkit-minimax-h3-image-edit-a40-runpod-2026-11-20
+  source: AI-Toolkit commit bdd55603 (minimax_h3_image.py reference sizing, minimax_h3.py `get_noise_prediction`); Kura profile `multi-control-image`
+- The trainer labels the references `Picture 1`, `Picture 2`, and so on for
+  the text encoder, so a caption can name them as `<Picture 1>`; upstream
+  says to describe the whole image in detail. A caption that names no
+  picture still trains.
+  source: AI-Toolkit commit bdd55603 (minimax_h3_image.py, text_encoder.py; ui.tsx model notes)
 - The model is step and guidance distilled (6 steps, no CFG), and upstream
   trains it with its training adapter live. A run compiled by this Kura
   loads that adapter by default

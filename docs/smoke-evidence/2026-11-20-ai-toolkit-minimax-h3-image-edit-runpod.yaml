@@ -1,0 +1,48 @@
+schema_version: 1
+kind: real-smoke
+observed_at: '2026-11-20'
+executor: runpod
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+  embedded_commit: bdd55603e05a7a59e8112c0a0623798754ce9b69
+  adapter_source: e86c53f3ab72adb3966bed48b75db68eeb04193bc8678e19e93353e74bd4373d
+  gradient_checkpointing: false
+model:
+  model_arch: minimax_h3_image
+  base: 'Comfy-Org/MiniMax-H3-Image, baseline load (qtype convrot8, qtype_te nvfp4, low_vram false)'
+  training_adapter: 'ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors (baseline default; the log shows "Loading assistant LoRA")'
+  module_filter: 'network_kwargs.ignore_if_contains [adaln_proj] (baseline)'
+dataset:
+  items: 1
+  target: 256x256 image
+  references: 1 (a copy of the target; the trainer scales it to a short edge of at least 1024)
+  profile: multi-control-image
+runs:
+  passed:
+    run_id: 20261120-1406_h3-image-edit-1-ref-a100_fedd
+    gpu: NVIDIA A100-SXM4-80GB (COMMUNITY, 1.39 USD/h)
+    optimizer_steps: 1
+    loss: 0.376
+    oom_lines: 0
+    output_bytes: 155109864
+    output_sha256: 4998a0429bdde5da62ae3679a2ae86a130b2efc6989d69b4fcbc598f17865a24
+    lora_b_tensors: 208
+    finite_lora_b_tensors: 208
+    nonzero_lora_b_tensors: 208
+    adaln_proj_tensors: 0
+    container_memory_peak_bytes: 80793321472 (limit 142999998464)
+    wall_time: '12m 36s (Pod start 3m 56s, mostly the image pull; training including model download 10m 17s)'
+    pod_cost_usd: about 0.34 (GPU price times Pod time)
+    pod: deleted
+  failed:
+    run_id: 20261120-1351_h3-image-edit-1-ref_3e7e
+    gpu: NVIDIA A40 (48 GB, 0.59 USD/h)
+    observed: >-
+      CUDA OOM in the training step (about 190 MB free of 47.7 GB); the trainer skipped the batch,
+      saved a LoRA with no update, and Kura's check failed the run (no non-zero lora_B after an
+      optimizer step). Container memory reached its 50 GB limit. Pod deleted; about 0.06 USD.
+scope: >-
+  Establishes that AI-Toolkit 0.13.43 trains MiniMax-H3-Image editing with one reference through
+  Kura for one optimizer step on an 80 GB GPU, with the default training adapter and module filter,
+  and that a 48 GB A40 runs out of GPU memory for it at these settings. It does not establish two or
+  more references, output quality, or settings for a real dataset.
