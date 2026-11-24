@@ -40,15 +40,21 @@ RUN echo "${AI_TOOLKIT_H3_GRADIENT_PATCH_SHA256}  /tmp/minimax_h3_finite_gradien
 # Upstream BaseSDTrainProcess.py (bdd5560, lines 2570 and 2722-2732) decides, names, and
 # records a step save by the 0-based iteration index, so `_N` holds N+1 optimizer updates;
 # 0001 decides, names, and records it by the updates it holds, which Kura's AI-Toolkit state
-# runner and plan read. See the patch header.
+# runner and plan read. 0002 stops on an out-of-memory error in a training step, where upstream
+# discards the batch and keeps going while the loop step still advances (lines 2637-2663). See
+# each patch header.
 COPY docker/ai-toolkit/patches/0001-save-by-completed-updates.patch /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch
+COPY docker/ai-toolkit/patches/0002-fail-on-training-step-oom.patch /tmp/kura-ai-toolkit-patches/0002-fail-on-training-step-oom.patch
 
 RUN cd /app/ai-toolkit \
     && git apply --check /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch \
     && git apply /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch \
+    && git apply --check /tmp/kura-ai-toolkit-patches/0002-fail-on-training-step-oom.patch \
+    && git apply /tmp/kura-ai-toolkit-patches/0002-fail-on-training-step-oom.patch \
     && rm -r /tmp/kura-ai-toolkit-patches
 
 LABEL io.kura.patch.save-step="completed-updates-v1"
+LABEL io.kura.patch.training-step-oom="fail-v1"
 
 # The base image still trusts the eMudhra intermediate CAs whose keys were compromised on
 # 2026-10-19. Raise every trust store in the image to the first release that drops them; the

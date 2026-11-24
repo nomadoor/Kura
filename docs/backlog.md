@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-24 | image pins | The AI-Toolkit image digest is written twice, in `PINNED_IMAGES` (`images.py`) and `AI_TOOLKIT_PINNED_IMAGE` (`ai_toolkit.py`); one could read the other | context-free review of the OOM patch (pre-existing) | -
 - 2026-11-20 | training adapter | A relative (`./`, `../`) or `~` local adapter path passes validation and becomes a `local-path` requirement, then the local Docker launch refuses it because mounts need an absolute path; check its form when the file is loaded, as for a local `model.base` | CodeRabbit on the training-adapter change | P11
 - 2026-11-20 | RunPod models | A local-path `model.base` or `backend.config.assistant_lora_path` on a RunPod run is forwarded as written: nothing uploads or refuses it, so the Pod gets a path that does not exist there, and the plan's trainer-download line says nothing about it | context-free review of the training-adapter change (pre-existing for `model.base`) | P11
 - 2026-11-20 | training adapter | The baseline adapter is attached whenever `model_arch` selects an entry, even when `model.base` names a different checkpoint (a fine-tune of the entry's model); decide whether the plan should say the adapter was made for the entry's model | context-free review of the training-adapter change | -
