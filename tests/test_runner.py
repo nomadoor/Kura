@@ -739,9 +739,11 @@ class RunPodFollowerTests(unittest.TestCase):
                 _status(run_dir_arg, **{**json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8")), "pod_stopped_at": "t"})
                 return {}
 
-            with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
+            with patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded) as look, \
+                 patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
                  patch("kura.run_commands.launch._run_remote_locked") as remote:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
+            look.assert_called_once()  # RunPod still lists the Pod, so the unstarted job decides
             self.assertEqual(stop.call_args.args[1:], ())
             remote.assert_not_called()
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
@@ -787,6 +789,7 @@ class RunPodFollowerTests(unittest.TestCase):
             _runpod_launched(run_dir, request, state="running")
             (run_dir / "realizations" / "r1.remote-job-intent.json").write_text(json.dumps({"pid_path": "/tmp/kura-jobs/x.pid"}), encoding="utf-8")
             with patch("kura.run_commands.runpod_ssh.remote_job_pid", return_value="42"), \
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
                  patch("kura.executors.runpod.stop_runpod") as stop, \
                  patch("kura.run_commands.launch._run_remote_locked", return_value=0) as remote:
                 runner.work(root, "example", request.name)
@@ -801,6 +804,7 @@ class RunPodFollowerTests(unittest.TestCase):
             _runpod_launched(run_dir, request, state="running")
             (run_dir / "realizations" / "r1.remote-job-intent.json").write_text(json.dumps({"pid_path": "/tmp/kura-jobs/x.pid"}), encoding="utf-8")
             with patch("kura.run_commands.runpod_ssh.remote_job_pid", side_effect=ValueError("ssh timed out")), \
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
                  patch("kura.executors.runpod.stop_runpod") as stop:
                 # Retried later, never taken as "the job did not start".
                 self.assertEqual(runner.work(root, "example", request.name), 1)
@@ -1150,6 +1154,7 @@ class RunPodFollowerTests(unittest.TestCase):
             _runpod_launched(run_dir, request, state="running")
             attempts = 5
             with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")), \
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
                  patch("kura.notifications.notify") as notify:
                 codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
             self.assertEqual(codes, [1] * attempts)
@@ -1166,6 +1171,7 @@ class RunPodFollowerTests(unittest.TestCase):
                 return {}
 
             with patch("kura.executors.runpod.stop_runpod", side_effect=stopped), \
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
                  patch("kura.notifications.notify"):
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
@@ -1184,6 +1190,220 @@ class RunPodFollowerTests(unittest.TestCase):
             with patch("kura.run_commands.launch._run_remote_locked", side_effect=stop_arrives_during_the_wait):
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             self.assertTrue(runner.stop_done(run_dir))
+
+    def test_a_refused_key_while_settling_an_unconfirmed_create_notifies_once_and_is_retried(self) -> None:
+        # The lookup by name is the follower's first step; a key RunPod refuses there is the same
+        # refused key as anywhere else in the attempt, so it reaches the same one notice.
+        from kura.executors.runpod import RunPodAPIError
+
+        refusals = {"401": RunPodAPIError("RunPod GraphQL failed (401): unauthorized", status_code=401), "no key": None}
+        for label, refusal in refusals.items():
+            env = {"RUNPOD_API_KEY": "rpa_SECRETVALUE123"} if refusal is not None else {}
+            with self.subTest(label), _workspace() as (root, run_dir), patch.dict("os.environ", env):
+                if refusal is None:
+                    os.environ.pop("RUNPOD_API_KEY", None)
+                request = _runpod_request(run_dir, notify=["ntfy"])
+                runner.claim_request(request, 1)
+                runner._first_attempt(request)  # an earlier follower died after its create intent
+                (run_dir / "realizations" / "r1.create-intent.json").write_text(json.dumps({
+                    "kind": "pod_create_intent", "executor": "runpod", "realization_id": "r1", "pod_name": "kura-example-r1",
+                    "controlled_by": {"request": request.name}}), encoding="utf-8")
+                with patch("kura.executors.runpod._discover_pods", side_effect=refusal or AssertionError("no key, so no lookup")), \
+                     patch("kura.run_commands.launch._run_remote_locked") as remote, \
+                     patch("kura.notifications.notify") as notify:
+                    codes = [runner.work(root, "example", request.name) for _ in range(3)]
+                self.assertEqual(codes, [1] * 3)
+                remote.assert_not_called()
+                self.assertEqual(json.loads(runner._sibling(request, ".key-refusals.json").read_text(encoding="utf-8"))["kind"], "runpod_key_refusals")
+                notify.assert_called_once()
+                self.assertIn("RunPod key", notify.call_args.kwargs["subject"])
+                self.assertNotIn("rpa_SECRETVALUE123", notify.call_args.kwargs["subject"] + notify.call_args.kwargs["body"])
+                # Nothing is settled or ended while RunPod cannot be asked.
+                self.assertIsNone(runner.request_outcome(request))
+                self.assertTrue(runner.run_unfinished(run_dir))
+
+    def test_a_failed_lookup_of_an_unconfirmed_create_that_is_not_the_key_is_retried_without_a_notice(self) -> None:
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)
+            (run_dir / "realizations" / "r1.create-intent.json").write_text(json.dumps({
+                "kind": "pod_create_intent", "executor": "runpod", "realization_id": "r1", "pod_name": "kura-example-r1",
+                "controlled_by": {"request": request.name}}), encoding="utf-8")
+            with patch("kura.executors.runpod._discover_pods", side_effect=ValueError("RunPod API is unreachable: down")), \
+                 patch("kura.run_commands.launch._run_remote_locked") as remote, \
+                 patch("kura.notifications.notify") as notify:
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            remote.assert_not_called()
+            notify.assert_not_called()
+            self.assertIsNone(runner.request_outcome(request))
+
+    def test_a_pod_gone_before_its_job_start_was_recorded_ends_the_run_interrupted(self) -> None:
+        # A start intent without a start record, and a Pod its lease already deleted: the follower's one
+        # look at RunPod comes before it asks the Pod for the pid, so the run ends instead of retrying forever.
+        from kura.executors.runpod import RunPodAPIError
+
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job-intent.json").write_text(json.dumps({"pid_path": "/tmp/kura-jobs/x.pid"}), encoding="utf-8")
+            with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod API returned 404", status_code=404)) as api, \
+                 patch("kura.run_commands.runpod_ssh.remote_job_pid", side_effect=ValueError("Pod pod-1 no longer exists")), \
+                 patch("kura.run_commands.launch._run_remote_locked") as remote, \
+                 patch("kura.notifications.notify") as notify:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            remote.assert_not_called()
+            self.assertEqual([call.args[:2] for call in api.call_args_list], [("GET", "/pods/pod-1")])
+            status = _status_as_recorded(run_dir)
+            self.assertEqual(status["state"], "interrupted")
+            self.assertTrue(status["pod_missing_at"])
+            self.assertFalse(runner.run_unfinished(run_dir))
+            self.assertTrue(runner._sibling(request, ".finished-notified.json").exists())
+            notify.assert_called_once()
+            self.assertEqual(notify.call_args.kwargs["subject"], "Kura run interrupted: example")
+            self.assertIn("no longer exists", notify.call_args.kwargs["body"])
+
+    def _stop_cut_short_at_the_name_listing(self, run_dir: Path, request: Path):
+        """A `kura run stop` that deleted pod-1 and then could not list Pods by the run's names; returns
+        the patches (RunPod's API with pod-1 gone, the listing that answers from now on) for what follows."""
+        from kura.executors.runpod import RunPodAPIError, stop_runpod
+
+        _runpod_launched(run_dir, request, state="running")
+        (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+        (run_dir / "realizations" / "r1.create-intent.json").write_text(json.dumps({
+            "kind": "pod_create_intent", "executor": "runpod", "realization_id": "r1", "pod_name": "kura-example-r1",
+            "controlled_by": {"request": request.name}}), encoding="utf-8")
+        runner.write_stop_request(run_dir)
+        with patch("kura.executors.runpod._runpod_request", return_value={}) as api, \
+             patch("kura.executors.runpod._runpod_pods_named", side_effect=ValueError("RunPod API is unreachable: down")):
+            with self.assertRaises(ValueError):
+                stop_runpod(run_dir)
+        self.assertEqual([call.args[:2] for call in api.call_args_list], [("DELETE", "/pods/pod-1")])
+        self.assertNotIn("pod_stopped_at", _status_as_recorded(run_dir))
+        gone = patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod API returned 404", status_code=404))
+        listing = patch("kura.executors.runpod._runpod_pods_named", return_value=[{"id": "pod-late", "name": "kura-example-r1"}])
+        return gone, listing
+
+    def _assert_stop_finished_by_name(self, run_dir: Path, api, listed) -> None:
+        records = [json.loads(path.read_text(encoding="utf-8")) for path in sorted((run_dir / "realizations").glob("r1.stop-*.json"))]
+        self.assertEqual([item["outcome"] for item in records], ["failed", "stopped"])
+        self.assertEqual(records[1]["targets"], [{"pod_id": "pod-1", "result": "already_gone"},
+                                                 {"pod_id": "pod-late", "result": "already_gone", "found_by": "name", "pod_name": "kura-example-r1"}])
+        listed.assert_called_once()
+        self.assertEqual([call.args[1] for call in api.call_args_list if call.args[0] == "DELETE"], ["/pods/pod-1", "/pods/pod-late"])
+        self.assertTrue(_status_as_recorded(run_dir)["pod_stopped_at"])
+        self.assertTrue(runner.stop_done(run_dir))
+        self.assertFalse(runner.run_unfinished(run_dir))
+
+    def test_a_stop_cut_short_at_the_name_listing_is_finished_as_a_stop_by_the_next_follower(self) -> None:
+        # The stop request is carried out before the follower looks at the Pod, so the Pod the stop itself
+        # deleted is never recorded as one that vanished, and the lookup by name runs again.
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            gone, listing = self._stop_cut_short_at_the_name_listing(run_dir, request)
+            with gone as api, listing as listed, patch("kura.run_commands.launch._run_remote_locked") as remote, \
+                 patch("kura.notifications.notify") as notify:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            remote.assert_not_called()
+            self._assert_stop_finished_by_name(run_dir, api, listed)
+            status = _status_as_recorded(run_dir)
+            self.assertEqual(status["state"], "interrupted")
+            self.assertNotIn("pod_missing_at", status)
+            # No record and no notice says the Pod vanished with uncollected outputs: the user stopped it.
+            self.assertEqual(list((run_dir / "realizations").glob("r1.ended-*.json")), [])
+            notify.assert_called_once()
+            self.assertEqual(notify.call_args.kwargs["subject"], "Kura run interrupted: example")
+            self.assertNotIn("no longer exists", notify.call_args.kwargs["body"])
+
+    def test_a_stop_cut_short_at_the_name_listing_is_finished_after_a_reconcile_by_hand_found_the_pod_gone(self) -> None:
+        # `kura run reconcile` between the failed stop and the next follower records the Pod as gone and
+        # the run as finished. The stop is still unfinished (`pods_left` reads its failed stop record), so
+        # the run keeps its follower and the lookup by name runs: a Pod a lost create reply left would
+        # otherwise bill until its lease with nothing looking for it.
+        from kura.executors.runpod import pods_left, reconcile_runpod
+
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            gone, listing = self._stop_cut_short_at_the_name_listing(run_dir, request)
+            with gone:
+                reconcile_runpod(run_dir)
+            status = _status_as_recorded(run_dir)
+            self.assertEqual((status["state"], bool(status["pod_missing_at"])), ("interrupted", True))
+            self.assertEqual(pods_left(run_dir, status), ["pod-1"])
+            self.assertTrue(runner.run_unfinished(run_dir))
+            self.assertIn("kura run stop example", runner.pod_may_still_bill(run_dir, status))
+            with gone as api, listing as listed, patch("kura.notifications.notify"):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self._assert_stop_finished_by_name(run_dir, api, listed)
+
+    def test_a_refused_key_while_carrying_out_a_stop_notifies_once_and_is_retried(self) -> None:
+        # The stop is a step of the attempt like any other: a key RunPod refuses there leaves the Pod
+        # billing, so it reaches the same one notice instead of a silent retry.
+        from kura.executors.common import StopRequested
+        from kura.executors.runpod import RunPodAPIError
+        from kura.secrets import MissingSecret
+
+        refusals = (RunPodAPIError("RunPod API returned 401", status_code=401), MissingSecret("RUNPOD_API_KEY", "needed to stop a RunPod run"))
+        for asked in ("before the attempt", "during the attempt"):
+            for refusal in refusals:
+                with self.subTest(asked, refusal=str(refusal)), _workspace() as (root, run_dir):
+                    request = _runpod_request(run_dir, notify=["ntfy"])
+                    runner.claim_request(request, 1)
+                    _runpod_launched(run_dir, request, state="running")
+                    (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+                    if asked == "before the attempt":
+                        runner.write_stop_request(run_dir)
+
+                    def stop_arrives(*_args, **_kwargs):
+                        runner.write_stop_request(run_dir)
+                        raise StopRequested()
+
+                    with patch("kura.executors.runpod.reconcile_runpod", side_effect=_status_as_recorded), \
+                         patch("kura.run_commands.launch._run_remote_locked", side_effect=stop_arrives), \
+                         patch("kura.executors.runpod.stop_runpod", side_effect=refusal) as stop, \
+                         patch("kura.notifications.notify") as notify:
+                        codes = [runner.work(root, "example", request.name) for _ in range(3)]
+                    self.assertEqual(codes, [1] * 3)
+                    self.assertEqual(stop.call_count, 3)
+                    self.assertFalse(runner.stop_done(run_dir))
+                    self.assertTrue(runner.run_unfinished(run_dir))
+                    notify.assert_called_once()
+                    self.assertIn("RunPod key", notify.call_args.kwargs["subject"])
+
+    def test_a_stop_is_not_carried_out_or_marked_done_while_a_create_is_unconfirmed(self) -> None:
+        # A newer launch's create intent that the lookup by name cannot settle may have made a Pod no
+        # record names yet; the stop waits for the lookup instead of deleting only the recorded Pod.
+        with _workspace() as (root, run_dir), patch.dict("os.environ", {"RUNPOD_API_KEY": "api-secret"}):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r2.create-intent.json").write_text(json.dumps({
+                "kind": "pod_create_intent", "executor": "runpod", "realization_id": "r2", "pod_name": "kura-example-r2",
+                "controlled_by": {"request": request.name}}), encoding="utf-8")
+            runner.write_stop_request(run_dir)
+            from kura.executors.common import unresolved_create_intents
+
+            self.assertEqual(len(unresolved_create_intents(run_dir, "runpod")), 1)
+            with patch("kura.executors.runpod._discover_pods", side_effect=ValueError("RunPod API is unreachable: down")), \
+                 patch("kura.executors.runpod.stop_runpod") as stop, patch("kura.notifications.notify"):
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            stop.assert_not_called()
+            self.assertFalse(runner.stop_done(run_dir))
+            self.assertTrue(runner.run_unfinished(run_dir))
+
+    def test_a_pod_reported_gone_with_no_stop_cut_short_leaves_nothing_to_delete(self) -> None:
+        # Only an unfinished stop keeps a Pod RunPod reports gone in `pods_left`.
+        from kura.executors.runpod import pods_left
+
+        with _workspace() as (_root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="interrupted", pod_missing_at="t")
+            self.assertEqual(pods_left(run_dir, _status_as_recorded(run_dir)), [])
+            self.assertFalse(runner.run_unfinished(run_dir))
 
     def test_runpod_requests_do_not_wait_for_a_local_slot(self) -> None:
         with _workspace() as (root, first):

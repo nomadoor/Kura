@@ -15,6 +15,10 @@ a refused key, a rate limit, and a capacity refusal are not looked up.
 Updated: 2026-10-07 — the job runner deletes a Pod of its own launch whose job
 never started, and continues a confirmed RunPod launch that created nothing yet.
 
+Updated: 2026-11-24 — a stop that failed part-way keeps the run's Pod among those
+that may still bill until a stop succeeds, and a follower carries out a stop
+request before it looks at the Pod (decision 1).
+
 Refines `files-only-state-and-job-runner.md` for the runner and `kura ui`.
 
 ## Context
@@ -101,6 +105,11 @@ creates nothing, so only decisions 3 to 7 apply to it.
   intents used and deletes each one carrying such a name exactly, recording it
   in the stop record with `found_by: name` (2026-10-22). A listing that fails
   fails the stop after the recorded Pods are deleted, so it is tried again.
+  Until a stop ends as `stopped`, the run's Pod counts as one that may still
+  bill (`pods_left`) even after RunPod reports it gone, so the follower or the
+  next `kura run stop` repeats the lookup by name, and a follower carries out a
+  stop request before it looks at the Pod, so the Pod that stop deleted is
+  never recorded as one that vanished (2026-11-24).
   The names are read while every intent is settled, so a launch that starts
   during the stop is never swept. Such a late Pod bills until the run's Pods
   are deleted, or until its own maximum lease. When every create of a launch
