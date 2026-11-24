@@ -1,6 +1,8 @@
 # ADR: Secrets live in one user-level file, and agents never handle them
 
-Status: accepted owner decision (2026-10-04).
+Status: accepted owner decision (2026-10-04). Amended 2026-11-24: decision 8
+records the RunPod SSH key Kura has kept beside the secrets file since
+2026-10-23.
 
 ## Context
 
@@ -65,9 +67,23 @@ No single convention for local API tokens exists. The options were:
    and the check above use it. A value the user picks as a plain word, such as
    an ntfy topic, is not one: hiding it would rewrite matching text in every
    record. `kura.secrets.holds_secret` applies this name and length rule to one
-   name and value; the same rule refuses trainer arguments in `run.yaml`
-   (`backend.config.extra_args`, `command.argv`) that hold a secret, since
-   they are kept in the run's records.
+   name and value; the same rule refuses a secret written into a run's
+   `backend.config`, since it is kept in the run's records. In trainer
+   arguments (`extra_args`, `command.argv`) a flag with one dash or two and a
+   `NAME=value` assignment are checked, each argument being one value; the
+   command string a shell is given (`bash -c "..."`) is read as its words, at
+   any depth (`kura.secrets.secret_flags`). AI-Toolkit's `native_config`, the
+   one mapping whose keys Kura does not declare, is checked key by key, at any
+   depth and inside lists (`kura.secrets.secret_keys`).
+8. **The RunPod SSH key.** Kura reaches every RunPod Pod with its own SSH key
+   (`kura.secrets.runpod_ssh_key`), kept beside the secrets file as
+   `runpod_ssh_key` and `runpod_ssh_key.pub` and readable only by the user
+   where the file system supports that. Kura makes it once, when a Pod is
+   about to be created, and never replaces it, since live Pods trust only it.
+   Each Pod gets the public key; no workspace file, record, image, or log
+   holds the private key, and an agent never opens it, as with the secrets
+   file. The key is one per user and machine, like the secrets store, so a
+   run is followed and collected from the machine that launched it.
 
 ## Consequences
 

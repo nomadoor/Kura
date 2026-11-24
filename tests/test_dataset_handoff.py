@@ -58,6 +58,7 @@ from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff
 from kura.backends import validate_backend_config
 from kura.dataset_handoff import _digest, local_training_mounts, trainer_captions
 from kura.executors.docker import docker_command, launch_docker
+from kura.model_requirements import declared_model_requirements
 from kura.paths import inspect_workspace_symlinks
 from kura.run_commands.plan import _caption_preflight_report, _dataset_layout_preflight_report, _dataset_runtime_checks, _disk_cache_note, _general_resolution, format_run_plan, plan_run
 
@@ -966,6 +967,7 @@ class DatasetHandoffTests(unittest.TestCase):
             "flux2_klein_9b": ("multi-control-image", (1, None), "all-in-order"),
             "krea2": ("multi-control-image", (1, None), "all-in-order"),
             "mageflow_edit": ("multi-control-image", (1, None), "all-in-order"),
+            "minimax_h3_image": ("multi-control-image", (1, None), "all-in-order"),
             "minimax_h3_ref2va": ("ref2va-image-control", (1, None), "all-in-order"),
             "flex2": ("flex2-random-control", (1, None), "random-one-per-step"),
         }
@@ -6458,6 +6460,36 @@ class DatasetHandoffTests(unittest.TestCase):
                 "target": "/workspace/cache/models/dit.safetensors",
                 "mode": "ro",
             })
+
+    def test_a_local_ai_toolkit_training_adapter_is_mounted_like_a_local_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["model"] = {"base": "/workspace/models/base"}
+            run["backend"]["config"]["assistant_lora_path"] = "/workspace/models/adapter.safetensors"
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            (workspace / "models" / "base").mkdir(parents=True)
+            adapter = workspace / "models" / "adapter.safetensors"
+            adapter.write_bytes(b"adapter")
+            # The lock compile writes: the adapter's requirement comes from the adapter, not this test.
+            (resolved / "model-requirements.lock.yaml").write_text(
+                yaml.safe_dump({"schema_version": 1, "requirements": declared_model_requirements(run)}),
+                encoding="utf-8",
+            )
+
+            mounts = local_training_mounts(workspace, resolved.parent, lock, configured=[])
+
+            self.assertIn({"source": str(adapter.resolve()), "target": "/workspace/models/adapter.safetensors", "mode": "ro"}, mounts)
+            self.assertIn({"source": str((workspace / "models" / "base").resolve()), "target": "/workspace/models/base", "mode": "ro"}, mounts)
+            adapter.unlink()
+            with self.assertRaisesRegex(ValueError, "local-path model 'training_adapter' does not exist"):
+                local_training_mounts(workspace, resolved.parent, lock, configured=[])
 
     def test_v2_local_mounts_reject_missing_or_unmapped_local_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

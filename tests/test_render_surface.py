@@ -45,6 +45,8 @@ class RenderSurfaceTests(unittest.TestCase):
             (lambda run: run["generator"].update(name="a1111"), "generator.name must be comfyui"),
             (lambda run: run["generator"].update(endpoint="http://user:pw@127.0.0.1:8188"), "generator.endpoint must not hold a user name, password, query, or fragment"),
             (lambda run: run["generator"].update(endpoint="http://127.0.0.1:8188?token=abc"), "generator.endpoint must not hold a user name, password, query, or fragment"),
+            (lambda run: run["generator"].update(endpoint="user:pa55word@127.0.0.1:8188"), "generator.endpoint must start with http:// or https:// and name a host"),
+            (lambda run: run["generator"].update(endpoint="127.0.0.1:8188"), "generator.endpoint must start with http:// or https:// and name a host"),
             (lambda run: run.update(executor="runpod"), "executor must be a mapping of name, not 'runpod'"),
             (lambda run: run.update(compute=["NVIDIA A40"]), "compute must be a mapping of gpu"),
             (lambda run: run.update(generator="comfyui"), "generator must be a mapping of endpoint, name"),
@@ -57,22 +59,27 @@ class RenderSurfaceTests(unittest.TestCase):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
                 run_dir = self._run(Path(directory))
                 _edit_run(run_dir, change)
-                with self.assertRaisesRegex(ValueError, message):
+                with self.assertRaisesRegex(ValueError, message) as caught:
                     compile_render(Path(directory), run_dir)
+                self.assertNotIn("pa55word", str(caught.exception))
 
     def test_a_compiled_endpoint_with_credentials_is_refused_at_launch_without_repeating_them(self) -> None:
         # A run compiled before such endpoints were refused cannot reach ComfyUI through one.
         from kura.render import launch_render
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = self._run(root)
-            compile_render(root, run_dir)
-            with patch("kura.render.ComfyUIClient", side_effect=AssertionError("ComfyUI must not be contacted")), \
-                    self.assertRaises(ValueError) as caught:
-                launch_render(root, run_dir, endpoint_override="http://user:pa55word@127.0.0.1:8188")
-        self.assertIn("must not hold a user name, password, query, or fragment", str(caught.exception))
-        self.assertNotIn("pa55word", str(caught.exception))
+        for endpoint, message in (
+            ("http://user:pa55word@127.0.0.1:8188", "must not hold a user name, password, query, or fragment"),
+            ("user:pa55word@127.0.0.1:8188", "must start with http:// or https:// and name a host"),
+        ):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = self._run(root)
+                compile_render(root, run_dir)
+                with patch("kura.render.ComfyUIClient", side_effect=AssertionError("ComfyUI must not be contacted")), \
+                        self.assertRaises(ValueError) as caught:
+                    launch_render(root, run_dir, endpoint_override=endpoint)
+                self.assertIn(message, str(caught.exception))
+                self.assertNotIn("pa55word", str(caught.exception))
 
     def test_one_compile_names_every_unknown_key_compiled_only_key_and_render_setting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

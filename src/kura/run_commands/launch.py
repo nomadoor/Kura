@@ -173,7 +173,8 @@ def _run_remote_locked(
             "The Pod deletes itself (with its outputs) at the maximum lease after it started, collected or not, "
             "and earlier by the unattended wait: "
             + ("as armed at launch (see the run's stdout.log)" if reattach else unattended_label)
-            + f". Run `kura run execute {run_id}` again to follow the job and collect."
+            # Under the runner the follower is retried without anyone running a command.
+            + ("." if controlled_by else f". Run `kura run execute {run_id}` again to follow the job and collect.")
         )
         print(deadline_note, file=sys.stderr)
         # The runner retries this attempt itself, notifies once when an exited job cannot be
@@ -192,6 +193,16 @@ def _run_remote_locked(
                 print(f"cannot stop the RunPod pod: {_safe_error(exc)}; run `kura run stop {run_id}`", file=sys.stderr)
         elif launched:
             print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `kura run stop {run_id}` after recovery", file=sys.stderr)
+
+
+def _local_confirmation_texts(what: str, shown: str, command: str) -> dict[str, str]:
+    """The refusal and cancellation texts `confirm_launch` gives for a local launch. A training run
+    and a render differ only in what starts, what the user is shown first, and the command."""
+    return {
+        "refusal": (f"starting {what} needs the user's go-ahead: show them {shown}, and once they say to start, "
+                    f"run `{command} --yes` (or answer y at a terminal)"),
+        "cancelled": f"not started; to start it, answer y at a terminal, or run `{command} --yes` once the user has said to start",
+    }
 
 
 def execute_run(
@@ -344,7 +355,7 @@ def launch_run(
         if input_path.is_file():
             input_lock = json.loads(input_path.read_text(encoding="utf-8"))
         config = _workspace_config()
-        enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
+        enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor, run_dir=run_dir))
         spec = _load_frozen_command(run_dir, locked)
         if isinstance(input_lock, dict) and input_lock.get("schema_version") == 2:
             from kura.dataset_handoff import inspect_dataset_sources
@@ -482,10 +493,7 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
         try:
             confirm_launch(
                 f"Start training run {run_id} on this machine?", yes=yes,
-                refusal=(f"starting a training run needs the user's go-ahead: show them `kura run plan {run_id}`, and once they "
-                         f"say to start, run `kura run execute {run_id} --yes` (or answer y at a terminal)"),
-                cancelled=(f"not started; to start it, answer y at a terminal, or run `kura run execute {run_id} --yes` "
-                           "once the user has said to start"),
+                **_local_confirmation_texts("a training run", f"`kura run plan {run_id}`", f"kura run execute {run_id}"),
             )
             request = runner.write_launch_request(run_dir, executor="docker", image=image, notify=notify_channels,
                                                   confirmed_at=datetime.now().astimezone().isoformat())
@@ -570,10 +578,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, yes: bool = Fals
         try:
             confirm_launch(
                 f"Start render run {run_id} on this machine?", yes=yes,
-                refusal=(f"starting a render needs the user's go-ahead: show them what it renders, and once they say to "
-                         f"start, run `kura render launch {run_id} --yes` (or answer y at a terminal)"),
-                cancelled=(f"not started; to start it, answer y at a terminal, or run `kura render launch {run_id} --yes` "
-                           "once the user has said to start"),
+                **_local_confirmation_texts("a render", "what it renders", f"kura render launch {run_id}"),
             )
             request = runner.write_launch_request(run_dir, executor="render-local", notify=notify_channels,
                                                   confirmed_at=datetime.now().astimezone().isoformat())

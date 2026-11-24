@@ -1555,7 +1555,8 @@ def launch_render(
             model_patch_stage = model_patch_stages.setdefault(str(model_patch_stage["target"]), model_patch_stage)
         # A RunPod render names its remotely staged files by checkpoint path; a local one names what it staged here.
         # Either way only a case with a checkpoint gets a LoRA.
-        remote_name = lora_name_overrides.get(checkpoint.get("path")) if lora_name_overrides and checkpoint else None
+        checkpoint_path = checkpoint.get("path")
+        remote_name = lora_name_overrides.get(checkpoint_path) if lora_name_overrides and checkpoint_path else None
         lora_name = remote_name or (lora_stage["lora_name"] if lora_stage else None)
         model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else None
         runtime_cases.append({

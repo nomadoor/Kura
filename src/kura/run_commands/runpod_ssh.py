@@ -1706,8 +1706,12 @@ def _runpod_collecting_mark(run_id: str) -> str:
 # stale and the timer deletes the Pod instead of leaving it to the lease. The
 # window covers several missed refreshes (each touch may take up to its 60 s SSH
 # timeout) so a slow link does not let the Pod go under a live download.
+# The timer reads the mark's age with `find -mmin`, which counts whole minutes, so
+# the window is held in minutes. It assumes the image has `find`: without it every
+# mark would read as absent and the Pod could go under a live download. Kura's
+# images are built on Ubuntu, where findutils is an Essential package.
 RUNPOD_COLLECTING_REFRESH_SEC = 60
-RUNPOD_COLLECTING_FRESH_SEC = 600
+RUNPOD_COLLECTING_FRESH_MIN = 10
 
 
 def _unattended_completion_shell(*, wait_sec: int | None, collected_mark: str, collecting_mark: str | None = None) -> str:
@@ -1728,7 +1732,7 @@ echo "[kura] unattended completion: the Pod deletes itself in ${{kura_wait}}s un
   sleep "$kura_wait"
   # A collection is in progress while its downloader keeps the mark fresh; a
   # mark it stopped touching (the downloader died) counts as none.
-  kura_collecting() {{ [ -n "$(find {collecting} -mmin -{RUNPOD_COLLECTING_FRESH_SEC // 60} 2>/dev/null)" ]; }}
+  kura_collecting() {{ [ -n "$(find {collecting} -mmin -{RUNPOD_COLLECTING_FRESH_MIN} 2>/dev/null)" ]; }}
   # A controller that is collecting keeps the Pod until it has the outputs.
   while kura_collecting && [ ! -e {collected} ]; do sleep 60; done
   if [ -e {collected} ]; then exit 0; fi
@@ -2313,6 +2317,10 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
 
     Raises ValueError when the Pod cannot be reached for UNREACHABLE_EXIT_CHECKS
     checks in a row; the follower decides nothing about the Pod itself.
+
+    `job_timeout_sec` ends this follower only (no command sets it; the default is no timeout).
+    Under the runner it bounds nothing: a timeout records no exit, so the runner follows the job
+    again with a fresh timeout. The Pod's lease is the one bound on how long it runs.
     """
     unreachable = 0
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None

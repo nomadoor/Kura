@@ -1,0 +1,41 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-11-24'
+executor: docker and runpod
+kura_commit: dc87f56 (43dbb54 changed only a test during the runs; the adapter source is the same)
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --yes; then the same with --runpod; then --runpod --run multi-accum-2 again
+hardware:
+  local_gpu: NVIDIA GeForce RTX 4090 (24564 MiB)
+  runpod_gpus: RTX A4500 (3 Pods), RTX 3090 (6 Pods), RTX A5000 (1 Pod)
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on AI-Toolkit
+  0.13.43 after Kura's patch 0002 (stop on a training-step out-of-memory error instead of skipping
+  the batch) was added to the image, run from the branch fix/ai-toolkit-oom-no-skip. No run ran out
+  of memory, so this checks that ordinary runs are unchanged.
+backends:
+  ai-toolkit:
+    executor: docker
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    adapter_source: 521cb6e7cbe1f6750a9a4ab3cbbfe766a415dd888a6c32ad2cb0dc08c0020a16
+    runs: [20261124-0815_conf-ai-one-control_1a5e, 20261124-0816_conf-ai-one-control-2_47a0, 20261124-0817_conf-ai-one-split_34f8, 20261124-0818_conf-ai-one-resume_c15b, 20261124-0819_conf-ai-multi-fresh_6b31, 20261124-0819_conf-ai-multi-split_9840, 20261124-0820_conf-ai-multi-resume_7293, 20261124-0821_conf-ai-multi-accum-2_8e40, 20261124-0821_conf-ai-one-many-saves_1eb6]
+  ai-toolkit-runpod:
+    executor: runpod
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    adapter_source: 521cb6e7cbe1f6750a9a4ab3cbbfe766a415dd888a6c32ad2cb0dc08c0020a16
+    runs: [20261124-0822_conf-ai-one-control_8be0, 20261124-0828_conf-ai-one-control-2_95c0, 20261124-0830_conf-ai-one-split_5330, 20261124-0831_conf-ai-one-resume_ecb1, 20261124-0833_conf-ai-multi-fresh_2f45, 20261124-0835_conf-ai-multi-split_404b, 20261124-0839_conf-ai-multi-resume_d618, 20261124-0859_conf-ai-multi-accum-2_22d3, 20261124-0851_conf-ai-one-many-saves_1d1e]
+    host_failure: >-
+      20261124-0846_conf-ai-multi-accum-2_d525 failed before training on an RTX 3090 Pod whose GPU
+      reported "CUDA unknown error" at CUDA initialization; the run was repeated on another Pod
+      (20261124-0859_conf-ai-multi-accum-2_22d3) and passed.
+    pod_minutes: about 33 across 10 Pods (1.4 to 6.5 minutes each, from the create request to deletion), about $0.15 GPU
+    pods_left: none (every run's stop record says deleted)
+results:
+  P1: pass on both executors (including gradient accumulation 2, on the repeated Pod)
+  P2: pass
+  P3: pass; step count equals the controls; the two controls differ, so exact learned-state equality is not checkable
+  P4: pass
+  P6: pass on RunPod (every Pod deleted after collection, including the failed one); not run on local Docker
+  P7: pass, including a 12-step run that keeps all six step saves
+  P8: pass on local Docker; not run on RunPod

@@ -19,14 +19,18 @@ user decides every cost.
 
 ## While it runs
 
-- `--max-lease` (default 12h) deletes the Pod that long after its container starts, whatever
-  happens here; the image download before that bills too. If Kura warns that training looks
-  longer than the lease, tell the user and ask before `kura run lease <run-id> <duration>`;
-  a longer lease is their billing decision.
+- The lease deletes the Pod 12 hours after its container starts, whatever happens here; the
+  image download before that bills too. `kura run execute --max-lease <duration>` sets another
+  length; the plan's cost ceiling is for 12 hours, so pass it only on the user's word. If Kura
+  warns that training looks longer than the lease, tell the user and ask before
+  `kura run lease <run-id> <duration>`; a longer lease is their billing decision.
 - After training, if the outputs were not collected, the Pod waits (`--unattended-wait`, by
   default the longer of 2 hours and the job time) and then deletes itself.
 - Kura's runner keeps following if your session ends. `kura run execute <run-id>` follows it
   again; it never creates a second Pod.
+- Follow and collect a run on the machine that launched it. Kura's key for the Pod is kept on
+  that machine only (WSL and Windows on one PC count as two), so another machine usually
+  cannot reach the Pod.
 
 ## After it runs
 

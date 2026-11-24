@@ -22,6 +22,16 @@ maintainer does not own, still needs the maintainer's explicit instruction.
 
 ## Branch policy
 
-- Default branch: `main`
+- Default branch: `main`. Integration branch: `dev`.
 - Work branches use a descriptive `fix/`, `feat/`, `docs/`, or `release/`
-  prefix.
+  prefix and start from `dev`.
+- A fix or feature pull request targets `dev` and is merged with squash, so one
+  pull request is one commit on `dev`. A release first bumps the version in a
+  pull request to `dev`, squashed the same way.
+- `dev` then goes to `main` in a pull request merged with a merge commit, so
+  every commit of `dev` stays in `main`'s history. `dev` is never squashed into
+  `main`, and never force-pushed to match it.
+- `Fixes #N` goes in the `dev` to `main` pull request: GitHub closes an issue
+  only when a pull request merges into the default branch.
+- Branch rulesets enforce this: `dev` allows only squash merges, `main` only
+  merge commits.

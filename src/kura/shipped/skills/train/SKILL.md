@@ -62,7 +62,8 @@ Three ways, by what the user wants:
 | train again with changed settings | `kura run new --from <run-id> --slug <words>` |
 | continue a run's training | `kura run resume <run-id> --additional-steps <N>` |
 
-- For RunPod add `--executor runpod`; choosing the GPU is in references/runpod.md.
+- For RunPod add `--executor runpod` to `kura run new --experiment` or `kura run resume`
+  (`--from` takes none, see below); choosing the GPU is in references/runpod.md.
 - Give runs the user wants to compare the same experiment name; the plan then lists what
   changed from the previous one. If the user gave none, name it from the dataset and the model
   and say so.
@@ -128,6 +129,10 @@ Three ways, by what the user wants:
 - If your session ends, the run goes on. Follow it again with `kura run execute <run-id>` (no
   `--yes`); it never starts twice.
 - Kura watches the run; do not write a watcher of your own.
+- Kura's runner sends the notice when a run ends (on the desktop, or to ntfy when the user set
+  `KURA_NTFY_TOPIC`). It uses the notification settings of the environment it was started in:
+  while a runner is going, a `KURA_NOTIFY` or `KURA_NTFY_TOPIC` changed since then (by the
+  user with `kura secrets set`, or in a shell) does not reach the notice.
 - **Exit code 3**: the run is still going and needs a look. Show the user the line Kura printed
   and the end of `kura run logs <run-id>`, and ask whether to stop it (`kura run stop`) or keep
   following.

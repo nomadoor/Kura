@@ -31,7 +31,7 @@
   `model.base: OpenMOSS-Team/MOSS-Image-SFT` and `model_edit: true` fills the
   upstream UI's `kv_cache` and `match_target_res`. It is untested: Kura only
   compiles it.
-  source: AI-Toolkit baseline entry `moss_image:edit` (pinned commit 9d408eb6)
+  source: AI-Toolkit baseline entry `moss_image:edit` (pinned commit bdd55603)
 
 ## character
 

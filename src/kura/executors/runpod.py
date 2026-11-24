@@ -29,7 +29,7 @@ from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT
 from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, runpod_ssh_key, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
-from kura.executors.common import confirm_launch, create_intent_executor, request_confirmed_at, host_time, in_capacity_wait
+from kura.executors.common import confirm_launch, create_intent_executor, is_realization_record, request_confirmed_at, host_time, in_capacity_wait
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -776,13 +776,18 @@ def _pod_made_by_failed_create(run_dir: Path, realization_id: str, api_key: str,
     """Whether a failed create made a Pod after all: the one Pod by its name, None when it made none,
     or the run handed over to the user when the answer is not known.
 
-    A failed reply does not say whether RunPod created the Pod, so every failure
-    is looked up by name before anything is created again; only a capacity
-    refusal, the one failure a capacity wait repeats, skips the lookup. A complete
-    listing without the name means nothing was created and the next candidate
-    may be tried.
+    The reply's HTTP status is read before its text. RunPod refused the request,
+    so no Pod exists and nothing is looked up, when it answered 401 or 403 (the
+    key), 429 (the rate limit), or below 500 with a capacity text. Everything
+    else (a server error whatever its text, no reply, a reply Kura cannot read)
+    does not say whether RunPod created the Pod, so it is looked up by name
+    before anything is created again. A complete listing without the name means
+    nothing was created and the next candidate may be tried.
     """
-    if _is_runpod_capacity_error(exc):
+    status_code = exc.status_code if isinstance(exc, RunPodAPIError) else None
+    if runpod_key_refused(exc) or status_code == 429:
+        return None
+    if status_code is not None and status_code < 500 and _is_runpod_capacity_error(exc):
         return None
     error = _redact_secret_text(str(exc))
     try:
@@ -915,7 +920,6 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     run_dir = run_dir.resolve()
     runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
     _require_upload_storage(runpod_config)
-    _runpod_settings(runpod_config)
     try:
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
     except (OSError, YAMLError) as exc:
@@ -1711,6 +1715,14 @@ def reconcile_runpod(
     blocking: bool = True,
     source: str = "explicit",
 ) -> dict[str, Any]:
+    """Look at the run's Pod and record what is true of it.
+
+    `source` is written into the observation and decides one thing: an `explicit` reconcile
+    (`kura run reconcile`, and the runner's follower before it follows a started job) always writes its
+    observation, while any other value (`automatic`, from `observe_run`'s polling) writes one
+    only when the state or exit code changed, so polling does not fill the run with identical
+    records.
+    """
     with _run_operation_lock(run_dir, "observe", blocking=blocking):
         api_key = runpod_api_key("needed to reconcile a RunPod run")
         status = _load_status(run_dir)
@@ -1785,17 +1797,38 @@ def _duplicate_pod_ids(run_dir: Path, status: dict[str, Any]) -> list[str]:
 
 def pod_may_exist(status: dict[str, Any]) -> bool:
     """Whether the run's recorded Pod may still exist: one is recorded, no stop deleted it, and RunPod
-    has not reported it gone. The one test every caller uses; `pods_left` adds a recovery's duplicates."""
+    has not reported it gone. The one test every caller uses; `pods_left` adds a recovery's duplicates
+    and a Pod whose stop failed part-way."""
     return isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at")
 
 
 def pods_left(run_dir: Path, status: dict[str, Any]) -> list[str]:
     """The run's recorded Pods that may still exist and bill: its Pod while `pod_may_exist`, and every
-    duplicate until a stop deleted them all with it."""
+    duplicate until a stop deleted them all with it.
+
+    A stop that failed part-way keeps the Pod listed even after RunPod reported it gone
+    (`_stop_cut_short`): the stop is what looks for Pods by the run's names, so until one ends as
+    `stopped` a Pod a lost create reply left may still bill, and the run keeps a follower to finish it."""
     if status.get("pod_stopped_at"):
         return []
-    left = [status["pod_id"]] if pod_may_exist(status) else []
-    return left + _duplicate_pod_ids(run_dir, status)
+    recorded = isinstance(status.get("pod_id"), str) and (pod_may_exist(status) or _stop_cut_short(run_dir, status))
+    return ([status["pod_id"]] if recorded else []) + _duplicate_pod_ids(run_dir, status)
+
+
+def _stop_cut_short(run_dir: Path, status: dict[str, Any]) -> bool:
+    """Whether a stop of the run's latest launch failed part-way: it left a `stop` record with outcome
+    `failed`. Asked only while no stop has succeeded (`pod_stopped_at` is not set)."""
+    reference = status.get("last_realization")
+    if not isinstance(reference, str):
+        return False
+    for path in (run_dir / "realizations").glob(f"{Path(reference).stem}.stop-*.json"):
+        try:
+            stop = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(stop, dict) and stop.get("outcome") == "failed":
+            return True
+    return False
 
 
 def _already_gone(pod_id: str, api_key: str) -> bool:
@@ -1830,6 +1863,60 @@ def _run_pod_names(run_dir: Path) -> list[str]:
         if isinstance(intent, dict):
             names.append(_intent_pod_name(run_dir, path.name[: -len(CREATE_INTENT_SUFFIX)], intent))
     return list(dict.fromkeys(names))
+
+
+def run_without_status_problem(run_dir: Path) -> str | None:
+    """Why no command can stop or reconcile this run, or None when its status.json is there.
+
+    Status is not rebuilt from the records yet (run-records ADR, decision 5: shadow mode), so
+    without it nothing here can settle, follow, or stop the run. `kura run reconcile` and
+    `kura run stop` both say so from here, naming every RunPod Pod the run's records hold (the
+    names its create intents used and the ids its realizations recorded), because deleting those
+    by hand is then the only way to stop their billing before the maximum lease. Only reads records.
+    """
+    if not run_dir.is_dir():
+        return f"there is no run {run_dir.name} in this workspace (runs/{run_dir.name} does not exist)"
+    if (run_dir / "status.json").is_file():
+        return None
+    directory = run_dir / "realizations"
+    pods: dict[str, list[str]] = {name: [] for name in _run_pod_names(run_dir)}
+    for path in sorted(directory.glob("*.json")):
+        if not is_realization_record(path):
+            continue
+        try:
+            realization = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(realization, dict) or realization.get("executor") != "runpod":
+            continue
+        pod = realization.get("pod")
+        if not isinstance(pod, dict) or not isinstance(pod.get("id"), str):
+            continue
+        try:
+            intent = json.loads((directory / f"{path.stem}{CREATE_INTENT_SUFFIX}").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            intent = None
+        if isinstance(intent, dict):
+            name = _intent_pod_name(run_dir, path.stem, intent)
+        else:
+            # A launch from before create intents: its Pod's own record holds the name.
+            name = pod["name"] if isinstance(pod.get("name"), str) else _intent_pod_name(run_dir, path.stem, {})
+        duplicates = realization.get("duplicate_pod_ids") if isinstance(realization.get("duplicate_pod_ids"), list) else []
+        ids = pods.setdefault(name, [])
+        ids.extend(pod_id for pod_id in (pod["id"], *duplicates) if isinstance(pod_id, str) and pod_id not in ids)
+    problem = (
+        f"runs/{run_dir.name}/status.json is missing, and Kura does not rebuild it from the run's records yet; "
+        f"restore it (from a backup or a copy of the workspace) and run `kura run reconcile {run_dir.name}`. "
+        "Until it is back, Kura can neither stop nor reconcile this run. "
+    )
+    if not pods:
+        return problem + "Its records name no RunPod Pod"
+    listed = "; ".join(f"{name} ({'id ' + ', '.join(ids) if ids else 'no id recorded'})" for name, ids in pods.items())
+    return problem + (
+        f"Its records name these RunPod Pods: {listed}. One that still exists bills until its maximum lease, when it "
+        "deletes itself. Deleting it in the RunPod console is the only way to stop its billing sooner, and that "
+        "loses every output on it that was not collected"
+    )
 
 
 def stop_runpod(run_dir: Path) -> dict[str, Any]:

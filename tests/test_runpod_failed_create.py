@@ -1,4 +1,4 @@
-"""After any failed Pod create, the Pod is looked up by name before anything is created again.
+"""After a failed Pod create that RunPod did not plainly refuse, the Pod is looked up by name before anything is created again.
 
 The same input runs through both launches (training `launch_runpod`, render
 `launch_runpod_session`); both create through `_create_pod`, which asks `_pod_made_by_failed_create`.
@@ -126,6 +126,83 @@ class FailedCreateTests(unittest.TestCase):
                 self.assertEqual(request.call_count, 2)
                 listed.assert_not_called()
 
+    def test_the_status_decides_before_the_text_whether_a_failed_create_is_looked_up(self) -> None:
+        capacity_text = "There are no longer any instances available with the requested specifications"
+        # (the failed create, listings it costs): a refusal makes no Pod and needs none; an unknown outcome is looked up twice.
+        table = (
+            (RunPodAPIError("RunPod GraphQL failed (401): Unauthorized", status_code=401), 0),
+            (RunPodAPIError("RunPod GraphQL failed (403): Forbidden", status_code=403), 0),
+            (RunPodAPIError("RunPod GraphQL failed (429): Too Many Requests", status_code=429), 0),
+            (CAPACITY, 0),
+            (UNKNOWN, 2),
+            (RunPodAPIError("RunPod GraphQL failed (404): not found", status_code=404), 2),
+            # A server error may have created the Pod whatever its text says.
+            (RunPodAPIError(f"RunPod GraphQL failed (503): {capacity_text}", status_code=503), 2),
+            (RunPodAPIError("RunPod GraphQL failed (500): Internal Server Error", status_code=500), 2),
+            # No status at all: no reply, or a reply Kura cannot read.
+            (ValueError("RunPod API is unreachable: timed out"), 2),
+            (ValueError(f"RunPod API is unreachable: {capacity_text}"), 2),
+            (ValueError("RunPod API returned invalid JSON"), 2),
+        )
+        for label, make_run, launch in LOOPS:
+            for failure, listings in table:
+                with self.subTest(label, failure=str(failure)):
+                    _run_dir, request, listed, realization_id = self._launch(
+                        make_run, launch, creates=[failure, {"id": "pod-2", "name": "created", "desiredStatus": "RUNNING"}],
+                        listing=lambda *_a, **_k: [])
+                    self.assertIsInstance(realization_id, str)
+                    self.assertEqual(request.call_count, 2)
+                    self.assertEqual(listed.call_count, listings)
+
+    def test_a_refused_key_ends_the_launch_as_failed_not_as_an_unconfirmed_create(self) -> None:
+        for label, make_run, launch in LOOPS:
+            for code in (401, 403):
+                with self.subTest(label, code=code):
+                    refused = RunPodAPIError(f"RunPod GraphQL failed ({code}): Unauthorized", status_code=code)
+                    # The listing is refused the same way, so a lookup could only hand the run over.
+                    run_dir, request, listed, outcome = self._launch(make_run, launch, creates=[refused, refused], listing=refused)
+                    self.assertIsInstance(outcome, ValueError)
+                    self.assertIn("RunPod launch failed", str(outcome))
+                    self.assertNotIn("kura run reconcile", str(outcome))
+                    listed.assert_not_called()
+                    self.assertEqual(request.call_count, 2)  # each candidate once, as for any refusal
+                    [realization_path] = [path for path in (run_dir / "realizations").glob("*.json") if path.name.count(".") == 1]
+                    realization = json.loads(realization_path.read_text(encoding="utf-8"))
+                    self.assertEqual(realization["state"], "launch_failed")
+                    self.assertIsNone(realization["pod"])
+                    self.assertEqual(list((run_dir / "realizations").glob("*.create-unconfirmed.json")), [])
+                    self.assertEqual(unresolved_create_intents(run_dir), [])
+                    self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "launch_failed")
+
+    def test_a_rate_limited_create_in_a_capacity_wait_keeps_the_run_waiting(self) -> None:
+        # Only a training launch waits for capacity; a render session has no wait.
+        limited = RunPodAPIError("RunPod GraphQL failed (429): Too Many Requests", status_code=429)
+        in_stock = {"status": "ok", "candidates": [{"gpu_type_id": "NVIDIA A40", "clouds": [{"cloud_type": "COMMUNITY", "available": True}]}]}
+        states_while_waiting: list[dict] = []
+        with ExitStack() as stack:
+            root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+            run_dir = _training_run(root)
+            stack.enter_context(patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False))
+            stack.enter_context(patch("kura.executors.runpod.time.sleep"))
+            stack.enter_context(patch("kura.executors.runpod.runpod_gpu_availability", return_value=in_stock))
+            stack.enter_context(patch("kura.executors.runpod.sleep_checking_stop", side_effect=lambda _sec: states_while_waiting.append(
+                json.loads((run_dir / "status.json").read_text(encoding="utf-8")))))
+            request = stack.enter_context(patch("kura.executors.runpod._runpod_request", side_effect=[
+                limited, {"id": "pod-1", "name": "created", "desiredStatus": "RUNNING"}]))
+            # The listing is rate limited too, so a lookup could only hand the run over.
+            listed = stack.enter_context(patch("kura.executors.runpod._runpod_pods_named", side_effect=limited))
+            realization_id = runpod.launch_runpod(
+                max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                image="registry/image:tag", config=CONFIG, yes=True, wait_for_capacity_sec=600)
+            listed.assert_not_called()
+            self.assertEqual(request.call_count, 2)
+            [waiting] = states_while_waiting
+            self.assertEqual(waiting["state"], "queued")
+            self.assertEqual(waiting["capacity_wait"]["last_result"], "transient")
+            self.assertEqual(list((run_dir / "realizations").glob("*.create-unconfirmed.json")), [])
+            realization = json.loads((run_dir / "realizations" / f"{realization_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(realization["pod"]["id"], "pod-1")
+
 
 RID = "20261022-101010-000001"
 POD_NAME = f"kura-train-{RID}"
@@ -211,6 +288,47 @@ class DeleteByNameTests(unittest.TestCase):
                 self.assertEqual(record["targets"], [{"pod_id": "pod-1", "result": "deleted"}])
                 # Not recorded as stopped, so the stop is tried again and looks again.
                 self.assertNotIn("pod_stopped_at", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
+
+    def test_a_stop_whose_listing_failed_looks_again_even_after_the_pod_is_reported_gone(self) -> None:
+        # The first stop deleted pod-1 and could not list by name. A `kura run reconcile` then records
+        # pod-1 as gone. The stop is still unfinished, so every deleter lists again and deletes the
+        # Pod a lost create reply left, instead of taking "the recorded Pod is gone" for "nothing bills".
+        from kura import runner
+
+        late = {"myself": {"pods": [{"id": "pod-late", "name": POD_NAME}]}}
+        gone = RunPodAPIError("RunPod API returned 404", status_code=404)
+        for label, deleter in DELETERS:
+            with self.subTest(label):
+                run_dir, deleted, outcome = self._delete(deleter, listing=ValueError("RunPod API is unreachable: down"))
+                self.assertEqual(deleted, ["pod-1"])
+                self.assertIsNot(outcome, True)
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                    # pod-1 answers 404 from here on; pod-late answers its delete.
+                    with patch("kura.executors.runpod._runpod_request", side_effect=gone):
+                        status = runpod.reconcile_runpod(run_dir)
+                    self.assertTrue(status["pod_missing_at"])
+                    self.assertEqual(runpod.pods_left(run_dir, status), ["pod-1"])
+                    self.assertIn("kura run stop train", runner.pod_may_still_bill(run_dir, status))
+
+                    def api(method, path, *_args, **_kwargs):
+                        if path == "/pods/pod-1":
+                            raise gone
+                        return {}
+
+                    with patch("kura.executors.runpod._runpod_request", side_effect=api) as request, \
+                         patch("kura.executors.runpod._runpod_graphql", return_value=late) as listed:
+                        self.assertIs(deleter(run_dir), True)
+                listed.assert_called_once()
+                self.assertEqual([call.args[1] for call in request.call_args_list if call.args[0] == "DELETE"], ["/pods/pod-1", "/pods/pod-late"])
+                failed, stopped = self._stop_records(run_dir)
+                self.assertEqual((failed["outcome"], stopped["outcome"]), ("failed", "stopped"))
+                self.assertEqual(stopped["targets"], [{"pod_id": "pod-1", "result": "already_gone"},
+                                                      {"pod_id": "pod-late", "result": "deleted", "found_by": "name", "pod_name": POD_NAME}])
+                status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                self.assertTrue(status["pod_stopped_at"])
+                self.assertEqual(status["state"], "completed")  # how the run ended is not rewritten
+                self.assertEqual(runpod.pods_left(run_dir, status), [])
+                self.assertIsNone(runner.pod_may_still_bill(run_dir, status))
 
 
 def setUpModule() -> None:

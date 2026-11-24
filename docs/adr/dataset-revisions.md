@@ -53,7 +53,7 @@ Kura needs only these ideas, at the scale of one person's datasets.
   made it. The writer states the author: the UI writes `user`, an agent writes
   `agent`, and an unstated author is recorded as `unknown`, never guessed.
 - Changes are made with `kura dataset` commands, from the agent and from the UI
-  alike. Commands that only read a dataset report that the manifest differs
+  alike (not built yet, see Consequences). Commands that only read a dataset report that the manifest differs
   from the latest revision and do not write. Compile records such an unrecorded
   change as a revision before it locks the run's inputs.
 
@@ -85,7 +85,9 @@ dataset, and selecting a subset for one run remains the run's concern under
   revision.
 - `kura dataset` gains write commands: remove and restore items, replace a
   reference with a derived file, set a caption, and restore a revision.
-  Restoring is itself a new revision.
+  Restoring is itself a new revision. These commands are decided and not
+  built yet: `kura dataset` has `validate`, `draft`, and `inspect` only, and
+  nothing writes `history/`.
 - The `dataset` skill directs agents to these commands instead of editing
   `items.jsonl` or caption files directly.
 - Storage grows only by derived files and small manifest snapshots.

@@ -20,6 +20,7 @@ from kura.backends.shared import _datasets, _script_command, validated_command_e
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
+from kura.images import PINNED_IMAGES
 from kura.media_types import frozen_suffixes
 from kura.paths import AI_TOOLKIT_MODELS_PATH
 from kura.provenance import artifact_pinning
@@ -44,22 +45,24 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:2e1c004e01bfc61a23b0814aa62f0fa664ce134e23c7ee57ba643b021ea9f553"
-AI_TOOLKIT_PINNED_COMMIT = "9d408eb64d61e7b47e509e29f5da99bfab1afac0"
+# The image digest is written once, in `kura.images.PINNED_IMAGES`.
+AI_TOOLKIT_PINNED_IMAGE = PINNED_IMAGES["ai-toolkit"]
+AI_TOOLKIT_PINNED_COMMIT = "bdd55603e05a7a59e8112c0a0623798754ce9b69"
 
-# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.32,
+# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.43,
 # embedded commit AI_TOOLKIT_PINNED_COMMIT).
 # It is the union of
 # toolkit.util.get_model.LEGACY_ARCHS and the archs of get_model.get_all_models().
 # Keep this backend-local and refresh it whenever the pinned image changes.
-MINIMAX_H3_ARCHS = frozenset({"minimax_h3", "minimax_h3_ref2va", "minimax_h3_vsa"})
+MINIMAX_H3_ARCHS = frozenset({"minimax_h3", "minimax_h3_image", "minimax_h3_ref2va", "minimax_h3_vsa"})
 AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "ace_step_15", "ace_step_15_xl", "anima", "auraflow", "boogu_image", "boogu_image_edit",
-    "chroma", "chroma_radiance", "cogview4", "ernie_image", "f-lite", "flex2", "flux",
+    "chroma", "chroma_radiance", "cogview4", "ernie_image", "f-lite", "fibo2", "flex2", "flux",
     "flux2", "flux2_klein_4b", "flux2_klein_9b", "flux3", "flux_kontext", "hidream", "hidream_e1",
     "hidream_o1", "ideogram4", "iris3b", "krea2", "ltx2", "ltx2.3", "ltx2.5", "lumina2",
-    "mageflow", "mageflow_edit", "ming_image", "minimax_h3", "minimax_h3_ref2va", "minimax_h3_vsa",
-    "moss_image", "nucleus_image", "omnigen2", "pixart", "pixart_sigma", "prx_pixel", "qwen25_omni",
+    "mageflow", "mageflow_edit", "ming_image", "minimax_h3", "minimax_h3_image", "minimax_h3_omni",
+    "minimax_h3_ref2va", "minimax_h3_vsa", "moss_image", "nucleus_image", "omnigen2", "p_h3_image",
+    "pixart", "pixart_sigma", "prx_pixel", "qwen25_omni", "qwen38",
     "qwen_image", "qwen_image_2", "qwen_image_edit", "qwen_image_edit_plus", "sd1", "sd2",
     "sd3", "sdxl", "ssd", "vega", "wan21", "wan21_i2v", "wan22_14b",
     "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
@@ -67,7 +70,7 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
 # Every model_arch value Kura accepts: a pinned arch, or a UI entry name the trainer reads as one.
 AI_TOOLKIT_MODEL_ARCH_VALUES = tuple(sorted({*AI_TOOLKIT_PINNED_MODEL_ARCHS, *ui_entry_values(AI_TOOLKIT_PINNED_MODEL_ARCHS)}))
 
-# Pinned AI-Toolkit 9d408eb6, toolkit/data_loader.py:40-42. These
+# Pinned AI-Toolkit bdd55603, toolkit/data_loader.py:40-42. These
 # are the folder loader's exact lowercase extension lists.
 AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
 AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
@@ -97,7 +100,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": (
             "anima", "chroma", "chroma_radiance", "flex2", "flux", "flux2",
             "flux2_klein_4b", "flux2_klein_9b", "flux3", "flux_kontext", "hidream", "hidream_o1",
-            "iris3b", "krea2", "ltx2.5", "mageflow", "ming_image", "minimax_h3", "minimax_h3_vsa",
+            "iris3b", "krea2", "ltx2.5", "mageflow", "ming_image", "minimax_h3", "minimax_h3_image", "minimax_h3_vsa",
             "moss_image", "qwen_image", "qwen_image_2", "sd1", "sdxl", "zimage", "zimage_l2p",
         ),
         "shape": "image",
@@ -143,7 +146,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         # The pinned flux3 reads every reference of a sample: get_noise_prediction unpacks the
         # loader's (B, N, C, H, W) stack into N references, and use_raw_control_images keeps each
         # unresized for _fit_reference to size by area (extensions_built_in/diffusion_models/flux3/
-        # flux3.py:114-115 and 514-538, pinned 0.13.32). Kura projects one reference because no
+        # flux3.py:114-115 and 515-539, pinned 0.13.43). Kura projects one reference because no
         # run has verified several.
         "architectures": ("flux3", "flux_kontext", "hidream_e1", "qwen_image_edit"),
         "shape": "image-control",
@@ -183,7 +186,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "multi-control-image": {
         "architectures": (
             "flux2", "flux2_klein_4b", "flux2_klein_9b", "krea2",
-            "mageflow_edit", "moss_image",
+            "mageflow_edit", "minimax_h3_image", "moss_image",
         ),
         "shape": "image-control",
         "target_media": "image",
@@ -460,8 +463,8 @@ def _resolve_ai_toolkit_projection_blocks(
 def _native_config_architecture(value: str) -> str:
     """The architecture the pinned trainer runs for a native_config.model.arch value.
 
-    ModelConfig strips a display tag and maps flex1 to flux (toolkit/config_modules.py:774-778 at
-    9d408eb6). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
+    ModelConfig strips a display tag and maps flex1 to flux (toolkit/config_modules.py:776-781 at
+    bdd55603). backend.config.model_arch takes the listed values only, so this reads the escape hatch.
     """
     architecture = value.split(":", 1)[0]
     return "flux" if architecture == "flex1" else architecture
@@ -1013,6 +1016,28 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
         raise ValueError(
             "AI-Toolkit backend.config.extras_name_or_path must be a nonempty model reference"
         )
+    if "assistant_lora_path" in native_model:
+        # A model input is declared, so the plan lists it, the record names it, and a local file is mounted.
+        raise ValueError(
+            "AI-Toolkit backend.config.native_config.model.assistant_lora_path is not an escape hatch: the training "
+            "adapter is a declared model input; use backend.config.assistant_lora_path "
+            f"({AI_TOOLKIT_TRAINING_ADAPTER_DECIDED})"
+        )
+    assistant_lora_path = native.get("assistant_lora_path")
+    if assistant_lora_path is not None and (not isinstance(assistant_lora_path, str) or not assistant_lora_path.strip()):
+        raise ValueError(
+            "AI-Toolkit backend.config.assistant_lora_path must be a nonempty training-adapter reference "
+            f"({AI_TOOLKIT_TRAINING_ADAPTER_DECIDED})"
+        )
+    if (
+        isinstance(assistant_lora_path, str) and assistant_lora_path != AI_TOOLKIT_NO_TRAINING_ADAPTER
+        and assistant_lora_path.strip().lower() in {AI_TOOLKIT_NO_TRAINING_ADAPTER, "null"}
+    ):
+        # Forwarded as written, this would be looked up as an adapter file of that name.
+        raise ValueError(
+            f"AI-Toolkit backend.config.assistant_lora_path {assistant_lora_path!r} is not accepted; "
+            f"write {AI_TOOLKIT_NO_TRAINING_ADAPTER} (lowercase, no spaces) to load no training adapter"
+        )
     gradient_checkpointing = native.get(
         "gradient_checkpointing", native_train.get("gradient_checkpointing", False)
     )
@@ -1161,6 +1186,39 @@ def _first_set(*values: Any) -> Any:
     return next((value for value in values if value is not None), None)
 
 
+# The backend.config.assistant_lora_path value that loads no training adapter.
+AI_TOOLKIT_NO_TRAINING_ADAPTER = "none"
+AI_TOOLKIT_TRAINING_ADAPTER_DECIDED = (
+    "the training adapter the trainer loads (its model.assistant_lora_path): a Hugging Face user/repo/file path "
+    "or a local file path, forwarded as written; unset takes the adapter the pinned upstream UI entry of "
+    f"model_arch names, if it names one; {AI_TOOLKIT_NO_TRAINING_ADAPTER} loads no adapter"
+)
+
+
+def ai_toolkit_training_adapter(run: dict[str, Any]) -> dict[str, str] | None:
+    """The training adapter the run's trainer loads, or None for no adapter.
+
+    It is the authored ``backend.config.assistant_lora_path`` (``none`` loads no adapter), else the
+    adapter the pinned UI entry of ``model_arch`` names, else none
+    (docs/adr/upstream-training-baseline.md, decision 7). ``selected_by`` says which: ``authored``
+    or ``baseline``. The requirement list and the native config both read it here.
+    None for an explicit ``command`` run, which owns its native configuration.
+
+    This decides for a run.yaml. A compiled run's adapter is the one its frozen files name
+    (``kura.dataset_handoff.frozen_model_requirements``).
+    """
+    override = _ai_toolkit_backend_override(run)
+    if override.get("command") is not None:
+        return None
+    if "assistant_lora_path" in override:
+        authored = override["assistant_lora_path"]
+        return None if authored == AI_TOOLKIT_NO_TRAINING_ADAPTER else {"reference": authored, "selected_by": "authored"}
+    arch = override.get("model_arch")
+    selected = select_baseline_entry(arch, (run.get("model") or {}).get("base")) if isinstance(arch, str) else None
+    reference = selected[1].get("assistant_lora_path") if selected is not None else None
+    return {"reference": reference, "selected_by": "baseline"} if reference is not None else None
+
+
 def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display."""
     native = _ai_toolkit_backend_override(run)
@@ -1211,10 +1269,9 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     # local candidates), so the record names the selector, not a repository.
     # Settings that steer the resolution, such as qtype, are frozen in
     # resolved/ai-toolkit.yaml; locks written before this keep huggingface-repository.
-    def requirement(role: str, reference: Any) -> dict[str, Any] | None:
+    def requirement(role: str, reference: Any, **extra: Any) -> dict[str, Any] | None:
         if not isinstance(reference, str) or not reference:
             return None
-        extra: dict[str, Any] = {}
         if reference.startswith(("/", "./", "../", "~")):
             acquisition = "local-path"
             identity: dict[str, Any] = {"kind": "path", "path": reference}
@@ -1223,7 +1280,7 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
             acquisition = "backend"
             identity = {"kind": "backend-resolved-selector", "value": reference}
             expected_format, observable = "backend-native-repository", False
-            extra = {"settings": "resolved/ai-toolkit.yaml"}
+            extra = {"settings": "resolved/ai-toolkit.yaml", **extra}
         return {"role": role, "acquisition": acquisition, "identity": identity, "runtime_reference": reference, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable), **extra}
 
     requirements = []
@@ -1233,6 +1290,16 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     extras = requirement("model_extras", override.get("extras_name_or_path"))
     if extras is not None:
         requirements.append(extras)
+    try:
+        adapter = ai_toolkit_training_adapter(run)
+    except ValueError:
+        # model_arch selects no single baseline entry: compile refuses the run and the plan's
+        # trainer settings carry the reason, so the list names only what is certain.
+        adapter = None
+    if adapter is not None:
+        training_adapter = requirement("training_adapter", adapter["reference"], selected_by=adapter["selected_by"])
+        if training_adapter is not None:
+            requirements.append(training_adapter)
     return requirements
 
 
@@ -1299,13 +1366,16 @@ _AI_TOOLKIT_AUTHORED_BASELINE_KEYS = {
     for section, fields in _AI_TOOLKIT_TYPED_FIELDS.items() for key, field in fields.items()
     if key in BASELINE_KEYS.get(section, ())
 }
+# The process sections the baseline fills key by key; its dataset keys go onto each dataset.
+_AI_TOOLKIT_FILLED_SECTIONS = tuple(section for section in BASELINE_KEYS if section != "dataset")
 # How backend.config.native_config reaches the trainer, for `kura run capabilities`.
 AI_TOOLKIT_NATIVE_CONFIG_MERGE = (
     "each native_config section (train, model, network, save, ...) merges key by key into the process "
     "Kura generates; authored values win (native_config keys and the typed fields, which may not both set "
     "one key), and the pinned upstream UI baseline of the selected model_arch fills only the baseline keys "
-    "left unset, a mapping such as model_kwargs or optimizer_params only its missing subkeys. A key Kura "
-    "owns (paths, datasets, steps, seed, saving, schedule) is refused there"
+    "left unset, a mapping such as model_kwargs, optimizer_params, or network.network_kwargs (the LoRA "
+    "module filter ignore_if_contains) only its missing subkeys. A key Kura "
+    "owns (paths, datasets, steps, seed, saving, schedule, the training adapter) is refused there"
 )
 
 
@@ -1340,7 +1410,7 @@ def _ai_toolkit_authored_sections(override: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ai_toolkit_effective_settings(run: dict[str, Any]) -> dict[str, Any] | None:
-    """Each train and model value the generated process gets from the run or from the pinned
+    """Each train, model, and network value the generated process gets from the run or from the pinned
     upstream UI baseline, marked by where it came from. Display only: compile decides."""
     if _ai_toolkit_backend_override(run).get("command") is not None:
         return None
@@ -1361,7 +1431,7 @@ def _ai_toolkit_effective_settings(run: dict[str, Any]) -> dict[str, Any] | None
         return found
 
     settings: dict[str, Any] = {"entry": baseline["entry"], "commit": baseline["commit"]}
-    for section in ("train", "model"):
+    for section in _AI_TOOLKIT_FILLED_SECTIONS:
         section_values = authored.get(section) if isinstance(authored.get(section), dict) else {}
         rows = {key: {"value": value, "source": "authored"} for key, value in leaves(section_values).items()}
         rows.update({key: {"value": value, "source": "baseline"} for key, value in leaves(baseline[section]).items()})
@@ -1374,7 +1444,7 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
 
     Authored values win: a Kura field or a ``native_config`` key removes the
     matching baseline value. Mapping values (``model_kwargs``,
-    ``optimizer_params``) fill only their missing subkeys. Returns None for an
+    ``optimizer_params``, ``network_kwargs``) fill only their missing subkeys. Returns None for an
     explicit ``command`` run, which owns its native configuration. An
     architecture without a baseline entry refuses unless the values that decide
     whether training runs at all are authored.
@@ -1400,10 +1470,13 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
                 f"AI-Toolkit model_arch {arch!r} has no unambiguous entry in the pinned UI training baseline, "
                 "so Kura cannot choose its noise scheduler or precision; author " + ", ".join(missing)
             )
-        return {"entry": None, "commit": load_baseline()["upstream"]["commit"], "train": {}, "model": {}, "dataset": {}}
+        return {
+            "entry": None, "commit": load_baseline()["upstream"]["commit"],
+            **{section: {} for section in _AI_TOOLKIT_FILLED_SECTIONS}, "dataset": {},
+        }
     name, entry = selected
     values: dict[str, Any] = {"entry": name, "commit": load_baseline()["upstream"]["commit"]}
-    for section in ("train", "model"):
+    for section in _AI_TOOLKIT_FILLED_SECTIONS:
         authored = native.get(section) if isinstance(native.get(section), dict) else {}
         filled: dict[str, Any] = {}
         for key in BASELINE_KEYS[section]:
@@ -1450,7 +1523,7 @@ def _apply_ai_toolkit_baseline(run: dict[str, Any], process: dict[str, Any]) -> 
     baseline = ai_toolkit_baseline(run)
     if baseline is None:
         return
-    for section in ("train", "model"):
+    for section in _AI_TOOLKIT_FILLED_SECTIONS:
         target = process.setdefault(section, {})
         for key, value in baseline[section].items():
             if isinstance(value, dict):
@@ -1575,6 +1648,9 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         else:
             process[section] = values
     _apply_ai_toolkit_baseline(run, process)
+    training_adapter = ai_toolkit_training_adapter(run)
+    if training_adapter is not None:
+        process["model"]["assistant_lora_path"] = training_adapter["reference"]
     if override.get("resolution") is not None:
         for dataset in process.get("datasets", []):
             if isinstance(dataset, dict):

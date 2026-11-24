@@ -1,0 +1,51 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-11-24'
+executor: docker and runpod
+kura_commit: cd313b1
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes; then --backend ai-toolkit --runpod --gpu "NVIDIA A40" --yes, and the three multi runs again
+hardware:
+  local_gpu: NVIDIA GeForce RTX 4090 (24564 MiB)
+  runpod_gpus: A40 ($0.59/h)
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on dev at cd313b1
+  before the 0.9.0 release: every backend on local Docker, and AI-Toolkit on RunPod. The test workspace's Hugging Face cache
+  is on the assets disk. The local video dataset was generated with the pinned Musubi Tuner image
+  tagged as the harness's nomadoor/kura-musubi-tuner:dev.
+backends:
+  sd-scripts:
+    executor: docker
+    runtime_image_digest: sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea
+    adapter_source: 8001cecee17e165d919704fac1c04ea37077d670c9e7ef022a6e67b04fe8ffd8
+    runs: [20261124-1416_conf-sd-one-control_04f7, 20261124-1417_conf-sd-one-control-2_e816, 20261124-1418_conf-sd-one-split_3baf, 20261124-1418_conf-sd-one-resume_24e8, 20261124-1419_conf-sd-multi-fresh_bfa5, 20261124-1419_conf-sd-multi-split_566a, 20261124-1420_conf-sd-multi-resume_268c, 20261124-1420_conf-sd-multi-accum-2_4a41, 20261124-1421_conf-sd-one-many-saves_efd9]
+  ai-toolkit:
+    executor: docker
+    runtime_image_digest: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    adapter_source: 3ace2278d6e79c5b76075ffdf69f20840622f27c1c843e0fbaa692f0e75e2988
+    runs: [20261124-1422_conf-ai-one-control_6703, 20261124-1422_conf-ai-one-control-2_f402, 20261124-1423_conf-ai-one-split_47f2, 20261124-1423_conf-ai-one-resume_3243, 20261124-1423_conf-ai-multi-fresh_ab7c, 20261124-1424_conf-ai-multi-split_d02d, 20261124-1424_conf-ai-multi-resume_3dc4, 20261124-1424_conf-ai-multi-accum-2_b1b2, 20261124-1425_conf-ai-one-many-saves_2f2f]
+  musubi-tuner:
+    executor: docker
+    runtime_image_digest: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    adapter_source: f2fa4e3d8af13403f9e48f27d82f66c82a5eb575efca8cc6d6bfc98910e8146a
+    runs: [20261124-1425_conf-musubi-one-control_6f77, 20261124-1430_conf-musubi-one-control-2_9f44, 20261124-1431_conf-musubi-one-split_597b, 20261124-1432_conf-musubi-one-resume_ecb3, 20261124-1433_conf-musubi-multi-fresh_d8f6, 20261124-1433_conf-musubi-multi-split_9648, 20261124-1434_conf-musubi-multi-resume_0637, 20261124-1435_conf-musubi-one-many-saves_e8d0]
+  ai-toolkit-runpod:
+    executor: runpod
+    runtime_image_digest: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    adapter_source: 3ace2278d6e79c5b76075ffdf69f20840622f27c1c843e0fbaa692f0e75e2988
+    runs: [20261124-1514_conf-ai-one-control_30f2, 20261124-1519_conf-ai-one-control-2_5a2f, 20261124-1525_conf-ai-one-split_4ddf, 20261124-1530_conf-ai-one-resume_ef1c, 20261124-1543_conf-ai-multi-fresh_126e, 20261124-1548_conf-ai-multi-split_bc8c, 20261124-1552_conf-ai-multi-resume_bda7, 20261124-1539_conf-ai-multi-accum-2_be6b, 20261124-1540_conf-ai-one-many-saves_2785]
+    pod_minutes: about 38 on A40 for the runs listed (about $0.37 GPU); every Pod deleted
+    host_failures: >-
+      Earlier attempts the same day on the harness's default small GPUs were cut short by RunPod hosts,
+      not by Kura: two RTX 3090 Pods failed at CUDA initialization ("CUDA unknown error"), and two
+      RTX 4000 Ada Pods never started their container within the SSH wait; Kura deleted every one.
+      One A40 create was refused with "This machine does not have the resources to deploy your pod"
+      (no Pod made; Kura did not count it as capacity, recorded in docs/backlog.md). All of today's
+      release attempts on RunPod cost about $0.62 GPU in total.
+results:
+  P1: pass on every backend and on RunPod (sd-scripts and AI-Toolkit include accumulation 2)
+  P2: pass
+  P3: pass; AI-Toolkit and Musubi Tuner controls differ, so exact learned-state equality is not checkable there
+  P4: pass
+  P6: pass on RunPod (every Pod deleted after collection); not run on local Docker
+  P7: pass, including a 12-step run that keeps all six step saves on every backend
+  P8: pass on local Docker; not run on RunPod

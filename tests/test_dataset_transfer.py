@@ -263,6 +263,17 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 (run_dir / "transfer").mkdir()
                 write_transfer_archive(root, run_dir, inventory, run_dir / "transfer" / "x.tar")
 
+    def test_staging_needs_no_gpu_list_in_the_workspace(self) -> None:
+        # A run whose compute.gpu names its GPUs launches under a workspace that lists none
+        # (`runpod_launch_settings`); the launch checks the settings a Pod is created from, staging uploads only.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, _run = self._compiled(root)
+
+            record = stage_runpod(workspace=root, run_dir=run_dir, config={"runpod": {"storage_mode": "upload"}, "docker": small_local_reserve()})
+
+            self.assertTrue((run_dir / record["stage_record"]).is_file())
+
     def test_stage_record_is_bound_and_launch_requires_an_exact_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

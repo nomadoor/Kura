@@ -1496,10 +1496,17 @@ def _resume_state_mount(workspace: Path, run_dir: Path) -> dict[str, str] | None
     }
 
 
-def _local_model_requirements(run_dir: Path) -> list[dict[str, Any]]:
+def frozen_model_requirements(run_dir: Path) -> list[dict[str, Any]] | None:
+    """The model requirements compile froze for a run (`resolved/model-requirements.lock.yaml`), or
+    None when the run has no lock.
+
+    A compiled run's model inputs are the ones this lock names: the plan, the launch check, and the
+    local mounts read them here and never decide them again from the manifest, so a run compiled by
+    an earlier Kura keeps the inputs its frozen trainer config loads.
+    """
     path = run_dir / "resolved" / "model-requirements.lock.yaml"
     if not path.is_file():
-        return []
+        return None
     try:
         document = load_yaml(path)
     except (OSError, YAMLError) as exc:
@@ -1507,10 +1514,11 @@ def _local_model_requirements(run_dir: Path) -> list[dict[str, Any]]:
     requirements = document.get("requirements") if isinstance(document, dict) else None
     if not isinstance(requirements, list):
         raise ValueError("frozen model requirements must contain requirements[]")
-    return [
-        item for item in requirements
-        if isinstance(item, dict) and item.get("acquisition") == "local-path"
-    ]
+    return [item for item in requirements if isinstance(item, dict)]
+
+
+def _local_model_requirements(run_dir: Path) -> list[dict[str, Any]]:
+    return [item for item in frozen_model_requirements(run_dir) or [] if item.get("acquisition") == "local-path"]
 
 
 def _configured_model_source(

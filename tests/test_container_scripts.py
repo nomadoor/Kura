@@ -115,6 +115,26 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn(f"git apply /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
         self.assertIn('io.kura.patch.save-step="completed-updates-v1"', dockerfile)
 
+    def test_ai_toolkit_image_fails_on_a_training_step_out_of_memory(self) -> None:
+        # Upstream discards a batch that runs out of GPU memory and keeps going, while the loop
+        # step still advances, so the run would claim updates it did not make. The image build
+        # applies the patch that raises instead, and fails if it does not apply.
+        root = Path(__file__).resolve().parents[1]
+        name = "0002-fail-on-training-step-oom.patch"
+        patch_text = (root / "docker/ai-toolkit/patches" / name).read_text(encoding="utf-8")
+        self.assertIn("-                self.num_consecutive_oom += 1\n", patch_text)
+        self.assertIn('-                    raise RuntimeError("OOM during training step 3 times in a row, aborting training")\n', patch_text)
+        self.assertIn("+                raise RuntimeError(\n", patch_text)
+        self.assertIn("+                ) from oom_error\n", patch_text)
+        # Both OOM branches bind the error the raise chains to.
+        self.assertIn("+            except torch.cuda.OutOfMemoryError as e:\n", patch_text)
+        self.assertEqual(patch_text.count("+                oom_error = e\n") + patch_text.count("+                    oom_error = e\n"), 2)
+        dockerfile = (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"COPY docker/ai-toolkit/patches/{name} /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn(f"git apply --check /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.training-step-oom="fail-v1"', dockerfile)
+
     def test_sd_scripts_probe_fails_closed_for_each_checkpoint_loader(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("sd_scripts_probe.py"), namespace)

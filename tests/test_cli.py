@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.backend_fixtures import with_required
 from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only, small_local_reserve
+from tests.test_runpod_create_intent import _no_price_lookup
 from tests.user_config import isolate_user_config
 
 
@@ -83,6 +84,9 @@ RUNPOD_OBJECT_JOB_SOURCE = (Path(__file__).resolve().parents[1] / "docker" / "ai
 # `kura init` probes Docker and ComfyUI for its readiness summary; unit tests
 # must not depend on what this machine has running.
 _READINESS_OFF = patch("kura.init_templates.readiness_gaps", return_value=[])
+# The local launch preflight asks where Docker keeps its data; tests of the preflight answer it by
+# name instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_PREFLIGHT_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
 
 
 def setUpModule() -> None:
@@ -90,9 +94,11 @@ def setUpModule() -> None:
     _SSH_REUSE_OFF.start()
     _RUNPOD_MARKS_OFF.start()
     _READINESS_OFF.start()
+    _PREFLIGHT_DOCKER_DATA_OFF.start()
 
 
 def tearDownModule() -> None:
+    _PREFLIGHT_DOCKER_DATA_OFF.stop()
     _READINESS_OFF.stop()
     _RUNPOD_MARKS_OFF.stop()
     _SSH_REUSE_OFF.stop()
@@ -214,16 +220,22 @@ class InitCommandTests(unittest.TestCase):
         self.assertEqual(opened.call_args.args[0], "http://10.0.0.5:8188/system_stats")
 
     def test_readiness_never_prints_credentials_from_the_comfyui_endpoint(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\ncomfyui:\n  endpoint: http://user:hunter2-secret@10.0.0.5:8188\n", encoding="utf-8")
-            with patch("kura.doctor.shutil.which", return_value=None), patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")):
-                gaps = readiness_gaps(root)
-        # The endpoint is refused by its one rule, which never repeats the value, and not probed.
-        comfy = [gap for gap in gaps if "comfyui.endpoint" in gap or gap.startswith("ComfyUI")]
-        self.assertEqual(len(comfy), 1)
-        self.assertNotIn("hunter2-secret", comfy[0])
-        self.assertIn("must not hold a user name, password, query, or fragment", comfy[0])
+        for endpoint, message in (
+            ("http://user:hunter2-secret@10.0.0.5:8188", "must not hold a user name, password, query, or fragment"),
+            ("user:hunter2-secret@10.0.0.5:8188", "must start with http:// or https:// and name a host"),
+        ):
+            with self.subTest(endpoint=endpoint), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "workspace.yaml").write_text(f"schema_version: 2\ncomfyui:\n  endpoint: {endpoint}\n", encoding="utf-8")
+                with patch("kura.doctor.shutil.which", return_value=None), patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")) as opened:
+                    gaps = readiness_gaps(root)
+                # The endpoint is refused by its one rule, which never repeats the value, and not probed.
+                comfy = [gap for gap in gaps if "comfyui.endpoint" in gap or gap.startswith("ComfyUI")]
+                self.assertEqual(len(comfy), 1)
+                self.assertNotIn("hunter2-secret", comfy[0])
+                self.assertNotIn("10.0.0.5", comfy[0])
+                self.assertIn(message, comfy[0])
+                opened.assert_not_called()
 
     def test_render_new_creates_only_draft_files(self) -> None:
         previous = Path.cwd()
@@ -556,7 +568,7 @@ class ImageCommandTests(unittest.TestCase):
             build = calls[0]
             self.assertEqual(build[build.index("--file") + 1], str(REPOSITORY / "docker/ai-toolkit/Dockerfile"))
             self.assertIn(
-                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0",
+                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.43@sha256:ba3327cebd5aa9ad3f539c52a1c4fa30831d3365d12844deda9c9a14f61411c6",
                 build,
             )
             self.assertEqual(build[-1], str(REPOSITORY))
@@ -6145,7 +6157,7 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertIn("requires at least 20 GiB", short[0]["fact"])
         self.assertEqual([item["severity"] for item in enough], ["info", "info"])
         self.assertIn("passes", enough[0]["fact"])
-        self.assertIn("Docker's data root is not watched (`docker info` did not report it)", enough[1]["fact"])
+        self.assertIn("Docker's data root is not watched (not measured in tests)", enough[1]["fact"])
 
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7201,7 +7213,7 @@ class RunDiscardTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(status, 1)
             self.assertTrue(outside.exists())
-            self.assertIn("run_id must be a safe run directory name", stderr.getvalue())
+            self.assertIn("'../outside' is not a run directory name", stderr.getvalue())
 
 
 class RunPruneTests(unittest.TestCase):
@@ -7285,6 +7297,145 @@ class RunPruneTests(unittest.TestCase):
                 os.chdir(previous)
         self.assertEqual(status, 1)
         self.assertIn("cannot prune run old: docker cleanup failed", stderr.getvalue())
+
+
+def _link_directory(link: Path, target: Path) -> None:
+    """Make `link` a directory link to `target`: a junction on native Windows (it needs no privilege), a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+class RunIdNamesEntryTests(unittest.TestCase):
+    """`kura run prune` and `kura run discard` delete the entry `runs/<id>` itself, never what a link there points to."""
+
+    COMMANDS = {
+        "prune": ("completed", lambda run_id, yes: cmd_run_prune(argparse.Namespace(run_ids=[run_id], yes=yes))),
+        "discard": ("draft", lambda run_id, yes: cmd_run_discard(argparse.Namespace(run_id=run_id, yes=yes))),
+    }
+
+    @staticmethod
+    def _make_run(directory: Path, state: str) -> Path:
+        (directory / "notes").mkdir(parents=True)
+        (directory / "notes" / "kept.txt").write_text("kept", encoding="utf-8")
+        (directory / "run.yaml").write_text(f"id: {directory.name}\n", encoding="utf-8")
+        (directory / "status.json").write_text(json.dumps({"state": state, "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+        return directory
+
+    def _run(self, root: Path, command: str, run_id: str, *, yes: bool = True) -> tuple[int, str, str]:
+        previous = Path.cwd()
+        stdout, stderr = io.StringIO(), io.StringIO()
+        os.chdir(root)
+        try:
+            with patch("kura.cli.shutil.which", return_value=None), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = self.COMMANDS[command][1](run_id, yes)
+        finally:
+            os.chdir(previous)
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def test_a_linked_run_entry_is_refused_and_its_target_stays(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            for place in ("sibling run", "outside the workspace"):
+                with self.subTest(command=command, place=place), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve() / "workspace"
+                    (root / "runs").mkdir(parents=True)
+                    (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                    target = self._make_run(root / "runs" / "b" if place == "sibling run" else root.parent / "elsewhere", state)
+                    link = root / "runs" / "a"
+                    _link_directory(link, target)
+                    for yes in (False, True):
+                        status, stdout, stderr = self._run(root, command, "a", yes=yes)
+                        self.assertEqual(status, 1)
+                        self.assertEqual(stdout, "")
+                        self.assertIn("runs/a is a link, not a run; remove the link yourself", stderr)
+                        self.assertTrue(os.path.lexists(link))
+                        self.assertEqual((target / "notes" / "kept.txt").read_text(encoding="utf-8"), "kept")
+                        self.assertTrue((target / "run.yaml").is_file())
+
+    def test_a_dangling_link_is_refused_as_a_link(self) -> None:
+        for command in self.COMMANDS:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "runs").mkdir()
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                gone = root / "gone"
+                gone.mkdir()
+                _link_directory(root / "runs" / "a", gone)
+                gone.rmdir()
+                status, _, stderr = self._run(root, command, "a")
+                self.assertEqual(status, 1)
+                self.assertIn("runs/a is a link, not a run", stderr)
+                self.assertTrue(os.path.lexists(root / "runs" / "a"))
+
+    def test_a_workspace_reached_through_a_linked_parent_still_deletes_its_run(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                real = Path(directory).resolve() / "real"
+                (real / "workspace" / "runs").mkdir(parents=True)
+                (real / "workspace" / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                run_dir = self._make_run(real / "workspace" / "runs" / "plain", state)
+                linked_parent = Path(directory).resolve() / "linked"
+                _link_directory(linked_parent, real)
+                status, stdout, stderr = self._run(linked_parent / "workspace", command, "plain", yes=False)
+                self.assertEqual((status, stderr), (0, ""))
+                result = json.loads(stdout)
+                self.assertEqual((result["actions"][0] if command == "prune" else result)["target"], "runs/plain")
+                self.assertTrue(run_dir.is_dir())
+                status, _, stderr = self._run(linked_parent / "workspace", command, "plain", yes=True)
+                self.assertEqual((status, stderr), (0, ""))
+                self.assertFalse(run_dir.exists())
+                self.assertTrue((real / "workspace" / "runs").is_dir())
+
+    def test_a_name_that_is_not_one_directory_entry_is_refused(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            for run_id in ("../outside", "runs/../../outside", "", ".", "..", "a/b"):
+                with self.subTest(command=command, run_id=run_id), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve() / "workspace"
+                    (root / "runs").mkdir(parents=True)
+                    (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                    outside = self._make_run(root.parent / "outside", state)
+                    self._make_run(root / "runs" / "a" / "b", state)
+                    status, _, stderr = self._run(root, command, run_id)
+                    self.assertEqual(status, 1)
+                    self.assertIn(f"{run_id!r} is not a run directory name", stderr)
+                    self.assertTrue((outside / "run.yaml").is_file())
+                    self.assertTrue((root / "runs" / "a" / "b" / "run.yaml").is_file())
+
+    def test_both_commands_ask_the_one_owner_which_directory_the_id_names(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                run_dir = self._make_run(root / "runs" / "plain", state)
+                with patch("kura.cli.named_run_dir", side_effect=ValueError("the owner refused")) as owner:
+                    status, _, stderr = self._run(root, command, "plain")
+                owner.assert_called_once_with(root, "plain")
+                self.assertEqual(status, 1)
+                self.assertIn("the owner refused", stderr)
+                self.assertTrue(run_dir.is_dir())
+
+    def test_named_run_dir_refuses_an_id_that_is_not_one_entry(self) -> None:
+        # Only the deleting commands refuse here; run_path keeps accepting what it accepted, so a
+        # spelling such as `kura run stop my-run/` still reaches a billing Pod.
+        from kura.workspace import named_run_dir, run_path
+
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            os.chdir(root)
+            try:
+                self.assertEqual(named_run_dir(root, "plain"), root / "runs" / "plain")
+                self.assertEqual(run_path("plain/"), root / "runs" / "plain")
+                for run_id in ("../outside", "", ".", "..", "a/b", str(root / "runs" / "plain")):
+                    with self.subTest(run_id=run_id):
+                        with self.assertRaisesRegex(ValueError, "is not a run directory name"):
+                            named_run_dir(root, run_id)
+            finally:
+                os.chdir(previous)
 
 
 class RunPodLifecycleTests(unittest.TestCase):
@@ -7945,9 +8096,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch(
                          "kura.executors.runpod._runpod_request",
                          side_effect=[
-                             ValueError("no GPU capacity"),
-                             ValueError("no GPU capacity"),
-                             ValueError("no GPU capacity"),
+                             # A capacity refusal as RunPod sends it: a GraphQL `errors` reply, which needs no lookup.
+                             *[RunPodAPIError("RunPod GraphQL failed: no GPU capacity", status_code=400) for _ in range(3)],
                              {"id": "pod-1", "desiredStatus": "RUNNING"},
                          ],
                      ) as request:
@@ -8115,7 +8265,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(realization_id)
             self.assertEqual(probe.call_count, 2)
             self.assertEqual(request.call_count, 2)
-            listed.assert_called_once()
+            listed.assert_not_called()  # a 429 is a refusal: no Pod was made
             sleep.assert_called_once_with(10)
 
     def test_an_unconfirmed_create_is_never_retried_and_is_handed_over(self) -> None:
@@ -8159,6 +8309,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API is unreachable: timed out")) as request,
                     patch("kura.executors.runpod._runpod_pods_named", side_effect=lambda _key, name: [{"id": "pod-late", "name": name, "desiredStatus": "RUNNING"}]),
                     patch("kura.executors.runpod.time.sleep"),
+                    _no_price_lookup(),
                 ):
                     realization_id = launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
@@ -8203,7 +8354,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                 seen.append(any((run_dir / "realizations").glob("*.create-intent.json")))
                 return {"id": "pod-1", "desiredStatus": "RUNNING"}
 
-            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod._runpod_request", side_effect=create):
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod._runpod_request", side_effect=create), \
+                    _no_price_lookup():
                 launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             self.assertEqual(seen, [True])
 
@@ -9755,28 +9907,19 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 1)
 
-    def test_doctor_comfyui_rejects_non_http_endpoint_scheme(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("comfyui: {endpoint: file:///tmp/comfyui.sock}\n", encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch("kura.doctor.urllib.request.urlopen") as urlopen, patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                    code = cmd_doctor_comfyui(argparse.Namespace())
-            finally:
-                os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 1)
-            urlopen.assert_not_called()
-            self.assertIn("unsupported comfyui.endpoint scheme", payload["diagnostics"]["object_info_error"])
-
     def test_doctor_comfyui_refuses_an_endpoint_with_credentials_without_repeating_them(self) -> None:
-        for written, option in (
-            ("comfyui: {endpoint: 'http://user:pa55word@example.invalid:8188?debug=abc123'}\n", None),
-            ("schema_version: 2\n", "http://user:pa55word@example.invalid:8188"),
+        credentials = "must not hold a user name, password, query, or fragment"
+        scheme = "must start with http:// or https:// and name a host"
+        for written, option, message in (
+            ("comfyui: {endpoint: 'http://user:pa55word@example.invalid:8188?debug=abc123'}\n", None, credentials),
+            ("schema_version: 2\n", "http://user:pa55word@example.invalid:8188", credentials),
+            # The owner's scheme rule is the doctor's only scheme check; nothing is printed as a report.
+            ("schema_version: 2\ncomfyui: {endpoint: 'user:pa55word@example.invalid:8188'}\n", None, scheme),
+            ("schema_version: 2\n", "user:pa55word@example.invalid:8188", scheme),
+            ("schema_version: 2\n", "example.invalid:8188", scheme),
+            ("schema_version: 2\n", "file:///tmp/pa55word.sock", scheme),
         ):
-            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(written=written, option=option), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "workspace.yaml").write_text(written, encoding="utf-8")
                 previous = Path.cwd()
@@ -9791,9 +9934,11 @@ class RunPodLifecycleTests(unittest.TestCase):
                 output = stdout.getvalue() + stderr.getvalue()
                 self.assertEqual(code, 1)
                 urlopen.assert_not_called()
-                self.assertIn("must not hold a user name, password, query, or fragment", output)
+                self.assertEqual(stdout.getvalue(), "")  # a refusal, not a report
+                self.assertIn(message, output)
                 self.assertNotIn("pa55word", output)
                 self.assertNotIn("abc123", output)
+                self.assertNotIn("example.invalid", output)
 
     def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
         class FakeResponse:

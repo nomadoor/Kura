@@ -23,11 +23,16 @@ BASELINE_PATH = Path(__file__).with_name("ai_toolkit_baseline.json")
 UI_ARCH_ALIASES = {"sd15": "sd1"}
 
 # Native keys the baseline may fill, by section. Everything else stays either
-# Kura-owned (paths, steps, seed, sampling) or authored.
+# Kura-owned (paths, steps, seed, sampling) or authored. An entry's
+# ``assistant_lora_path`` (its training adapter) sits beside ``name_or_path``,
+# outside these sections: it is a model input that only
+# ``ai_toolkit.ai_toolkit_training_adapter`` decides from.
 BASELINE_KEYS = {
     "train": ("noise_scheduler", "timestep_type", "dtype", "optimizer", "optimizer_params", "lr",
               "content_or_style", "loss_type", "unload_text_encoder", "cache_text_embeddings"),
     "model": ("quantize", "qtype", "quantize_te", "qtype_te", "low_vram", "model_kwargs"),
+    # The LoRA module filter (``ignore_if_contains``): the modules the UI entry leaves out.
+    "network": ("network_kwargs",),
     "dataset": ("cache_latents_to_disk",),
 }
 
@@ -106,6 +111,7 @@ def baseline_facts(model_arch_values: tuple[str, ...]) -> dict[str, Any]:
         by_arch[value] = {
             "entry": name,
             "name_or_path": entry.get("name_or_path"),
+            "assistant_lora_path": entry.get("assistant_lora_path"),
             **{section: dict(entry.get(section) or {}) for section in BASELINE_KEYS},
         }
     return {

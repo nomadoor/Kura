@@ -70,6 +70,11 @@ the wires (`["<node id>", <output>]`) from the sampler.
 - To compare strengths, patch the strength input and put it in `values`:
   `strength: {node: "<lora loader id>", field: inputs.strength_model}`, with
   `"values": {..., "strength": 0.6}`.
+  - A `LoraLoader` has a second strength, `inputs.strength_clip` (the text encoder). When both
+    should change, patch it too under its own key and give both in `values`.
+  - Only a loader that is in the workflow file can be patched. The one a `lora_insert` adds is
+    not there when compile checks the patches, so compile refuses a patch that names it; its
+    strength is `render.lora_strength`, one value for the run.
 
 ## Image inputs
 

@@ -104,6 +104,7 @@ class CapabilitiesShowAdapterFactsTests(unittest.TestCase):
         self.assertEqual(moss["name_or_path"], "OpenMOSS-Team/MOSS-Image-Base")
         self.assertEqual(moss["model"]["model_kwargs"], entry["model"]["model_kwargs"])
         self.assertEqual((moss["train"], moss["model"], moss["dataset"]), (entry["train"], entry["model"], entry["dataset"]))
+        self.assertEqual(moss["network"], {"network_kwargs": {"ignore_if_contains": ["layers.22."]}})
         # The UI entry of another name that the arch selects (sd1 is the UI's sd15).
         self.assertEqual(by_arch["sd1"]["entry"], "sd15")
         # An arch with no entry, and one several entries train, say so instead of inventing values.
@@ -116,6 +117,7 @@ class CapabilitiesShowAdapterFactsTests(unittest.TestCase):
         self.assertIn(baseline["upstream"]["commit"], text)
         self.assertIn("moss_image:base (entry moss_image:base): name_or_path OpenMOSS-Team/MOSS-Image-Base", text)
         self.assertIn("native_config:", text)
+        self.assertIn('network {"network_kwargs":{"ignore_if_contains":["layers.22."]}}', text)
 
     def test_sd_scripts_shows_required_and_optional_roles_of_each_entrypoint(self) -> None:
         facts = backend_capabilities("sd-scripts")["model_facts"]
@@ -353,7 +355,13 @@ class AiToolkitEffectiveSettingsTests(unittest.TestCase):
         self.assertEqual(model["qtype"], {"value": "convrot8", "source": "baseline"})
         self.assertEqual(model["model_kwargs.extra"], {"value": 1, "source": "authored"})
         self.assertEqual(model["model_kwargs.uncond_skip_layers"], {"value": [22], "source": "baseline"})
+        self.assertEqual(settings["network"]["network_kwargs.ignore_if_contains"], {"value": ["layers.22."], "source": "baseline"})
         self.assertNotIn("baseline", display_ai_toolkit(run))
+        run["backend"]["config"]["native_config"]["network"] = {"network_kwargs": {"ignore_if_contains": []}}
+        self.assertEqual(
+            display_ai_toolkit(run)["effective_settings"]["network"]["network_kwargs.ignore_if_contains"],
+            {"value": [], "source": "authored"},
+        )
 
     @posix_only(DATASET_IO)
     def test_displayed_values_are_the_compiled_ones(self) -> None:
@@ -367,7 +375,7 @@ class AiToolkitEffectiveSettingsTests(unittest.TestCase):
             freeze_fixture(run, destination)
             BACKENDS["ai-toolkit"].compile(run, destination)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
-        for section in ("train", "model"):
+        for section in ("train", "model", "network"):
             for key, row in settings[section].items():
                 with self.subTest(section=section, key=key):
                     value: Any = process[section]
@@ -388,6 +396,34 @@ class AiToolkitEffectiveSettingsTests(unittest.TestCase):
         self.assertIn("trainer settings (authored, or the pinned upstream UI baseline", text)
         self.assertIn("train.cache_text_embeddings  true  authored", text)
         self.assertIn("model.qtype  convrot8  baseline", text)
+        self.assertIn('network.network_kwargs.ignore_if_contains  ["layers.22."]  baseline', text)
+        run["backend"]["config"]["native_config"]["network"] = {"network_kwargs": {"ignore_if_contains": ["attn"]}}
+        resources = _resources_payload(run, {}, _plan_requirements(run, {}))
+        self.assertIn('network.network_kwargs.ignore_if_contains  ["attn"]  authored', format_run_plan({"resources": resources}))
+
+    def test_plan_lists_the_training_adapter_as_a_model_input_and_says_who_chose_it(self) -> None:
+        from kura.run_commands.plan import _plan_requirements, _resources_payload  # noqa: PLC0415
+
+        adapter = "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors"
+
+        def plan(**authored: Any) -> str:
+            run = self._run({"model_arch": "minimax_h3_image", **authored})
+            run["model"] = {"base": "Comfy-Org/MiniMax-H3-Image"}
+            return format_run_plan({"resources": _resources_payload(run, {}, _plan_requirements(run, {}))})
+
+        text = plan()
+        self.assertIn("- training_adapter", text)
+        self.assertIn(adapter, text)
+        self.assertIn("selected_by  the pinned upstream UI baseline", text)
+        # The adapter is a model input, shown once: it is not also a trainer-settings row.
+        self.assertNotIn("model.assistant_lora_path", text)
+        text = plan(assistant_lora_path="someone/own/own.safetensors")
+        self.assertIn("selected_by  authored", text)
+        self.assertIn("someone/own/own.safetensors", text)
+        self.assertNotIn(adapter, text)
+        text = plan(assistant_lora_path="none")
+        self.assertNotIn("training_adapter", text)
+        self.assertNotIn("assistant_lora_path", text)
 
     def test_an_arch_with_no_baseline_entry_reports_why(self) -> None:
         settings = display_ai_toolkit(self._run({"model_arch": "sd2"}))["effective_settings"]

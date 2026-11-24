@@ -31,5 +31,5 @@ yes.
 
 | Plan line | What it is |
 |---|---|
-| `checkpoint` `keep_last 0` | the LoRA saves (`save_every_n_steps`); `0` keeps every one |
+| `checkpoint` | the LoRA saves (`save_every_n_steps`) and how many are kept. Its limit is named by backend: `keep_last` (AI-Toolkit; `0` keeps every one), `prune_before_step` (Musubi Tuner), `retention_window_steps` (sd-scripts); with none set, every save is kept |
 | `Training state` `keep` | how many training states are kept to continue the run (`kura run resume`) |

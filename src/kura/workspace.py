@@ -6,7 +6,7 @@ import posixpath
 import re
 import urllib.parse
 from functools import lru_cache
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
@@ -211,9 +211,9 @@ def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str
             raise _workspace_schema_error(source, path, "is empty; delete the line to leave it unset")
         choices = schema.get("choices")
         if value in schema.get("removed", ()):
-            raise ValueError(
-                f"{source} {path} {value!r} was removed; use one of " + ", ".join(repr(choice) for choice in choices)
-                + ", or run `kura workspace migrate`, which drops it."
+            raise _workspace_schema_error(
+                source, path, f"{value!r} was removed; use one of " + ", ".join(repr(choice) for choice in choices)
+                + ", or run `kura workspace migrate`, which drops it",
             )
         if choices and value not in choices:
             raise _workspace_schema_error(source, path, "must be one of " + ", ".join(repr(choice) for choice in choices))
@@ -350,16 +350,27 @@ def plain_relative_folder(value: Any) -> bool:
 def comfyui_endpoint_problem(value: Any, *, where: str) -> str | None:
     """Why a ComfyUI endpoint cannot be used, or None.
 
-    Kura reaches ComfyUI without a user name, password, or query (they cannot reach it through
-    the URL anyway), and keeps the endpoint in run records; the message never repeats the value.
+    Kura reaches ComfyUI over http or https, without a user name, password, or query (they cannot
+    reach it through the URL anyway), and keeps the endpoint in run records; the message never
+    repeats the value. Without a scheme a URL has no host to read, so `user:password@host:8188`
+    would otherwise pass as a scheme and a path. An unset endpoint (not a string, or the empty
+    string a render run may hold) is not judged here.
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or value == "":
         return None
-    if "@" in urllib.parse.urlsplit(value.strip()).netloc or "?" in value or "#" in value:
+    form = f"{where} must start with http:// or https:// and name a host, such as http://127.0.0.1:8188"
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+        hostname = parts.hostname
+    except ValueError:  # a malformed bracketed host such as http://[x
+        return form
+    if "@" in parts.netloc or "?" in value or "#" in value:
         return (
             f"{where} must not hold a user name, password, query, or fragment; write the scheme, host, port, "
             "and an optional path, such as http://127.0.0.1:8188"
         )
+    if parts.scheme not in ("http", "https") or not hostname:
+        return form
     return None
 
 
@@ -397,8 +408,27 @@ def parse_env_file_line(line: str) -> tuple[str, str] | None:
     return key, value
 
 
+def _run_dir_name(run_id: str) -> str:
+    """The one check that a run id is the name of a single entry of `runs/`, read the same way on every OS."""
+    if run_id in {"", ".", ".."} or PurePosixPath(run_id).name != run_id or PureWindowsPath(run_id).name != run_id:
+        raise ValueError(f"{run_id!r} is not a run directory name")
+    return run_id
+
+
 def run_path(run_id: str) -> Path:
     return require_workspace() / "runs" / run_id
+
+
+def named_run_dir(workspace: Path, run_id: str) -> Path:
+    """The directory a run id names for a command that deletes it: the entry `runs/<id>` itself.
+
+    Only the path down to `runs/` is resolved, so a workspace below a linked directory works. An
+    entry that resolves to anything but itself is a symlink or a Windows junction; it is refused,
+    because every check and the deletion would otherwise act on the run it points to."""
+    entry = (workspace / "runs").resolve() / _run_dir_name(run_id)
+    if entry.resolve() != entry:
+        raise ValueError(f"runs/{run_id} is a link, not a run; remove the link yourself")
+    return entry
 
 
 def workspace_relative_path(value: str) -> Path:

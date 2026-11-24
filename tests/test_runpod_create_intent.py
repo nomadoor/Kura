@@ -102,6 +102,18 @@ class CreateIntentRecoveryTests(unittest.TestCase):
             realization = json.loads((run_dir / "realizations" / f"{RID}.json").read_text(encoding="utf-8"))
             self.assertEqual((realization["state"], realization["pod"]), ("queued", None))
 
+    def test_stopping_a_run_in_a_capacity_wait_says_no_pod_exists_and_asks_runpod_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "queued", "host": "runpod", "capacity_wait": {"attempts": 2}}), encoding="utf-8")
+            with patch("kura.executors.runpod._runpod_request") as api, patch("kura.executors.runpod._runpod_pods_named") as listed, \
+                    patch("kura.executors.runpod.runpod_api_key", side_effect=AssertionError("no key is needed to refuse")):
+                with self.assertRaisesRegex(ValueError, "waiting for RunPod capacity, so no Pod exists to delete; the stop stays requested"):
+                    stop_runpod(run_dir)
+            api.assert_not_called()
+            listed.assert_not_called()
+
     def test_a_continued_wait_is_stopped_through_the_runner_without_creating_anything(self) -> None:
         from kura import runner
 
@@ -475,7 +487,8 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-9", "desiredStatus": "RUNNING"}), \
-                    patch("kura.executors.runpod.point_status_at_launch", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod.point_status_at_launch", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"), \
+                    _no_price_lookup():
                 with self.assertRaises(KeyboardInterrupt):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertNotIn("pod_id", _status(run_dir))
@@ -497,7 +510,7 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             })
             runner.claim_request(request, 1)
             with patch("kura.executors.runpod._runpod_pods_named", return_value=[]) as listed, patch("kura.executors.runpod._runpod_request") as request_api:
-                self.assertTrue(runner._stop_runpod_on_request(run_dir, request, runner._read_json(request)))
+                runner._stop_runpod_on_request(run_dir, request)  # raises when the stop could not be carried out
             # Settled from the realization without discovery; the one listing is the stop's lookup by name.
             listed.assert_called_once()
             self.assertEqual([call.args[:2] for call in request_api.call_args_list], [("DELETE", "/pods/pod-1")])
@@ -524,6 +537,35 @@ class UnconfirmedCreateTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "kura run reconcile"):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertEqual(_status(run_dir)["state"], "interrupted")
+
+
+class LaunchChecksPodSettingsTests(unittest.TestCase):
+    def test_a_launch_without_a_gpu_list_is_refused_before_any_create_intent(self) -> None:
+        # Staging does not check the settings a Pod is created from; the launch is the one place that does.
+        from kura.executors.runpod import launch_runpod, launch_runpod_session
+        from kura.run_commands.common import runpod_launch_settings
+
+        workspace_config = {"runpod": {"storage_mode": "upload"}}
+        launches = {
+            "train": lambda run_dir, settings: launch_runpod(
+                run_dir=run_dir, spec={}, image="registry/trainer:tag", config=settings, yes=True, max_lease_sec=3600),
+            "render": lambda run_dir, settings: launch_runpod_session(
+                run_dir=run_dir, image="registry/comfy:tag", config=settings, purpose="comfyui-render", yes=True, max_lease_sec=3600),
+        }
+        for run_type, launch in launches.items():
+            with self.subTest(run_type=run_type), tempfile.TemporaryDirectory() as directory:
+                run_dir = Path(directory) / "runs" / "example"
+                run_dir.mkdir(parents=True)
+                _write_upload_stage(run_dir)
+                run = {"type": run_type, "backend": {"name": "ai-toolkit"}}
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                        patch("kura.executors.runpod._runpod_request") as request_api, _no_price_lookup() as price_lookup:
+                    with self.assertRaisesRegex(ValueError, "runpod requires gpu_type_ids"):
+                        launch(run_dir, runpod_launch_settings(run, workspace_config))
+                request_api.assert_not_called()
+                price_lookup.assert_not_called()
+                self.assertEqual(list(run_dir.rglob("*.create-intent.json")), [])
+                self.assertEqual(_status(run_dir)["state"], "compiled")
 
 
 def setUpModule() -> None:

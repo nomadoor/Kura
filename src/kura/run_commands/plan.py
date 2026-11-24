@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import re
@@ -21,6 +22,7 @@ from kura.yamlio import YAMLError
 from kura.secrets import bearer_request, declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
+    frozen_model_requirements,
     inspect_dataset_sources,
     inspect_dataset_view,
     load_frozen_dataset_projection,
@@ -29,7 +31,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, pod_may_exist, runpod_cost_ceiling, unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, pod_may_exist, run_without_status_problem, runpod_cost_ceiling, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_data_location
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -607,27 +609,45 @@ def own_write_text(bound: dict[str, Any], *, executor: str) -> str:
             f"{parts}{uncounted}")
 
 
-def _plan_requirements(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
-    """The run's model requirements, read once per plan or launch check and passed to every part that shows them."""
-    return model_requirements(run, download_estimate) if _run_adapter(run) is not None else []
+def _plan_requirements(run: dict[str, Any], download_estimate: dict[str, Any], run_dir: Path | None = None) -> list[dict[str, Any]]:
+    """The run's model requirements, read once per plan or launch check and passed to every part that shows them.
+
+    A compiled run (`run_dir` holds its lock) has the inputs compile froze; only the size measured
+    now is added to an input the estimate still measures. A draft is decided from its run.yaml."""
+    current = model_requirements(run, download_estimate) if _run_adapter(run) is not None else []
+    frozen = frozen_model_requirements(run_dir) if run_dir is not None else None
+    if frozen is None:
+        return current
+
+    def same_input(item: dict[str, Any]) -> str:
+        return json.dumps([item.get("role"), item.get("identity")], sort_keys=True, default=str)
+
+    measured = {same_input(item): item["measurement"] for item in current if "measurement" in item}
+    return [{**item, "measurement": measured[same_input(item)]} if same_input(item) in measured else item for item in frozen]
 
 
 def _trainer_downloads(requirements: list[dict[str, Any]], *, executor: str, local_cache: Path) -> str | None:
-    """What a trainer downloads itself (AI-Toolkit resolves `model.base` on its own), which Kura does not
-    size and the estimate does not count; None when the trainer downloads nothing itself."""
+    """What a trainer downloads itself (AI-Toolkit resolves `model.base` and a hub training adapter on its
+    own), which Kura does not size and the estimate does not count; None when the trainer downloads nothing itself."""
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
     if not backend_managed:
         return None
     sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
     # The trainer's MODELS_PATH sits at the same place inside the cache on every executor.
     inside_cache = PurePosixPath(AI_TOOLKIT_MODELS_PATH).relative_to(HF_CACHE_CONTAINER_PATH)
+    places = f"diffusers repositories in hub/, single files in {inside_cache}/"
+    if any(item.get("role") == "training_adapter" for item in backend_managed):
+        # The pinned trainer takes a file of the adapter's name already below loras/, else it downloads
+        # into loras/training_adapters/ (load_training_adapter in each arch, e.g. minimax_h3.py:354-382).
+        places += (f", the training adapter in {inside_cache}/loras/training_adapters/ unless a file of its name "
+                   f"is already below {inside_cache}/loras/")
     if executor == "runpod":
         return (f"the trainer downloads {sources} itself before the first step into the Pod's Hugging Face cache at "
-                f"{HF_CACHE_CONTAINER_PATH} (diffusers repositories in hub/, single files in {inside_cache}/), on every run, "
+                f"{HF_CACHE_CONTAINER_PATH} ({places}), on every run, "
                 "while the Pod bills: each Pod starts with an empty cache; not counted in the container-disk estimate "
                 "(often 10–30 GB), so leave room in runpod.container_disk_gb")
     return (f"the trainer downloads {sources} itself before the first step into the Hugging Face cache at {local_cache} "
-            f"(diffusers repositories in hub/, single files in {inside_cache}/), reusing files an earlier run left there; "
+            f"({places}), reusing files an earlier run left there; "
             "not counted in the disk estimate (often 10–30 GB): the disk watch stops the run before the store falls below the reserve")
 
 
@@ -822,6 +842,7 @@ def collect_run_preflight(
     executor: str | None = None,
     download_estimate: dict[str, Any] | None = None,
     requirements: list[dict[str, Any]] | None = None,
+    run_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     workspace_config = config if isinstance(config, dict) else {}
     resolved_executor = executor or run_executor(run)
@@ -830,7 +851,7 @@ def collect_run_preflight(
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(
-        run, estimate, _plan_requirements(run, estimate) if requirements is None else requirements,
+        run, estimate, _plan_requirements(run, estimate, run_dir) if requirements is None else requirements,
         executor=str(resolved_executor), local_cache=local_hf_cache(workspace, workspace_config),
     ))
     records.extend(_disk_cache_preflight_report(run))
@@ -1360,7 +1381,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace), config=workspace_config)
     display_path = run_dir / "resolved" / "backend-display.lock.json"
     frozen_display = _load_yaml(display_path) if display_path.is_file() else None
-    requirements = _plan_requirements(run, download_estimate)
+    requirements = _plan_requirements(run, download_estimate, run_dir if source == manifest else None)
     resources = _resources_payload(run, workspace_config, requirements, adapter_display=frozen_display)
     preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate, requirements=requirements)
     if run_executor(run) == "docker":
@@ -1736,6 +1757,10 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 lines.append(f"      - {_format_plan_value(role)}")
                 _append_kv(lines, "acquisition", acquisition, indent=8)
                 _append_kv(lines, "source", source, indent=8)
+                selected_by = item.get("selected_by")
+                if selected_by is not None:
+                    # Who chose this input: the run, or the pinned upstream UI baseline as its default.
+                    _append_kv(lines, "selected_by", "the pinned upstream UI baseline" if selected_by == "baseline" else selected_by, indent=8)
                 measurement = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
                 if measurement:
                     _append_kv(lines, "measured_at", measurement.get("scope"), indent=8)
@@ -1762,7 +1787,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 _append_kv(lines, "error", settings["error"], indent=4)
             else:
                 _append_kv(lines, "baseline", f"entry {_format_plan_value(settings.get('entry'))}, commit {_format_plan_value(settings.get('commit'))}", indent=4)
-                for section in ("train", "model"):
+                for section in ("train", "model", "network"):
                     rows = settings.get(section) if isinstance(settings.get(section), dict) else {}
                     for key, row in rows.items():
                         if isinstance(row, dict):
@@ -1869,8 +1894,6 @@ def max_lease_seconds(value: Any) -> int:
 
 def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
     """Hand the stop to the runner's follower when one will see it; None when the CLI should act."""
-    import time
-
     from kura import runner
 
     workspace = run_dir.parent.parent
@@ -1883,6 +1906,17 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
             # the runner that later settles what the CLI cannot reach: a launch not recorded yet, a render cut short.
             runner.write_stop_request(run_dir)
         return None
+    return _wait_for_follower_to_stop(run_dir, timeout_sec=timeout_sec)
+
+
+def _wait_for_follower_to_stop(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
+    """Write the stop request and wait for the follower to carry it out. None when no follower will:
+    the run has no launch request to write one beside, or whoever held the run left without stopping
+    it and no runner is alive (it was another `kura run stop` that failed), so the caller acts."""
+    import time
+
+    from kura import runner
+
     path = runner.write_stop_request(run_dir)
     if path is None:
         return None
@@ -1893,6 +1927,8 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
         if runner.stop_done(run_dir) or (request is not None and runner.request_outcome(request) is not None):
             print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
             return 0
+        if not runner.follower_present(run_dir.parent.parent, run_dir):
+            return None
         time.sleep(1)
     print(f"the stop request stays in effect and the follower carries it out when it next checks; "
           f"confirm with `kura run status {run_dir.name}`", file=sys.stderr)
@@ -1919,8 +1955,18 @@ def _uncollected_pod_work(run_dir: Path) -> str | None:
 
 
 def stop_run(run_id: str, *, yes: bool = False) -> int:
+    """Stop a run. One actor carries a stop out: the run's follower, or this command while it holds
+    the run's controller lock, the lock a follower holds for life. A follower that starts while the
+    command acts finds the lock held and leaves (`runner.work`), so nothing reconciles a container
+    or a Pod in the middle of being stopped and records the stop as a failure or a vanished Pod."""
+    from kura import runner
+    from kura.executors.common import _OperationBusy, _run_operation_lock
+
+    run_dir: Path | None = None
     try:
         run_dir = _run_path(run_id)
+        if not run_dir.is_dir():
+            raise ValueError(run_without_status_problem(run_dir))
         # Deleting a Pod before collection loses its work for good, so that stop is confirmed first.
         if not yes and (at_risk := _uncollected_pod_work(run_dir)) is not None:
             print(f"cannot stop run without confirmation: stopping deletes the Pod, and {at_risk}. "
@@ -1929,23 +1975,42 @@ def stop_run(run_id: str, *, yes: bool = False) -> int:
         handed_over = _stop_through_runner(run_dir)
         if handed_over is not None:
             return handed_over
-        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        if unresolved_create_intents(run_dir):
-            raise ValueError(
-                f"a launch of this run stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` "
-                "first, which finds it by name so this command can stop it"
-            )
-        realization_ref = status.get("last_realization")
-        if not isinstance(realization_ref, str):
-            raise ValueError("run has no launch recorded to stop; if a runner was following it, `kura runner start` records the stop "
-                             "(a launch that never began as not launched, a local render cut short as interrupted)")
-        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-        if realization.get("executor") == "runpod":
-            print(json.dumps(stop_runpod(run_dir), indent=2))
-        else:
-            print(json.dumps(stop_docker(run_dir), indent=2))
+        with contextlib.ExitStack() as held:
+            try:
+                held.enter_context(_run_operation_lock(run_dir, "controller", blocking=False))
+            except _OperationBusy:
+                # A follower took the run after the check above, so it is there after all and carries the stop out.
+                handed_over = _wait_for_follower_to_stop(run_dir)
+                if handed_over is not None:
+                    return handed_over
+                # Nobody will: take the run now, or say who holds it (`_OperationBusy` is a ValueError).
+                held.enter_context(_run_operation_lock(run_dir, "controller", blocking=False))
+            if (problem := run_without_status_problem(run_dir)) is not None:
+                # Stopping reads status; the message names the Pods to delete by hand, and nothing is deleted here.
+                raise ValueError(problem)
+            if runner.stop_done(run_dir):
+                # A follower held the run before this command did and carried the stop out.
+                print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
+                return 0
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            if unresolved_create_intents(run_dir):
+                raise ValueError(
+                    f"a launch of this run stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` "
+                    "first, which finds it by name so this command can stop it"
+                )
+            realization_ref = status.get("last_realization")
+            if not isinstance(realization_ref, str):
+                raise ValueError("run has no launch recorded to stop; if a runner was following it, `kura runner start` records the stop "
+                                 "(a launch that never began as not launched, a local render cut short as interrupted)")
+            realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+            if realization.get("executor") == "runpod":
+                print(json.dumps(stop_runpod(run_dir), indent=2))
+            else:
+                print(json.dumps(stop_docker(run_dir), indent=2))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"cannot stop run: {_safe_error(exc)}", file=sys.stderr)
+        if run_dir is not None and runner.stop_waiting(run_dir):
+            print("The stop stays requested; `kura runner start` carries it out.", file=sys.stderr)
         return 1
     return 0
 

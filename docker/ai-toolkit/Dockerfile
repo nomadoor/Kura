@@ -1,9 +1,9 @@
-ARG AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.32@sha256:7575870019739440bf5a215918d5c128abf80719570637b33e6b06b7830494e0
+ARG AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.43@sha256:ba3327cebd5aa9ad3f539c52a1c4fa30831d3365d12844deda9c9a14f61411c6
 FROM ${AI_TOOLKIT_IMAGE}
 
 ARG AI_TOOLKIT_IMAGE
 ARG AI_TOOLKIT_H3_GRADIENT_PATCH_COMMIT=d1985f9bf380b6ce1c409b7875e2d367df486e19
-ARG AI_TOOLKIT_H3_GRADIENT_PATCH_SHA256=3aecfda6af403496d0858bccf26a6d1e9764b2244ae3a526113827fe2591ddf6
+ARG AI_TOOLKIT_H3_GRADIENT_PATCH_SHA256=53cd5a648e9cdcf1dd970a5b0798774e1ca9d0a9ae3a58114623fb2a39e5aaa2
 ARG AI_TOOLKIT_H3_GRADIENT_PATCH_ADJUSTMENT=checkpoint-static-nonfinite-masking-v1
 
 # Kura's image intentionally extends the official Ostris AI Toolkit RunPod image
@@ -37,18 +37,24 @@ RUN echo "${AI_TOOLKIT_H3_GRADIENT_PATCH_SHA256}  /tmp/minimax_h3_finite_gradien
         > /opt/kura-ai-toolkit-source-patch.json \
     && rm /tmp/minimax_h3_finite_gradients.patch
 
-# Upstream BaseSDTrainProcess.py (9d408eb, lines 2554 and 2706-2716) decides, names, and
+# Upstream BaseSDTrainProcess.py (bdd5560, lines 2570 and 2722-2732) decides, names, and
 # records a step save by the 0-based iteration index, so `_N` holds N+1 optimizer updates;
 # 0001 decides, names, and records it by the updates it holds, which Kura's AI-Toolkit state
-# runner and plan read. See the patch header.
+# runner and plan read. 0002 stops on an out-of-memory error in a training step, where upstream
+# discards the batch and keeps going while the loop step still advances (lines 2637-2663). See
+# each patch header.
 COPY docker/ai-toolkit/patches/0001-save-by-completed-updates.patch /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch
+COPY docker/ai-toolkit/patches/0002-fail-on-training-step-oom.patch /tmp/kura-ai-toolkit-patches/0002-fail-on-training-step-oom.patch
 
 RUN cd /app/ai-toolkit \
     && git apply --check /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch \
     && git apply /tmp/kura-ai-toolkit-patches/0001-save-by-completed-updates.patch \
+    && git apply --check /tmp/kura-ai-toolkit-patches/0002-fail-on-training-step-oom.patch \
+    && git apply /tmp/kura-ai-toolkit-patches/0002-fail-on-training-step-oom.patch \
     && rm -r /tmp/kura-ai-toolkit-patches
 
 LABEL io.kura.patch.save-step="completed-updates-v1"
+LABEL io.kura.patch.training-step-oom="fail-v1"
 
 # The base image still trusts the eMudhra intermediate CAs whose keys were compromised on
 # 2026-10-19. Raise every trust store in the image to the first release that drops them; the

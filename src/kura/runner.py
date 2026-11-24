@@ -294,7 +294,7 @@ def write_launch_request(run_dir: Path, *, executor: str, image: str | None = No
     """Write a launch request after the approval the run needs; at most one is pending.
 
     `confirmed_at` is when the launch's confirmation (`confirm_launch`) was taken: every
-    training launch, locally and on RunPod, and a RunPod render. A pending request written by
+    training launch and every render, locally and on RunPod. A pending request written by
     another Kura version is replaced, after saying so.
     """
     with file_lock(run_dir / ".locks" / "launch-request.lock", blocking=False):
@@ -397,6 +397,12 @@ def cancel_pending(workspace: Path, run_dir: Path) -> bool:
 def stop_done(run_dir: Path) -> bool:
     request = latest_request(run_dir)
     return request is not None and _sibling(request, ".stop-done.json").exists()
+
+
+def stop_waiting(run_dir: Path) -> bool:
+    """Whether a stop request for the run's latest launch is on disk and no follower has carried it out."""
+    request = latest_request(run_dir)
+    return request is not None and _stop_waiting(request)
 
 
 def follower_present(workspace: Path, run_dir: Path) -> bool:
@@ -733,7 +739,7 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
     unmeasured_said: set[str] = set()
     docker_data: dict[str, Path | None] = {}
     while True:
-        if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
+        if _stop_waiting(request):
             _carry_out_stop(run_dir, request)
         try:
             # Automatic observations are recorded only when the container's state changes.
@@ -917,7 +923,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
 
 def _acknowledge_stop(run_dir: Path, request: Path) -> None:
     """A render that has ended carried out any stop asked of it; `kura run stop` waits for this record."""
-    if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
+    if _stop_waiting(request):
         _record_request_outcome(request, ".stop-done.json", "stop_done")
         _log(f"{run_dir.name}: render stopped on request")
 
@@ -940,61 +946,85 @@ def _delete_pod(run_dir: Path, *, why: str) -> bool:
 
     False when RunPod could not be asked; the next follower tries again.
     """
-    from kura.executors.runpod import pods_left, stop_runpod
-
     try:
-        _settle_unconfirmed_creates(run_dir)
-        status = _status(run_dir)
-        if pods_left(run_dir, status):
-            stop_runpod(run_dir)
-            _log(f"{run_dir.name}: deleted the Pod ({why})")
+        _delete_pods_left(run_dir, why=why)
     except (OSError, ValueError) as exc:
         _log(f"{run_dir.name}: could not delete the Pod ({exc}); the next follower tries again")
         return False
     return True
 
 
+def _delete_pods_left(run_dir: Path, *, why: str) -> None:
+    """Settle unconfirmed creates, then delete every Pod the run still has; raises when RunPod could
+    not be asked, so nothing counts as deleted while a create is unconfirmed or a delete failed."""
+    from kura.executors.runpod import pods_left, stop_runpod
+
+    _settle_unconfirmed_creates(run_dir)
+    if pods_left(run_dir, _status(run_dir)):
+        stop_runpod(run_dir)
+        _log(f"{run_dir.name}: deleted the Pod ({why})")
+
+
 def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
-    """Launch or continue a confirmed RunPod launch; billing was confirmed by the writer."""
-    from kura.executors.common import StopRequested, set_stop_check
+    """Launch or continue a confirmed RunPod launch; billing was confirmed by the writer.
+
+    One attempt runs in one order: settle unconfirmed creates, carry out a stop request that is
+    waiting, then launch or continue (`_continue_runpod` looks at the Pod once before it follows).
+    The stop comes before any look at the Pod, so a Pod the stop itself deleted is never recorded as
+    one that vanished. Every step, the stop included, runs inside the one `try` that owns the
+    refused-key notice, and a step that fails ends the attempt: a stop is carried out only by an
+    attempt whose earlier steps succeeded, so never while a create is unconfirmed."""
+    from kura.executors.common import StopRequested, set_stop_check, unresolved_create_intents
 
     details = _read_json(request)
     if not request_confirmed_at(details):
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", error="the request carries no billing confirmation; nothing was created")
         return 0
     set_stop_check(lambda: _sibling(request, ".stop.json").exists())
+    launched = stopped_a_step = False
+    code: int | None = None
     try:
-        _settle_unconfirmed_creates(run_dir)
-        realization = _launched_realization(run_dir, request, _status(run_dir))
-        launched = realization is not None
         try:
+            _settle_unconfirmed_creates(run_dir)
+            realization = _launched_realization(run_dir, request, _status(run_dir))
+            launched = realization is not None
             if realization is None:
                 if _sibling(request, ".stop.json").exists():
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
                     _end_unlaunched_wait(run_dir, "interrupted", "stopped by `kura run stop` while it waited for capacity; no Pod was created")
                     return 0
                 # No Pod exists for this request (none recorded yet, or its capacity wait goes on), so the confirmed launch continues (run-records ADR).
-                code: int | None = _remote(run_dir, request, details, reattach=False)
-            else:
+                code = _remote(run_dir, request, details, reattach=False)
+            elif not _stop_waiting(request):
                 code = _continue_runpod(run_dir, request, details, realization)
-        except (OSError, ValueError) as exc:
-            _log(f"{run_dir.name}: {exc}")
-            code = 1
-            if launched:
-                from kura.executors.runpod import runpod_key_refused
+        except StopRequested:
+            stopped_a_step = True
+        if stopped_a_step or _stop_waiting(request):
+            # A stop asked before this attempt, or one that ended a step inside the launch (a wait, a hold).
+            _stop_runpod_on_request(run_dir, request)
+            return 0
+    except (OSError, ValueError) as exc:
+        _log(f"{run_dir.name}: {exc}")
+        code = 1
+        from kura.executors.runpod import runpod_key_refused
 
-                if runpod_key_refused(exc):
-                    # Retried uncounted; this one notice names the cause, not a failed collection.
-                    code = _key_refused(run_dir, request, details)
-        if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
-            # A stop that ended a step inside the launch (a wait, a hold) is finished here.
-            # A delete that failed is retried after the runner's backoff, not every poll.
-            return 0 if _stop_runpod_on_request(run_dir, request, details) else 1
-        return _settle_runpod_attempt(run_dir, request, details, code)
-    except StopRequested:
-        return 0 if _stop_runpod_on_request(run_dir, request, details) else 1
+        # A Pod may exist (one is recorded, or a create is unconfirmed) and the runner cannot ask about it.
+        if (launched or unresolved_create_intents(run_dir, "runpod")) and runpod_key_refused(exc):
+            # Retried uncounted; this one notice names the cause, not a failed collection. An
+            # unconfirmed create keeps its failure code, which waits for the lookup by name.
+            _key_refused(run_dir, request, details)
+            code = None if launched else 1
+        if stopped_a_step or _stop_waiting(request):
+            # The stop is tried again by the next attempt, after the runner's backoff, not every poll.
+            return 1
     finally:
         set_stop_check(None)
+    return _settle_runpod_attempt(run_dir, request, details, code)
+
+
+def _stop_waiting(request: Path) -> bool:
+    """A stop request for this launch that no follower has carried out yet."""
+    return _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists()
 
 
 def _launched_realization(run_dir: Path, request: Path, status: dict[str, Any]) -> dict[str, Any] | None:
@@ -1025,11 +1055,9 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
 
 def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int | None:
     """Pick up a launch an earlier follower started, from its records."""
-    from kura.executors.common import remote_job_started
+    from kura.executors.common import end_run, remote_job_started
+    from kura.executors.runpod import pod_may_exist, reconcile_runpod
     from kura.run_commands.runpod_ssh import remote_job_pid
-
-    from kura.executors.common import end_run
-    from kura.executors.runpod import pod_may_exist
 
     status = _status(run_dir)
     realization_id = str(realization.get("id"))
@@ -1039,18 +1067,17 @@ def _continue_runpod(run_dir: Path, request: Path, details: dict[str, Any], real
         # The Pod is gone or was never created; nothing is left to follow.
         end_run(run_dir, "interrupted", reason="the follower found the Pod gone or never created")
         return 0
+    # What to do with the Pod is decided here, once, before anything asks the Pod itself: a Pod
+    # RunPod reports gone is recorded, so it is not followed, asked for its job, or retried, and one
+    # RunPod no longer runs ends the run as recorded.
+    current = reconcile_runpod(run_dir, source="explicit")
+    if current.get("pod_missing_at"):
+        status = end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
+        _notify_finished(run_dir, request, status, detail="Its Pod no longer exists; outputs not collected before it went are gone.")
+        return 0
+    if run_finished(current):
+        return _delete_finished_runs_pod(run_dir, request, details, current)
     if remote_job_started(run_dir, realization_id):
-        from kura.executors.runpod import reconcile_runpod
-
-        # Whether to follow is decided here, once: a Pod RunPod reports gone is recorded, so it is
-        # not followed or retried, and one RunPod no longer runs ends the run as recorded.
-        current = reconcile_runpod(run_dir, source="explicit")
-        if current.get("pod_missing_at"):
-            status = end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
-            _notify_finished(run_dir, request, status, detail="Its Pod no longer exists; outputs not collected before it went are gone.")
-            return 0
-        if run_finished(current):
-            return _delete_finished_runs_pod(run_dir, request, details, current)
         return _remote(run_dir, request, details, reattach=True)
     intent = _read_json(run_dir / "realizations" / f"{realization_id}.remote-job-intent.json")
     if intent:
@@ -1186,14 +1213,13 @@ def _end_unlaunched_wait(run_dir: Path, state: str, reason: str) -> None:
         end_run(run_dir, state, reason=reason)
 
 
-def _stop_runpod_on_request(run_dir: Path, request: Path, details: dict[str, Any]) -> bool:
-    """Delete the Pod a `kura run stop` asked for; False when the delete failed and is retried."""
-    if not _delete_pod(run_dir, why="`kura run stop`"):
-        return False
+def _stop_runpod_on_request(run_dir: Path, request: Path) -> None:
+    """Delete the Pods a `kura run stop` asked for and record the stop as carried out; raises when a
+    delete or a lookup failed, so the attempt's one failure handler sees it and the stop is retried."""
+    _delete_pods_left(run_dir, why="`kura run stop`")
     _record_request_outcome(request, ".stop-done.json", "stop_done")
     _log(f"{run_dir.name}: stopped on request")
     _notify_if_pod_run_finished(run_dir, request, _status(run_dir))
-    return True
 
 
 def _notify_if_pod_run_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> None:

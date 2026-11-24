@@ -1,0 +1,28 @@
+schema_version: 1
+backend: ai-toolkit
+observed_at: 2026-11-20
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:5f76b6efe478095b35f692650d5695419226b58834c397eab323e88b6bbd65a0
+  base_image: ostris/aitoolkit:0.13.43@sha256:ba3327cebd5aa9ad3f539c52a1c4fa30831d3365d12844deda9c9a14f61411c6
+  embedded_commit: bdd55603e05a7a59e8112c0a0623798754ce9b69
+  finite_gradient_patch_commit: d1985f9bf380b6ce1c409b7875e2d367df486e19
+  finite_gradient_patch_sha256: 53cd5a648e9cdcf1dd970a5b0798774e1ca9d0a9ae3a58114623fb2a39e5aaa2
+  packages: {torch: 2.13.0+cu130, torchvision: 0.28.0+cu130, diffusers: 0.39.0.dev0, transformers: 5.5.3, accelerate: 1.15.0}
+probe:
+  kind: registered-diffusion-class-imports
+  command: python -c "from toolkit.util import get_model as g; g.get_all_models()" (docker run --gpus all --network none), with the arch set as the union of LEGACY_ARCHS and each class's arch
+  selectors: [minimax_h3, minimax_h3_ref2va, minimax_h3_vsa, minimax_h3_image, minimax_h3_omni, p_h3_image, fibo2, qwen38]
+observed:
+  registered_archs: 65
+  imported_model_classes: 54
+  failed_extension_imports: 0
+  selected_imported: 8
+  expected: 8
+  arch_set_difference_from_kura: none (Kura's AI_TOOLKIT_PINNED_MODEL_ARCHS equals the image's set)
+scope: >-
+  Proves that the immutable patched 0.13.43 image contains and imports every registered
+  implementation; the registered arch set and the class count are those of the 0.13.42 image
+  (2026-11-14-ai-toolkit-0.13.42-class-import.yaml), as the source delta 4a7f285..bdd5560 leaves
+  extensions_built_in/ and extensions/ unchanged. The packages match the 0.13.42 image's
+  /opt/kura-runtime.json exactly. It is not compile, launch, or optimizer-step evidence for any
+  training mode.

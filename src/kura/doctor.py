@@ -10,7 +10,6 @@ import platform
 import shutil
 import subprocess
 import sys
-import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -792,7 +791,6 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     if problem := comfyui_endpoint_problem(endpoint, where="--endpoint"):
         print(f"comfyui: configuration error: {problem}", file=sys.stderr)
         return 1
-    parsed_endpoint = urllib.parse.urlparse(endpoint)
     lora_dir = _workspace_relative_path(str(comfyui["lora_dir"])) if isinstance(comfyui.get("lora_dir"), str) and comfyui.get("lora_dir") else None
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
     stage_dir = lora_dir / stage_subdir if lora_dir is not None and stage_subdir else None
@@ -829,11 +827,6 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     diagnostics["kura_stage_file_count"] = len(stage_files)
     if stage_files:
         diagnostics["kura_stage_file_samples"] = stage_files[:10]
-    if parsed_endpoint.scheme not in ("http", "https"):
-        diagnostics["object_info_error"] = f"unsupported comfyui.endpoint scheme: {parsed_endpoint.scheme or '(none)'}"
-        diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
-        _print_report(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}))
-        return 1
     object_info: dict[str, Any] | None = None
     try:
         object_info = _fetch_comfyui_object_info(endpoint)
