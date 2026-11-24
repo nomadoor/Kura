@@ -2,6 +2,7 @@ schema_version: 1
 kind: conformance
 observed_at: '2026-11-24'
 executor: docker and runpod
+kura_commit: dc87f56 (43dbb54 changed only a test during the runs; the adapter source is the same)
 command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --backend ai-toolkit --yes; then the same with --runpod; then --runpod --run multi-accum-2 again
 hardware:
   local_gpu: NVIDIA GeForce RTX 4090 (24564 MiB)
