@@ -6,7 +6,7 @@ import posixpath
 import re
 import urllib.parse
 from functools import lru_cache
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from kura.yamlio import YAMLError, load_yaml, load_yaml_mapping
@@ -408,8 +408,27 @@ def parse_env_file_line(line: str) -> tuple[str, str] | None:
     return key, value
 
 
+def _run_dir_name(run_id: str) -> str:
+    """The one check that a run id is the name of a single entry of `runs/`, read the same way on every OS."""
+    if run_id in {"", ".", ".."} or PurePosixPath(run_id).name != run_id or PureWindowsPath(run_id).name != run_id:
+        raise ValueError(f"{run_id!r} is not a run directory name")
+    return run_id
+
+
 def run_path(run_id: str) -> Path:
     return require_workspace() / "runs" / run_id
+
+
+def named_run_dir(workspace: Path, run_id: str) -> Path:
+    """The directory a run id names for a command that deletes it: the entry `runs/<id>` itself.
+
+    Only the path down to `runs/` is resolved, so a workspace below a linked directory works. An
+    entry that resolves to anything but itself is a symlink or a Windows junction; it is refused,
+    because every check and the deletion would otherwise act on the run it points to."""
+    entry = (workspace / "runs").resolve() / _run_dir_name(run_id)
+    if entry.resolve() != entry:
+        raise ValueError(f"runs/{run_id} is a link, not a run; remove the link yourself")
+    return entry
 
 
 def workspace_relative_path(value: str) -> Path:
