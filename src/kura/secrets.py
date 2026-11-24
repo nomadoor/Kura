@@ -13,6 +13,7 @@ import argparse
 import getpass
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -161,25 +162,45 @@ def holds_secret(name: str, value: str) -> bool:
 
 
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The option that hands a shell its command as one string: `bash -c`, `sh -lc`.
+_SHELL_COMMAND_OPTION = re.compile(r"-[A-Za-z]*c")
+
+
+def _shell_words(text: str) -> list[str]:
+    """The words a shell reads from a command string, split at `;`, `&&`, and `|` as well as at
+    spaces, or its whitespace-separated parts when the quoting cannot be read."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        return text.split()
 
 
 def secret_flags(arguments: list[str]) -> list[str]:
     """The names of the arguments that hold a secret: `--flag value`, `--flag=value`,
-    `--flag value` written as one item, and `NAME=value` (as `env` takes it). Never a value.
+    `--flag value` written as one item, and `NAME=value` (as `env` takes it), with one leading
+    dash or two. Never a value, and each name once.
 
+    An argument is one value, spaces included. Only the command string a shell is given
+    (`bash -c "..."`) is read as its words, by the same rule, so a shell inside it is too.
     A bare flag, or a short value such as sd-scripts' `--max_token_length 225`, is a setting.
     """
     found = []
     for index, argument in enumerate(arguments):
-        if argument.startswith("--"):
-            name, equals, value = argument[2:].partition("=")
+        if index and _SHELL_COMMAND_OPTION.fullmatch(arguments[index - 1]):
+            found.extend(secret_flags(_shell_words(argument)))
+        if argument.startswith("-"):
+            dashes = argument[:len(argument) - len(argument.lstrip("-"))]
+            name, equals, value = argument[len(dashes):].partition("=")
             if not equals:
                 name, _, value = re.sub(r"\s", " ", name).partition(" ")
             if not equals and not value:
                 following = arguments[index + 1] if index + 1 < len(arguments) else ""
+                # Only `--` marks the next argument as a flag: a secret may itself begin with a dash.
                 value = "" if following.startswith("--") else following
             # The label is only the name's leading word characters, so no input puts a value in it.
-            label = "--" + re.match(r"[A-Za-z0-9_-]*", name).group()
+            label = dashes + re.match(r"[A-Za-z0-9_-]*", name).group()
         elif _ASSIGNMENT.match(argument):
             name, _, value = argument.partition("=")
             label = name
@@ -187,6 +208,24 @@ def secret_flags(arguments: list[str]) -> list[str]:
             continue
         if holds_secret(name, value.strip()):
             found.append(label)
+    return list(dict.fromkeys(found))
+
+
+def secret_keys(config: Any, path: str = "") -> list[str]:
+    """The paths of the keys in an authored mapping, at any depth and through lists, whose text
+    value is a secret (`holds_secret`). Never a value."""
+    found = []
+    if isinstance(config, dict):
+        for key, value in config.items():
+            below = f"{path}.{key}" if path else str(key)
+            if isinstance(value, str):
+                if holds_secret(str(key), value.strip()):
+                    found.append(below)
+            else:
+                found.extend(secret_keys(value, below))
+    elif isinstance(config, list):
+        for index, value in enumerate(config):
+            found.extend(secret_keys(value, f"{path}[{index}]"))
     return found
 
 

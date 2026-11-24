@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import unittest
 
+# Built at runtime so this file itself does not trip the repository secret scan.
+VALUE = "Kq7" + "zz81" * 4
+
 SECRET_NAMES = ("HF_TOKEN", "MY_SECRET", "DB_PASSWORD", "OPENAI_API_KEY", "AWS_ACCESS_KEY_ID", "SSH_PRIVATE_KEY", "apiKey")
 
 
@@ -93,12 +96,26 @@ class SecretNameParityTests(unittest.TestCase):
             self.assertIn(undeclared_secret_refusal("x", ["WANDB_API_KEY"]).split(": ", 1)[1], refusal)
 
 
+def _with_native_config(native_config: dict) -> dict:
+    return {"id": "native", "type": "train", "model": {"base": "owner/model"}, "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd1", "native_config": native_config}}}
+
+
 def _with_extra_args(backend: str, extra_args: list[str]) -> dict:
     config = {"musubi-tuner": {"architecture": "wan"}, "sd-scripts": {"architecture": "sdxl", "mode": "lora"}}[backend]
     return {"id": "native", "type": "train", "backend": {"name": backend, "config": {**config, "extra_args": extra_args}}}
 
 
 class SecretFlagTests(unittest.TestCase):
+    def assert_no_secret_found(self, run: dict) -> None:
+        """These short runs lack values a compile requires; what matters is that the refusal,
+        when there is one, is not the secret one, which comes before those."""
+        from kura.backends.registry import validate_backend_config
+
+        try:
+            validate_backend_config(run)
+        except ValueError as refusal:
+            self.assertNotIn("secret", str(refusal))
+
     def test_a_secret_flag_with_a_secret_value_is_refused_in_extra_args_on_every_backend(self) -> None:
         from kura.backends.registry import validate_backend_config
 
@@ -132,10 +149,132 @@ class SecretFlagTests(unittest.TestCase):
         self.assertEqual(secret_flags(["env", "WANDB_API_KEY=0123456789abcdef", "python"]), ["WANDB_API_KEY"])
         self.assertEqual(secret_flags(["env", "TOKENIZERS_PARALLELISM=false", "MAX_TOKEN_LENGTH=225"]), [])
 
+    def test_a_secret_inside_a_shell_string_or_after_a_single_dash_flag_is_found(self) -> None:
+        from kura.secrets import secret_flags
+
+        self.assertEqual(secret_flags(["bash", "-c", f"python train.py --seed 1 --wandb_api_key {VALUE}"]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["bash", "-c", f"WANDB_API_KEY='{VALUE}' python train.py"]), ["WANDB_API_KEY"])
+        # Shell quoting around the value does not hide it, in a shell string or in one item.
+        self.assertEqual(secret_flags(["sh", "-c", f'python train.py --wandb_api_key="{VALUE}"']), ["--wandb_api_key"])
+        self.assertEqual(secret_flags([f"--wandb_api_key '{VALUE}'"]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["--wandb_api_key", VALUE, "--wandb_api_key", VALUE]), ["--wandb_api_key"])
+        # A string the shell rules cannot read (an unclosed quote) is split at whitespace.
+        self.assertEqual(secret_flags(["bash", "-c", f"echo it's --wandb_api_key {VALUE}"]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["-wandb_api_key", VALUE]), ["-wandb_api_key"])
+        self.assertEqual(secret_flags([f"-api_key={VALUE}"]), ["-api_key"])
+        # A value that begins with a dash is still a value; a `--` flag after a flag never is.
+        self.assertEqual(secret_flags(["--wandb_api_key", "-" + VALUE]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["-use_auth_token", "--other_long_flag", "--no_token_padding", "--another_long_flag"]), [])
+        self.assertEqual(secret_flags(["bash", "-c", "python train.py --max_token_length 225 -x 12345678", "", "-1"]), [])
+
+    def test_an_argv_item_is_one_value_with_its_spaces(self) -> None:
+        from kura.secrets import secret_flags
+
+        spaced = "Bearer " + VALUE[:6]
+        # Each word alone is too short to be a secret; the item is the value.
+        self.assertEqual(secret_flags(["--auth_token", spaced]), ["--auth_token"])
+        self.assertEqual(secret_flags([f"--auth_token={spaced}"]), ["--auth_token"])
+        self.assertEqual(secret_flags([f"--auth_token {spaced}"]), ["--auth_token"])
+        self.assertEqual(secret_flags(["env", f"AUTH_TOKEN={spaced}", "python"]), ["AUTH_TOKEN"])
+        self.assertEqual(secret_flags(["bash", "-c", f"python train.py --auth_token '{spaced}'"]), ["--auth_token"])
+        # Only the string a shell is given (`-c`) is read as shell text: a value with spaces is not
+        # searched for flags.
+        self.assertEqual(secret_flags(["--prompt", "a -token-based illustration"]), [])
+        self.assertEqual(secret_flags(["bash", "-c", "python gen.py --prompt 'a -token-based illustration'"]), [])
+
+    def test_a_shell_string_is_read_at_any_depth_and_across_separators(self) -> None:
+        from kura.secrets import secret_flags
+
+        self.assertEqual(secret_flags(["bash", "-c", f"sh -c 'python train.py --wandb_api_key {VALUE}'"]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["bash", "-lc", f"cd /workspace;WANDB_API_KEY={VALUE} python train.py"]), ["WANDB_API_KEY"])
+        self.assertEqual(secret_flags(["bash", "-c", f"cd /workspace&&python train.py --wandb_api_key {VALUE}|tee log"]), ["--wandb_api_key"])
+        self.assertEqual(secret_flags(["bash", "-c", "cd /workspace;TOKENIZERS_PARALLELISM=false python train.py --max_token_length 225"]), [])
+
+    def test_a_secret_in_a_shell_string_or_after_a_single_dash_flag_is_refused_on_every_backend(self) -> None:
+        from kura.backends.registry import validate_backend_config
+
+        forms = (["bash", "-c", f"python train.py --wandb_api_key {VALUE}"], ["python", "train.py", f'--wandb_api_key="{VALUE}"'], ["python", "train.py", "-wandb_api_key", VALUE])
+        for backend in ("ai-toolkit", "musubi-tuner", "sd-scripts"):
+            for argv in forms:
+                run = _explicit(backend, {})
+                run["backend"]["config"]["command"]["argv"] = argv
+                with self.subTest(backend=backend, argv=argv[:2]), self.assertRaisesRegex(ValueError, "command.argv must not contain secrets") as caught:
+                    validate_backend_config(run)
+                self.assertNotIn(VALUE, str(caught.exception))
+        for backend in ("musubi-tuner", "sd-scripts"):
+            for arguments in ([f"--wandb_api_key '{VALUE}'"], ["-wandb_api_key", VALUE], [f'-wandb_api_key="{VALUE}"']):
+                with self.subTest(backend=backend, arguments=arguments[:1]), self.assertRaisesRegex(ValueError, "extra_args must not contain secrets") as caught:
+                    validate_backend_config(_with_extra_args(backend, arguments))
+                self.assertNotIn(VALUE, str(caught.exception))
+
+    def test_a_secret_under_a_key_of_backend_config_is_refused_by_its_path(self) -> None:
+        from kura.backends.registry import validate_backend_config
+        from kura.secrets import secret_keys
+
+        self.assertEqual(
+            secret_keys({"a": {"wandb_api_key": VALUE, "list": [{"x": 1}, [{"hf_token": VALUE}]]}, "password": VALUE, "max_token_length": 225, "access_token": "short"}),
+            ["a.wandb_api_key", "a.list[1][0].hf_token", "password"],
+        )
+        for native_config in (
+            {"logging": {"wandb_api_key": VALUE}},
+            {"datasets": [{"folder_path": "/x"}, {"hf_token": VALUE}]},
+            {"model": {"model_kwargs": {"nested": [[{"apiKey": VALUE}]]}}},
+        ):
+            run = _with_native_config(native_config)
+            with self.subTest(native_config=sorted(native_config)), self.assertRaisesRegex(ValueError, r"ai-toolkit backend\.config\.native_config must not contain secrets \((logging|datasets|model)[.\[]") as caught:
+                validate_backend_config(run)
+            self.assertNotIn(VALUE, str(caught.exception))
+        # Only native_config is walked: every other key of backend.config is declared, and a
+        # command's env is refused by name.
+        for backend in ("ai-toolkit", "musubi-tuner", "sd-scripts"):
+            with self.subTest(backend=backend):
+                run = _explicit(backend, {})
+                run["backend"]["config"]["command"]["eos_token"] = "<|endoftext|>"
+                self.assert_no_secret_found(run)
+
+    def test_an_ordinary_setting_is_still_accepted_on_every_backend(self) -> None:
+        from kura.secrets import secret_keys
+
+        ordinary = {"train": {"max_token_length": 225, "tokenizer_path": "/workspace/models/tokenizer"}, "datasets": [{"keep_tokens_separator": "|||||||||", "token_dropout": "0.1"}]}
+        self.assertEqual(secret_keys(ordinary), [])
+        self.assert_no_secret_found(_with_native_config(ordinary))
+        for backend in ("musubi-tuner", "sd-scripts"):
+            with self.subTest(backend=backend):
+                self.assert_no_secret_found(_with_extra_args(backend, ["--max_token_length", "225", "--keep_tokens_separator", "|||||||||", "--tokenizer_cache_dir=/workspace/cache/tokenizers", "-1"]))
+        for backend in ("ai-toolkit", "musubi-tuner", "sd-scripts"):
+            run = _explicit(backend, {"TOKENIZERS_PARALLELISM": "false"})
+            run["backend"]["config"]["command"]["argv"] = ["bash", "-c", "python train.py --max_token_length 225 --output_dir '/workspace/out put'"]
+            with self.subTest(backend=backend):
+                self.assert_no_secret_found(run)
+
+    def test_every_value_check_asks_holds_secret(self) -> None:
+        from unittest.mock import patch
+
+        from kura import secrets
+        from kura.backends.registry import validate_backend_config
+
+        runs = {
+            "ai-toolkit native_config": _with_native_config({"logging": [{"wandb_api_key": VALUE}]}),
+            "musubi-tuner extra_args": _with_extra_args("musubi-tuner", ["-wandb_api_key", VALUE]),
+            "sd-scripts extra_args": _with_extra_args("sd-scripts", [f"--wandb_api_key '{VALUE}'"]),
+        }
+        for backend in ("ai-toolkit", "musubi-tuner", "sd-scripts"):
+            runs[f"{backend} command.argv"] = _explicit(backend, {})
+            runs[f"{backend} command.argv"]["backend"]["config"]["command"]["argv"] = ["bash", "-c", f"python train.py --wandb_api_key {VALUE}"]
+        for name, run in runs.items():
+            with self.subTest(run=name), patch("kura.secrets.holds_secret", wraps=secrets.holds_secret) as owner:
+                with self.assertRaisesRegex(ValueError, "must not contain secrets"):
+                    validate_backend_config(run)
+            self.assertTrue(any(VALUE in call.args[1] for call in owner.call_args_list))
+            # With the owner answering no, nothing else finds the value.
+            with self.subTest(run=name, owner="no"), patch("kura.secrets.holds_secret", return_value=False):
+                self.assert_no_secret_found(run)
+
     def test_a_frozen_manifest_is_read_as_it_is(self) -> None:
         from kura.backends.registry import validate_backend_config
 
         validate_backend_config(_with_extra_args("sd-scripts", ["--wandb_api_key", "0123456789abcdef"]), frozen=True)
+        validate_backend_config(_with_native_config({"logging": {"wandb_api_key": VALUE}}), frozen=True)
 
 if __name__ == "__main__":
     unittest.main()
