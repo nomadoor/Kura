@@ -308,12 +308,19 @@ class WorkspaceSchemaTests(unittest.TestCase):
             ({"comfyui": {"endpoint": "http://127.0.0.1:8188/?token=pw-1234567"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
             ({"comfyui": {"endpoint": "http://127.0.0.1:8188#pw-1234567"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
             ({"comfyui": {"endpoint": "http://127.0.0.1:8188/?"}}, "comfyui.endpoint must not hold a user name, password, query, or fragment"),
+            # Without a scheme urlsplit finds no host, so the user name and password are not seen as such.
+            ({"comfyui": {"endpoint": "me:pw-1234567@127.0.0.1:8188"}}, "comfyui.endpoint must start with http:// or https:// and name a host"),
+            ({"comfyui": {"endpoint": "127.0.0.1:8188"}}, "comfyui.endpoint must start with http:// or https:// and name a host"),
+            ({"comfyui": {"endpoint": "http://[bad-host:8188"}}, "comfyui.endpoint must start with http:// or https:// and name a host"),
+            ({"comfyui": {"endpoint": "localhost:8188"}}, "comfyui.endpoint must start with http:// or https:// and name a host"),
+            ({"comfyui": {"endpoint": "file:///tmp/pw-1234567.sock"}}, "comfyui.endpoint must start with http:// or https:// and name a host"),
+            ({"comfyui": {"endpoint": "http://:8188"}}, "comfyui.endpoint must start with http:// or https:// and name a host"),
         ):
             with self.subTest(config=config), self.assertRaisesRegex(ValueError, message) as caught:
                 validate_workspace_config({"schema_version": 2, **config})
             # The refusal never repeats the credential it refuses.
             self.assertNotIn("pw-1234567", str(caught.exception))
-        for endpoint in ("https://comfy.example.com:8443/base", "http://[::1]:8188", "http://127.0.0.1:8188/a@b"):
+        for endpoint in ("https://comfy.example.com:8443/base", "http://[::1]:8188", "http://127.0.0.1:8188/a@b", "http://127.0.0.1:8188"):
             validate_workspace_config({"schema_version": 2, "comfyui": {"endpoint": endpoint}})
         migrated, notes = migrate_workspace_config({"schema_version": 2, "storage": {"host_drive": "e"}, "runpod": {"cloud_type": "SECURE"}})
         self.assertEqual(migrated, {"schema_version": 2, "storage": {"host_drive": "E:"}, "runpod": {"cloud_types": ["SECURE"]}})

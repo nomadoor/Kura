@@ -220,16 +220,22 @@ class InitCommandTests(unittest.TestCase):
         self.assertEqual(opened.call_args.args[0], "http://10.0.0.5:8188/system_stats")
 
     def test_readiness_never_prints_credentials_from_the_comfyui_endpoint(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\ncomfyui:\n  endpoint: http://user:hunter2-secret@10.0.0.5:8188\n", encoding="utf-8")
-            with patch("kura.doctor.shutil.which", return_value=None), patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")):
-                gaps = readiness_gaps(root)
-        # The endpoint is refused by its one rule, which never repeats the value, and not probed.
-        comfy = [gap for gap in gaps if "comfyui.endpoint" in gap or gap.startswith("ComfyUI")]
-        self.assertEqual(len(comfy), 1)
-        self.assertNotIn("hunter2-secret", comfy[0])
-        self.assertIn("must not hold a user name, password, query, or fragment", comfy[0])
+        for endpoint, message in (
+            ("http://user:hunter2-secret@10.0.0.5:8188", "must not hold a user name, password, query, or fragment"),
+            ("user:hunter2-secret@10.0.0.5:8188", "must start with http:// or https:// and name a host"),
+        ):
+            with self.subTest(endpoint=endpoint), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "workspace.yaml").write_text(f"schema_version: 2\ncomfyui:\n  endpoint: {endpoint}\n", encoding="utf-8")
+                with patch("kura.doctor.shutil.which", return_value=None), patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")) as opened:
+                    gaps = readiness_gaps(root)
+                # The endpoint is refused by its one rule, which never repeats the value, and not probed.
+                comfy = [gap for gap in gaps if "comfyui.endpoint" in gap or gap.startswith("ComfyUI")]
+                self.assertEqual(len(comfy), 1)
+                self.assertNotIn("hunter2-secret", comfy[0])
+                self.assertNotIn("10.0.0.5", comfy[0])
+                self.assertIn(message, comfy[0])
+                opened.assert_not_called()
 
     def test_render_new_creates_only_draft_files(self) -> None:
         previous = Path.cwd()
@@ -9763,28 +9769,19 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 1)
 
-    def test_doctor_comfyui_rejects_non_http_endpoint_scheme(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("comfyui: {endpoint: file:///tmp/comfyui.sock}\n", encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch("kura.doctor.urllib.request.urlopen") as urlopen, patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                    code = cmd_doctor_comfyui(argparse.Namespace())
-            finally:
-                os.chdir(previous)
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 1)
-            urlopen.assert_not_called()
-            self.assertIn("unsupported comfyui.endpoint scheme", payload["diagnostics"]["object_info_error"])
-
     def test_doctor_comfyui_refuses_an_endpoint_with_credentials_without_repeating_them(self) -> None:
-        for written, option in (
-            ("comfyui: {endpoint: 'http://user:pa55word@example.invalid:8188?debug=abc123'}\n", None),
-            ("schema_version: 2\n", "http://user:pa55word@example.invalid:8188"),
+        credentials = "must not hold a user name, password, query, or fragment"
+        scheme = "must start with http:// or https:// and name a host"
+        for written, option, message in (
+            ("comfyui: {endpoint: 'http://user:pa55word@example.invalid:8188?debug=abc123'}\n", None, credentials),
+            ("schema_version: 2\n", "http://user:pa55word@example.invalid:8188", credentials),
+            # The owner's scheme rule is the doctor's only scheme check; nothing is printed as a report.
+            ("schema_version: 2\ncomfyui: {endpoint: 'user:pa55word@example.invalid:8188'}\n", None, scheme),
+            ("schema_version: 2\n", "user:pa55word@example.invalid:8188", scheme),
+            ("schema_version: 2\n", "example.invalid:8188", scheme),
+            ("schema_version: 2\n", "file:///tmp/pa55word.sock", scheme),
         ):
-            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(written=written, option=option), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "workspace.yaml").write_text(written, encoding="utf-8")
                 previous = Path.cwd()
@@ -9799,9 +9796,11 @@ class RunPodLifecycleTests(unittest.TestCase):
                 output = stdout.getvalue() + stderr.getvalue()
                 self.assertEqual(code, 1)
                 urlopen.assert_not_called()
-                self.assertIn("must not hold a user name, password, query, or fragment", output)
+                self.assertEqual(stdout.getvalue(), "")  # a refusal, not a report
+                self.assertIn(message, output)
                 self.assertNotIn("pa55word", output)
                 self.assertNotIn("abc123", output)
+                self.assertNotIn("example.invalid", output)
 
     def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
         class FakeResponse:
