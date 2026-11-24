@@ -740,7 +740,9 @@ def select_reclaim(
 
 def record_reclaim(run_dir: Path, action: str, facts: dict[str, Any]) -> str:
     """Append what an archive or removal did to the run's records, beside its latest realization, so no
-    record goes on naming a file as present without a later one saying it left. Status ignores it."""
+    record goes on naming a file as present without a later one saying it left. Status is not written
+    for it; a status reader that lists what a record removed reads the record
+    (`kura.training_artifacts.recoverable_training_states`)."""
     status = _read_json(run_dir / "status.json")
     realization = status.get("last_realization")
     prefix = Path(realization).stem if isinstance(realization, str) and realization else "run"

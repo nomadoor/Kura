@@ -68,7 +68,7 @@ from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
-from kura.reclaim import CLASSES, became_in_use, read_run_status, reclaim_inventory, record_reclaim, render_users, run_containers, run_done, select_reclaim
+from kura.reclaim import CLASSES, became_in_use, read_run_status as read_status_for_cleanup, reclaim_inventory, record_reclaim, render_users, run_containers, run_done, select_reclaim
 from kura.training_artifacts import ResumeSourceMismatch, compile_resume_lock, recipe_fingerprint, remove_training_states, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import comfyui_endpoint
 from kura.yamlio import load_yaml_mapping as _load_yaml
@@ -1402,7 +1402,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         if not run_dir.is_dir():
             problems.append(f"there is no run {run_id!r}; `kura cleanup plan --outputs` lists finished runs")
             continue
-        status = read_run_status(run_dir)
+        status = read_status_for_cleanup(run_dir)
         if not run_done(run_dir, status):
             billing = pod_may_still_bill(run_dir, status) if status is not None else None
             if billing is not None:
