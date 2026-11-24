@@ -526,6 +526,35 @@ class UnconfirmedCreateTests(unittest.TestCase):
             self.assertEqual(_status(run_dir)["state"], "interrupted")
 
 
+class LaunchChecksPodSettingsTests(unittest.TestCase):
+    def test_a_launch_without_a_gpu_list_is_refused_before_any_create_intent(self) -> None:
+        # Staging does not check the settings a Pod is created from; the launch is the one place that does.
+        from kura.executors.runpod import launch_runpod, launch_runpod_session
+        from kura.run_commands.common import runpod_launch_settings
+
+        workspace_config = {"runpod": {"storage_mode": "upload"}}
+        launches = {
+            "train": lambda run_dir, settings: launch_runpod(
+                run_dir=run_dir, spec={}, image="registry/trainer:tag", config=settings, yes=True, max_lease_sec=3600),
+            "render": lambda run_dir, settings: launch_runpod_session(
+                run_dir=run_dir, image="registry/comfy:tag", config=settings, purpose="comfyui-render", yes=True, max_lease_sec=3600),
+        }
+        for run_type, launch in launches.items():
+            with self.subTest(run_type=run_type), tempfile.TemporaryDirectory() as directory:
+                run_dir = Path(directory) / "runs" / "example"
+                run_dir.mkdir(parents=True)
+                _write_upload_stage(run_dir)
+                run = {"type": run_type, "backend": {"name": "ai-toolkit"}}
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                        patch("kura.executors.runpod._runpod_request") as request_api, _no_price_lookup() as price_lookup:
+                    with self.assertRaisesRegex(ValueError, "runpod requires gpu_type_ids"):
+                        launch(run_dir, runpod_launch_settings(run, workspace_config))
+                request_api.assert_not_called()
+                price_lookup.assert_not_called()
+                self.assertEqual(list(run_dir.rglob("*.create-intent.json")), [])
+                self.assertEqual(_status(run_dir)["state"], "compiled")
+
+
 def setUpModule() -> None:
     isolate_user_config()
 

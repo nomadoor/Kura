@@ -915,7 +915,6 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     run_dir = run_dir.resolve()
     runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
     _require_upload_storage(runpod_config)
-    _runpod_settings(runpod_config)
     try:
         run = load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
     except (OSError, YAMLError) as exc:
