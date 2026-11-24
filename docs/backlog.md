@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-24 | tests | The module-wide patch of `kura.run_commands.plan.docker_data_location` in `tests/test_cli.py` (backlog #166) replaced the assertion that a failed `docker info` is reported; add one test that patches only that call to fail | review of the 2026-11 backlog batch | P8
 - 2026-10-22 | RunPod download | The success path's `stop_refreshing()` before marking the outputs collected is redundant with the `finally`; removing it changes when the refresher stops on the billing path, so it waits for a design | review of the collecting mark (the minutes half was fixed in the 2026-11 batch) | -
 - 2026-11-20 | training adapter | A relative (`./`, `../`) or `~` local adapter path passes validation and becomes a `local-path` requirement, then the local Docker launch refuses it because mounts need an absolute path; check its form when the file is loaded, as for a local `model.base` | CodeRabbit on the training-adapter change | P11
 - 2026-11-20 | RunPod models | A local-path `model.base` or `backend.config.assistant_lora_path` on a RunPod run is forwarded as written: nothing uploads or refuses it, so the Pod gets a path that does not exist there, and the plan's trainer-download line says nothing about it | context-free review of the training-adapter change (pre-existing for `model.base`) | P11
