@@ -1797,17 +1797,38 @@ def _duplicate_pod_ids(run_dir: Path, status: dict[str, Any]) -> list[str]:
 
 def pod_may_exist(status: dict[str, Any]) -> bool:
     """Whether the run's recorded Pod may still exist: one is recorded, no stop deleted it, and RunPod
-    has not reported it gone. The one test every caller uses; `pods_left` adds a recovery's duplicates."""
+    has not reported it gone. The one test every caller uses; `pods_left` adds a recovery's duplicates
+    and a Pod whose stop failed part-way."""
     return isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at")
 
 
 def pods_left(run_dir: Path, status: dict[str, Any]) -> list[str]:
     """The run's recorded Pods that may still exist and bill: its Pod while `pod_may_exist`, and every
-    duplicate until a stop deleted them all with it."""
+    duplicate until a stop deleted them all with it.
+
+    A stop that failed part-way keeps the Pod listed even after RunPod reported it gone
+    (`_stop_cut_short`): the stop is what looks for Pods by the run's names, so until one ends as
+    `stopped` a Pod a lost create reply left may still bill, and the run keeps a follower to finish it."""
     if status.get("pod_stopped_at"):
         return []
-    left = [status["pod_id"]] if pod_may_exist(status) else []
-    return left + _duplicate_pod_ids(run_dir, status)
+    recorded = isinstance(status.get("pod_id"), str) and (pod_may_exist(status) or _stop_cut_short(run_dir, status))
+    return ([status["pod_id"]] if recorded else []) + _duplicate_pod_ids(run_dir, status)
+
+
+def _stop_cut_short(run_dir: Path, status: dict[str, Any]) -> bool:
+    """Whether a stop of the run's latest launch failed part-way: it left a `stop` record with outcome
+    `failed`. Asked only while no stop has succeeded (`pod_stopped_at` is not set)."""
+    reference = status.get("last_realization")
+    if not isinstance(reference, str):
+        return False
+    for path in (run_dir / "realizations").glob(f"{Path(reference).stem}.stop-*.json"):
+        try:
+            stop = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(stop, dict) and stop.get("outcome") == "failed":
+            return True
+    return False
 
 
 def _already_gone(pod_id: str, api_key: str) -> bool:

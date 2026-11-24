@@ -289,6 +289,47 @@ class DeleteByNameTests(unittest.TestCase):
                 # Not recorded as stopped, so the stop is tried again and looks again.
                 self.assertNotIn("pod_stopped_at", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
 
+    def test_a_stop_whose_listing_failed_looks_again_even_after_the_pod_is_reported_gone(self) -> None:
+        # The first stop deleted pod-1 and could not list by name. A `kura run reconcile` then records
+        # pod-1 as gone. The stop is still unfinished, so every deleter lists again and deletes the
+        # Pod a lost create reply left, instead of taking "the recorded Pod is gone" for "nothing bills".
+        from kura import runner
+
+        late = {"myself": {"pods": [{"id": "pod-late", "name": POD_NAME}]}}
+        gone = RunPodAPIError("RunPod API returned 404", status_code=404)
+        for label, deleter in DELETERS:
+            with self.subTest(label):
+                run_dir, deleted, outcome = self._delete(deleter, listing=ValueError("RunPod API is unreachable: down"))
+                self.assertEqual(deleted, ["pod-1"])
+                self.assertIsNot(outcome, True)
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                    # pod-1 answers 404 from here on; pod-late answers its delete.
+                    with patch("kura.executors.runpod._runpod_request", side_effect=gone):
+                        status = runpod.reconcile_runpod(run_dir)
+                    self.assertTrue(status["pod_missing_at"])
+                    self.assertEqual(runpod.pods_left(run_dir, status), ["pod-1"])
+                    self.assertIn("kura run stop train", runner.pod_may_still_bill(run_dir, status))
+
+                    def api(method, path, *_args, **_kwargs):
+                        if path == "/pods/pod-1":
+                            raise gone
+                        return {}
+
+                    with patch("kura.executors.runpod._runpod_request", side_effect=api) as request, \
+                         patch("kura.executors.runpod._runpod_graphql", return_value=late) as listed:
+                        self.assertIs(deleter(run_dir), True)
+                listed.assert_called_once()
+                self.assertEqual([call.args[1] for call in request.call_args_list if call.args[0] == "DELETE"], ["/pods/pod-1", "/pods/pod-late"])
+                failed, stopped = self._stop_records(run_dir)
+                self.assertEqual((failed["outcome"], stopped["outcome"]), ("failed", "stopped"))
+                self.assertEqual(stopped["targets"], [{"pod_id": "pod-1", "result": "already_gone"},
+                                                      {"pod_id": "pod-late", "result": "deleted", "found_by": "name", "pod_name": POD_NAME}])
+                status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                self.assertTrue(status["pod_stopped_at"])
+                self.assertEqual(status["state"], "completed")  # how the run ended is not rewritten
+                self.assertEqual(runpod.pods_left(run_dir, status), [])
+                self.assertIsNone(runner.pod_may_still_bill(run_dir, status))
+
 
 def setUpModule() -> None:
     isolate_user_config()

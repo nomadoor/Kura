@@ -510,7 +510,7 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             })
             runner.claim_request(request, 1)
             with patch("kura.executors.runpod._runpod_pods_named", return_value=[]) as listed, patch("kura.executors.runpod._runpod_request") as request_api:
-                self.assertTrue(runner._stop_runpod_on_request(run_dir, request, runner._read_json(request)))
+                runner._stop_runpod_on_request(run_dir, request)  # raises when the stop could not be carried out
             # Settled from the realization without discovery; the one listing is the stop's lookup by name.
             listed.assert_called_once()
             self.assertEqual([call.args[:2] for call in request_api.call_args_list], [("DELETE", "/pods/pod-1")])
