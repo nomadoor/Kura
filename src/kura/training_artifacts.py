@@ -1159,17 +1159,37 @@ def training_state_capture_required(run_dir: Path) -> bool:
     return frozen_training_state_managed(run, _frozen_command_lock(run_dir)) and not resume_data_removed(run_dir)
 
 
-def resume_data_removed(run_dir: Path) -> bool:
-    """Whether `kura cleanup --resume-data` freed this run's training states: the `reclaim` record it appends
-    to `realizations/` (`kura.reclaim.record_reclaim`) with action `remove-resume-data`."""
-    for path in (run_dir / "realizations").glob("*.reclaim-*.json"):
+def _resume_data_removals(run_dir: Path) -> list[dict[str, Any]]:
+    """The `reclaim` records `kura cleanup --resume-data` appended to this run's `realizations/`
+    (`kura.reclaim.record_reclaim`, action `remove-resume-data`)."""
+    removals = []
+    for path in sorted((run_dir / "realizations").glob("*.reclaim-*.json")):
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if isinstance(value, dict) and value.get("kind") == "reclaim" and value.get("action") == "remove-resume-data":
-            return True
-    return False
+            removals.append(value)
+    return removals
+
+
+def resume_data_removed(run_dir: Path) -> bool:
+    """Whether `kura cleanup --resume-data` freed this run's training states."""
+    return bool(_resume_data_removals(run_dir))
+
+
+def recoverable_training_states(run_dir: Path, recorded: list[Any]) -> list[Any]:
+    """The training states a run's status lists as recoverable: the ones its collections recorded,
+    less every state a `remove-resume-data` record says cleanup removed. A state a continuation
+    protects is in no such record, so it stays listed."""
+    if not recorded:
+        return recorded
+    removed = {
+        artifact_id for removal in _resume_data_removals(run_dir)
+        for artifact_id in (removal.get("removed_artifact_ids") if isinstance(removal.get("removed_artifact_ids"), list) else [])
+        if isinstance(artifact_id, str)
+    }
+    return [item for item in recorded if not (isinstance(item, dict) and isinstance(item.get("artifact_id"), str) and item["artifact_id"] in removed)]
 
 
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:

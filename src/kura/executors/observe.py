@@ -17,11 +17,18 @@ def read_run_status(run_dir: Path) -> dict[str, Any]:
     Viewers never reconcile (run-records ADR, decision 7): the job runner
     observes the runs it controls, and `kura run reconcile` or the command
     following a run observes the rest. A viewer only wakes a runner that is gone.
+
+    `recoverable_training_states` is read with the run's reclaim records, so a
+    state `kura cleanup --resume-data` removed is not shown as recoverable;
+    cleanup records the removal and never writes status.
     """
     from kura import runner
+    from kura.training_artifacts import recoverable_training_states
 
     run_dir = Path(run_dir)
     snapshot = _load_status(run_dir)
+    if isinstance(snapshot.get("recoverable_training_states"), list):
+        snapshot["recoverable_training_states"] = recoverable_training_states(run_dir, snapshot["recoverable_training_states"])
     try:
         # Any unfinished runner-controlled run, including a claimed launch not yet
         # recorded and a finished run whose Pod still bills; `_wake_runner` decides.
