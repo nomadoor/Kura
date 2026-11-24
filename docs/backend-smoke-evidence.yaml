@@ -14,6 +14,79 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-release-0.9.0-conformance-runpod-2026-11-24
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 3ace2278d6e79c5b76075ffdf69f20840622f27c1c843e0fbaa692f0e75e2988
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-24'
+    artifact: smoke-evidence/2026-11-24-release-0.9.0-conformance.yaml
+  - id: sd-scripts-release-0.9.0-conformance-docker-2026-11-24
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 8001cecee17e165d919704fac1c04ea37077d670c9e7ef022a6e67b04fe8ffd8
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:6d5c9aa192aa57408f890fcd25507d993b94ae64ed5369b220d7afbba28ef3ea
+    native_path:
+      architecture: sd15
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-24'
+    artifact: smoke-evidence/2026-11-24-release-0.9.0-conformance.yaml
+  - id: ai-toolkit-release-0.9.0-conformance-docker-2026-11-24
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 3ace2278d6e79c5b76075ffdf69f20840622f27c1c843e0fbaa692f0e75e2988
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-24'
+    artifact: smoke-evidence/2026-11-24-release-0.9.0-conformance.yaml
+  - id: musubi-tuner-release-0.9.0-conformance-docker-2026-11-24
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: f2fa4e3d8af13403f9e48f27d82f66c82a5eb575efca8cc6d6bfc98910e8146a
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:95ac80592fc5f717cf071a4420bfaee797eb19dece4d2101ebd33962fc3743a9
+    native_path:
+      architecture: wan
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-24'
+    artifact: smoke-evidence/2026-11-24-release-0.9.0-conformance.yaml
   - id: ai-toolkit-oom-patch-conformance-runpod-2026-11-24
     backend: ai-toolkit
     adapter_source:

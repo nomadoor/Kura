@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-24 | RunPod create | RunPod answers a create on a full machine with "This machine does not have the resources to deploy your pod. Please try a different machine" (GraphQL error, sent as status 400), which `_is_runpod_capacity_error` does not count as capacity, so the run ends `launch_failed` instead of trying the next candidate or waiting; no Pod is made | release conformance for 0.9.0 (A40, run 20261124-1532_conf-ai-multi-fresh_9348) | P11
 - 2026-11-24 | run stop | The capacity-wait refusal from `stop_runpod` already says the stop stays requested, so with a request on disk `kura run stop` prints that twice; only `stop_run` knows whether a request exists, so the clause belongs there alone | implementation of the one-stop-actor change | P11
 - 2026-11-24 | RunPod follower | After `_delete_unstarted_pod` deletes a Pod and then fails at the name listing, the next follower's reconcile ends the run saying the Pod no longer exists and its outputs are gone; the sweep is retried, but the end reason misleads | implementation of the follower-order change | P9
 - 2026-11-24 | RunPod follower | When a Pod is created and confirmed and a stop arrives in the same attempt, a refused key during that stop is notified one attempt late, because `launched` was read before the create | review of the follower-order change | P6
