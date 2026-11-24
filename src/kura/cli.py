@@ -37,7 +37,7 @@ from kura.opener import open_path
 from kura.run_results import results_folder, train_run_results
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, docker_daemon_problem, docker_data_location, resolve_docker_create_intents
-from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
+from kura.executors.runpod import resolve_runpod_create_intents, run_without_status_problem, unresolved_create_intents
 from kura.hf_cache import remove_repository, sweep_payloads
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
 from kura.fsio import atomic_write_yaml as _dump_yaml
@@ -849,14 +849,9 @@ def cmd_run_status(args: argparse.Namespace) -> int:
 def cmd_run_reconcile(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
-        if not (run_dir / "status.json").is_file():
-            # Status is not projected from the records yet (run-records ADR, decision 5: shadow mode), so
-            # nothing here could settle or follow the run; its records stay as they are.
-            raise ValueError(
-                f"runs/{args.run_id}/status.json is missing, and Kura does not rebuild it from the run's records yet; "
-                f"restore it (from a backup or a copy of the workspace) and run `kura run reconcile {args.run_id}` again. "
-                "A Pod this run created stops itself at its maximum lease"
-            )
+        if (problem := run_without_status_problem(run_dir)) is not None:
+            # Nothing here could settle or follow the run; its records stay as they are.
+            raise ValueError(problem)
         if unresolved_create_intents(run_dir, "docker"):
             try:
                 with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):
