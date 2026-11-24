@@ -399,6 +399,12 @@ def stop_done(run_dir: Path) -> bool:
     return request is not None and _sibling(request, ".stop-done.json").exists()
 
 
+def stop_waiting(run_dir: Path) -> bool:
+    """Whether a stop request for the run's latest launch is on disk and no follower has carried it out."""
+    request = latest_request(run_dir)
+    return request is not None and _stop_waiting(request)
+
+
 def follower_present(workspace: Path, run_dir: Path) -> bool:
     """Whether a runner or a surviving follower will see a stop request for this run."""
     return _held(run_dir) or (runner_alive(workspace) and (run_unfinished(run_dir) or bool(pending_requests(run_dir))))
