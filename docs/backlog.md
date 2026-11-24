@@ -15,6 +15,7 @@ why, so it is not raised again.
 
 ## Open
 
+- 2026-11-24 | cleanup | On native Windows, a `runs/<id>` replaced by a junction between `named_run_dir`'s check and the delete is followed by `shutil.rmtree`, which does not refuse links there; the window is the prune's Docker and size checks | review of the run-id entry change | P7
 - 2026-11-24 | tests | `test_a_compiled_endpoint_with_credentials_is_refused_at_launch_without_repeating_them` passes a bad `endpoint_override` to a cleanly compiled run, so it does not show that a manifest compiled with a bad endpoint is refused at launch | review of the ComfyUI endpoint scheme change | P10
 - 2026-11-24 | tests | The module-wide patch of `kura.run_commands.plan.docker_data_location` in `tests/test_cli.py` (backlog #166) replaced the assertion that a failed `docker info` is reported; add one test that patches only that call to fail | review of the 2026-11 backlog batch | P8
 - 2026-10-22 | RunPod download | The success path's `stop_refreshing()` before marking the outputs collected is redundant with the `finally`; removing it changes when the refresher stops on the billing path, so it waits for a design | review of the collecting mark (the minutes half was fixed in the 2026-11 batch) | -
