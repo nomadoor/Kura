@@ -30,7 +30,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, pod_may_exist, runpod_cost_ceiling, unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, pod_may_exist, run_without_status_problem, runpod_cost_ceiling, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC, docker_data_location
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -1945,6 +1945,8 @@ def _uncollected_pod_work(run_dir: Path) -> str | None:
 def stop_run(run_id: str, *, yes: bool = False) -> int:
     try:
         run_dir = _run_path(run_id)
+        if not run_dir.is_dir():
+            raise ValueError(run_without_status_problem(run_dir))
         # Deleting a Pod before collection loses its work for good, so that stop is confirmed first.
         if not yes and (at_risk := _uncollected_pod_work(run_dir)) is not None:
             print(f"cannot stop run without confirmation: stopping deletes the Pod, and {at_risk}. "
@@ -1953,6 +1955,9 @@ def stop_run(run_id: str, *, yes: bool = False) -> int:
         handed_over = _stop_through_runner(run_dir)
         if handed_over is not None:
             return handed_over
+        if (problem := run_without_status_problem(run_dir)) is not None:
+            # Stopping reads status; the message names the Pods to delete by hand, and nothing is deleted here.
+            raise ValueError(problem)
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         if unresolved_create_intents(run_dir):
             raise ValueError(

@@ -29,7 +29,7 @@ from kura.container_scripts.ai_toolkit_models import RECORD_SUFFIX as AI_TOOLKIT
 from kura.secrets import MissingSecret, bearer_request, container_secrets_record, declared_secret, runpod_ssh_key, undeclared_secret_refusal
 from kura.storage import ensure_free_bytes
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, point_status_at_launch, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _apply_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, record_launch_phase, format_seconds
-from kura.executors.common import confirm_launch, create_intent_executor, request_confirmed_at, host_time, in_capacity_wait
+from kura.executors.common import confirm_launch, create_intent_executor, is_realization_record, request_confirmed_at, host_time, in_capacity_wait
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 from kura.workspace import RUNPOD_STORAGE_MODES, runpod_settings_problem
@@ -1842,6 +1842,60 @@ def _run_pod_names(run_dir: Path) -> list[str]:
         if isinstance(intent, dict):
             names.append(_intent_pod_name(run_dir, path.name[: -len(CREATE_INTENT_SUFFIX)], intent))
     return list(dict.fromkeys(names))
+
+
+def run_without_status_problem(run_dir: Path) -> str | None:
+    """Why no command can stop or reconcile this run, or None when its status.json is there.
+
+    Status is not rebuilt from the records yet (run-records ADR, decision 5: shadow mode), so
+    without it nothing here can settle, follow, or stop the run. `kura run reconcile` and
+    `kura run stop` both say so from here, naming every RunPod Pod the run's records hold (the
+    names its create intents used and the ids its realizations recorded), because deleting those
+    by hand is then the only way to stop their billing before the maximum lease. Only reads records.
+    """
+    if not run_dir.is_dir():
+        return f"there is no run {run_dir.name} in this workspace (runs/{run_dir.name} does not exist)"
+    if (run_dir / "status.json").is_file():
+        return None
+    directory = run_dir / "realizations"
+    pods: dict[str, list[str]] = {name: [] for name in _run_pod_names(run_dir)}
+    for path in sorted(directory.glob("*.json")):
+        if not is_realization_record(path):
+            continue
+        try:
+            realization = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(realization, dict) or realization.get("executor") != "runpod":
+            continue
+        pod = realization.get("pod")
+        if not isinstance(pod, dict) or not isinstance(pod.get("id"), str):
+            continue
+        try:
+            intent = json.loads((directory / f"{path.stem}{CREATE_INTENT_SUFFIX}").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            intent = None
+        if isinstance(intent, dict):
+            name = _intent_pod_name(run_dir, path.stem, intent)
+        else:
+            # A launch from before create intents: its Pod's own record holds the name.
+            name = pod["name"] if isinstance(pod.get("name"), str) else _intent_pod_name(run_dir, path.stem, {})
+        duplicates = realization.get("duplicate_pod_ids") if isinstance(realization.get("duplicate_pod_ids"), list) else []
+        ids = pods.setdefault(name, [])
+        ids.extend(pod_id for pod_id in (pod["id"], *duplicates) if isinstance(pod_id, str) and pod_id not in ids)
+    problem = (
+        f"runs/{run_dir.name}/status.json is missing, and Kura does not rebuild it from the run's records yet; "
+        f"restore it (from a backup or a copy of the workspace) and run `kura run reconcile {run_dir.name}`. "
+        "Until it is back, Kura can neither stop nor reconcile this run. "
+    )
+    if not pods:
+        return problem + "Its records name no RunPod Pod"
+    listed = "; ".join(f"{name} ({'id ' + ', '.join(ids) if ids else 'no id recorded'})" for name, ids in pods.items())
+    return problem + (
+        f"Its records name these RunPod Pods: {listed}. One that still exists bills until its maximum lease, when it "
+        "deletes itself. Deleting it in the RunPod console is the only way to stop its billing sooner, and that "
+        "loses every output on it that was not collected"
+    )
 
 
 def stop_runpod(run_dir: Path) -> dict[str, Any]:
