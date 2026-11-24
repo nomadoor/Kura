@@ -21,6 +21,19 @@ def _ai_toolkit_run(**safety: object) -> dict:
     return run
 
 
+# The local launch preflight asks where Docker keeps its data; these tests answer it by name
+# instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
+
+
+def setUpModule() -> None:
+    _DOCKER_DATA_OFF.start()
+
+
+def tearDownModule() -> None:
+    _DOCKER_DATA_OFF.stop()
+
+
 class UnmeasuredModelDownloadTests(unittest.TestCase):
     def test_a_trainer_download_is_a_warning_with_its_scale_and_passes(self) -> None:
         cache = Path("/mnt/e/hf-cache")

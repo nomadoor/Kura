@@ -1,6 +1,8 @@
 # ADR: Secrets live in one user-level file, and agents never handle them
 
-Status: accepted owner decision (2026-10-04).
+Status: accepted owner decision (2026-10-04). Amended 2026-11-24: decision 8
+records the RunPod SSH key Kura has kept beside the secrets file since
+2026-10-23.
 
 ## Context
 
@@ -68,6 +70,15 @@ No single convention for local API tokens exists. The options were:
    name and value; the same rule refuses trainer arguments in `run.yaml`
    (`backend.config.extra_args`, `command.argv`) that hold a secret, since
    they are kept in the run's records.
+8. **The RunPod SSH key.** Kura reaches every RunPod Pod with its own SSH key
+   (`kura.secrets.runpod_ssh_key`), kept beside the secrets file as
+   `runpod_ssh_key` and `runpod_ssh_key.pub` and readable only by the user
+   where the file system supports that. Kura makes it once, when a Pod is
+   about to be created, and never replaces it, since live Pods trust only it.
+   Each Pod gets the public key; no workspace file, record, image, or log
+   holds the private key, and an agent never opens it, as with the secrets
+   file. The key is one per user and machine, like the secrets store, so a
+   run is followed and collected from the machine that launched it.
 
 ## Consequences
 

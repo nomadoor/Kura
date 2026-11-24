@@ -194,7 +194,8 @@ class TuiMetricsTests(unittest.TestCase):
             for offset, writer in enumerate(("older-run", "newer-run", "older-run"), start=1):
                 log = root / "runs" / writer / "logs" / "stdout.log"
                 log.write_text("step\n" * offset, encoding="utf-8")
-                written = time.time() + 60 * offset
+                # In the past, a minute apart: a time in the future would mislead any check of a log's age.
+                written = time.time() - 300 + 60 * offset
                 os.utime(log, (written, written))
                 screen.summaries = collect_run_summaries(root)
                 self.assertEqual([item.id for item in screen.active_runs], ["newer-run", "older-run"])

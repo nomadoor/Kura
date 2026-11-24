@@ -294,7 +294,7 @@ def write_launch_request(run_dir: Path, *, executor: str, image: str | None = No
     """Write a launch request after the approval the run needs; at most one is pending.
 
     `confirmed_at` is when the launch's confirmation (`confirm_launch`) was taken: every
-    training launch, locally and on RunPod, and a RunPod render. A pending request written by
+    training launch and every render, locally and on RunPod. A pending request written by
     another Kura version is replaced, after saying so.
     """
     with file_lock(run_dir / ".locks" / "launch-request.lock", blocking=False):

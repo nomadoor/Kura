@@ -21,7 +21,7 @@ import yaml
 from kura import runner
 from kura.cli import build_parser, cmd_cleanup, cmd_doctor_disk, cmd_run_prune
 from kura.images import PINNED_IMAGES
-from kura.reclaim import reclaim_inventory
+from kura.reclaim import reclaim_inventory, select_reclaim
 from kura.status_projection import project_status
 from kura.storage import RECLAIM_POINTER
 from tests.platform_support import POSIX_PATHS, posix_only
@@ -284,6 +284,36 @@ class ReclaimApplyTests(unittest.TestCase):
             record = json.loads(next((run_dir / "realizations").glob("r1.reclaim-*.json")).read_text(encoding="utf-8"))
             self.assertEqual(record["action"], "remove-checkpoints")
             self.assertEqual(sorted(record["removed"]), ["outputs/pick-step00000100.safetensors", "outputs/pick-step00000300.safetensors"])
+
+    def test_an_option_without_its_partner_is_refused_and_removes_nothing(self) -> None:
+        with _workspace() as root, tempfile.TemporaryDirectory() as elsewhere:
+            run_dir = _run(root, "pick", ended="2026-10-01T00:00:00+00:00")
+            checkpoints = [_write(run_dir / "outputs" / name, b"w") for name in ("pick-step00000100.safetensors", "pick.safetensors")]
+            scratch = _write(run_dir / "cache" / "latents.npz")
+            _run(root, "bare", ended="2026-10-01T00:00:00+00:00")
+            for argv, refusal in (
+                (["--keep", "pick.safetensors"], "--keep names the checkpoints to keep for --checkpoints <run>"),
+                (["--to", elsewhere], "--to names where --archive-outputs <run> moves the run's outputs"),
+                (["--archive-outputs", "pick"], "--archive-outputs needs --to <dir>"),
+                (["--checkpoints", "bare", "--keep", "bare.safetensors"], "run 'bare' has no outputs Kura may change"),
+            ):
+                with self.subTest(argv=argv):
+                    code, _, err = _cleanup([*argv, "--yes"])
+                    self.assertEqual(code, 1)
+                    self.assertIn(refusal, err)
+                    self.assertTrue(all(path.is_file() for path in (*checkpoints, scratch)))
+                    self.assertEqual(list(Path(elsewhere).iterdir()), [])
+                    self.assertEqual(list((run_dir / "realizations").glob("r1.reclaim-*.json")), [])
+
+    def test_an_item_named_twice_is_selected_once(self) -> None:
+        with _workspace() as root:
+            _run(root, "source", ended="2026-10-01T00:00:00+00:00")
+            _state(root, "state-step-00000005-bbbbbbbbbbbb", "source")
+            _write(root / "cache" / "huggingface" / "hub" / "models--org--unused" / "blobs" / "y", b"u" * 10)
+            with patch("kura.doctor._docker_storage_summary", return_value=NO_DOCKER):
+                inventory = reclaim_inventory(root, yaml.safe_load((root / "workspace.yaml").read_text()))
+            actions = select_reclaim(inventory, models=["org/unused", "org/unused"], resume_data=["finished", "source"])
+            self.assertEqual([(action["action"], action["item"]["id"]) for action in actions], [("models", "org/unused"), ("resume-data", "source")])
 
     def test_a_checkpoint_kept_by_its_path_in_a_subfolder_stays_and_is_recorded_as_kept(self) -> None:
         with _workspace() as root:

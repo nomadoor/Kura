@@ -234,7 +234,8 @@ a table, or short bullets
 ```text
 ⛔ **Training stopped partway (2400 / 5000 steps)**
 
-ℹ️ The 12 saves up to step 2400 are kept. Nothing costs money (local run).
+ℹ️ The 12 saves up to step 2400 are kept, and so is the training state of step 2400. Nothing
+costs money (local run).
 
 **What happened**
 - Free disk fell below 20 GB, so Kura stopped the training

@@ -20,6 +20,7 @@ from kura.backends.shared import _datasets, _script_command, validated_command_e
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
+from kura.images import PINNED_IMAGES
 from kura.media_types import frozen_suffixes
 from kura.paths import AI_TOOLKIT_MODELS_PATH
 from kura.provenance import artifact_pinning
@@ -44,7 +45,8 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86"
+# The image digest is written once, in `kura.images.PINNED_IMAGES`.
+AI_TOOLKIT_PINNED_IMAGE = PINNED_IMAGES["ai-toolkit"]
 AI_TOOLKIT_PINNED_COMMIT = "bdd55603e05a7a59e8112c0a0623798754ce9b69"
 
 # Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.43,

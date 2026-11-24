@@ -37,14 +37,17 @@ make a dataset ─→ train ─→ try it (render) ─→ the user judges ─┐
   threshold of your own.
 
 ### One approval per run
-- Show the run's `kura run plan`. When the user says yes to that plan, start it with
-  `kura run execute <run-id> --yes`. `--yes` is how that yes reaches Kura.
+- Show the run's plan: `kura run plan` for a training run; for a render, its cases and what
+  `kura render launch <run-id> --dry-run` reports. When the user says yes to that plan, start
+  it with `kura run execute <run-id> --yes` (a render: `kura render launch <run-id> --yes`).
+  `--yes` is how that yes reaches Kura.
 - Nothing else is approval: not a yes to another run, not a note, not "go ahead" said before
   the plan existed.
 - The user may approve several shown plans at once (to run overnight, say). Run them one at a
   time, each after the previous one ended. A RunPod run started later than its plan: run
-  `kura run plan` again and start it only if the price is the one approved; otherwise ask. Stop and ask on a failure or anything that needs the
-  user's decision.
+  `kura run plan` (a render: the dry run) again and start it only if the price is the one
+  approved; otherwise ask. Stop and ask on a failure or anything that needs the user's
+  decision.
 - Anything changed after the plan makes a new run. Show its plan and get a yes again.
 
 ### Work through Kura
@@ -60,11 +63,12 @@ make a dataset ─→ train ─→ try it (render) ─→ the user judges ─┐
 - When Kura cannot do what is asked, stop and say what is missing. Do not build it outside
   Kura.
 - Do not operate Docker yourself, or run a trainer or a model download directly.
-- Do not show a container's environment either (`docker inspect`, `docker exec`, reading
-  `/proc/<pid>/environ`): the run's secrets are there.
 
 ### Secrets
-- Never see, ask for, or write a secret's value. Do not open a secrets file or `.env.local`.
+- Never see, ask for, or write a secret's value. Do not open a secrets file or `.env.local`,
+  or the private key Kura keeps beside the user's secrets file to reach RunPod Pods.
+- Do not show a container's environment (`docker inspect`, `docker exec`, reading
+  `/proc/<pid>/environ`): the run's secrets are there.
 - When one is missing, ask the user to run `kura secrets set <NAME>` in their own terminal.
 - If the user pastes one into the chat, do not repeat it; suggest they replace it.
 

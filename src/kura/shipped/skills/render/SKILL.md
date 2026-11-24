@@ -104,7 +104,8 @@ Create the run with `kura render new --slug <words>` and fill in `run.yaml`:
 - Check it with `kura render launch <run-id> --dry-run`. It prints every case as JSON for you
   to check, not to show.
 - Show it by the `writing` skill, from your cases: what is compared, the checkpoints, the full
-  prompts, the seeds, how many images, how the sheet is laid out.
+  prompts, the seeds, how many images, how the sheet is laid out. The count is one image per
+  case; when the workflow saves several images per case, say how many that makes.
 - **On a yes**, go to step 6.
 - **When the user asks for changes**, a compiled run cannot change: make a new one with
   `kura render new` and continue from step 4. Remove the unused one with

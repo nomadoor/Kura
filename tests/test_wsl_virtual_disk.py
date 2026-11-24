@@ -36,6 +36,19 @@ def _wsl(*, linux_free_gib: int, host_free_gib: int) -> contextlib.ExitStack:
     return stack
 
 
+# The local launch preflight asks where Docker keeps its data; these tests answer it by name
+# instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
+
+
+def setUpModule() -> None:
+    _DOCKER_DATA_OFF.start()
+
+
+def tearDownModule() -> None:
+    _DOCKER_DATA_OFF.stop()
+
+
 class RequiredFigureTests(unittest.TestCase):
     def test_the_required_figure_is_rounded_up_and_shows_a_fraction(self) -> None:
         from kura.storage import StorageStatus, storage_floor_problem
@@ -78,6 +91,20 @@ class WslVirtualDiskHintTests(unittest.TestCase):
             with _wsl(linux_free_gib=900, host_free_gib=5), self.assertRaises(ValueError) as caught:
                 ensure_free_bytes(target, 10 * GIB, context="RunPod stage", config={})
             self.assertNotIn(HINT, str(caught.exception))
+
+    def test_the_stage_and_pull_gate_makes_its_store_and_accepts_an_unknown_backing(self) -> None:
+        from kura.storage import StorageStatus
+
+        # A store whose backing is unknown is refused by a local launch; this gate measures Linux free space instead.
+        unknown = StorageStatus(path="x", probe="x", backing_id="unknown", backing_kind="wsl2_vhdx", linux_free_bytes=50 * GIB,
+                                linux_total_bytes=1000 * GIB, host_free_bytes=None, effective_free_bytes=50 * GIB, confidence="unknown", mount={})
+        with tempfile.TemporaryDirectory() as directory, patch("kura.storage.probe_storage", return_value=unknown) as probe:
+            store = Path(directory) / "runs" / "example" / "downloads"
+            ensure_free_bytes(store, 10 * GIB, context="RunPod pull", config={})
+            self.assertTrue(store.is_dir())
+            self.assertEqual(probe.call_args.args[0], store)
+            with self.assertRaisesRegex(ValueError, "has only 50 GiB effective free.*RunPod pull requires at least 60 GiB"):
+                ensure_free_bytes(store, 60 * GIB, context="RunPod pull", config={})
 
     def test_doctor_disk_names_the_virtual_disk(self) -> None:
         for linux_free_gib, host_free_gib, hinted in ((50, 1600, True), (900, 50, False)):

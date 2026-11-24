@@ -102,6 +102,18 @@ class CreateIntentRecoveryTests(unittest.TestCase):
             realization = json.loads((run_dir / "realizations" / f"{RID}.json").read_text(encoding="utf-8"))
             self.assertEqual((realization["state"], realization["pod"]), ("queued", None))
 
+    def test_stopping_a_run_in_a_capacity_wait_says_no_pod_exists_and_asks_runpod_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "queued", "host": "runpod", "capacity_wait": {"attempts": 2}}), encoding="utf-8")
+            with patch("kura.executors.runpod._runpod_request") as api, patch("kura.executors.runpod._runpod_pods_named") as listed, \
+                    patch("kura.executors.runpod.runpod_api_key", side_effect=AssertionError("no key is needed to refuse")):
+                with self.assertRaisesRegex(ValueError, "waiting for RunPod capacity, so no Pod exists to delete; the stop stays requested"):
+                    stop_runpod(run_dir)
+            api.assert_not_called()
+            listed.assert_not_called()
+
     def test_a_continued_wait_is_stopped_through_the_runner_without_creating_anything(self) -> None:
         from kura import runner
 
@@ -475,7 +487,8 @@ class RunnerSettlesBeforeDeletingTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-9", "desiredStatus": "RUNNING"}), \
-                    patch("kura.executors.runpod.point_status_at_launch", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod.point_status_at_launch", side_effect=KeyboardInterrupt), patch("kura.executors.runpod.time.sleep"), \
+                    _no_price_lookup():
                 with self.assertRaises(KeyboardInterrupt):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
             self.assertNotIn("pod_id", _status(run_dir))

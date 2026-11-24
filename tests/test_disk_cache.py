@@ -25,6 +25,19 @@ def _runs_that_write_a_cache() -> dict[str, dict]:
     }
 
 
+# The local launch preflight asks where Docker keeps its data; these tests answer it by name
+# instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
+
+
+def setUpModule() -> None:
+    _DOCKER_DATA_OFF.start()
+
+
+def tearDownModule() -> None:
+    _DOCKER_DATA_OFF.stop()
+
+
 class DiskCacheTests(unittest.TestCase):
     def test_every_backend_that_writes_a_cache_says_it_is_not_counted(self) -> None:
         for case, run in _runs_that_write_a_cache().items():

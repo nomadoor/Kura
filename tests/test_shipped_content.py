@@ -36,20 +36,25 @@ class ShippedContentTests(unittest.TestCase):
             with self.subTest(skill=name):
                 if name != "writing":
                     self.assertIn("## Who decides", text)
-                for reference in re.findall(r"references/[a-z]+\.md", text):
-                    if "skill" not in text.split(reference, 1)[0].rsplit("\n", 1)[-1]:
-                        self.assertTrue((root / "skills" / name / reference).is_file(), reference)
+                # A reference belongs to the skill that names it, unless the text says "of the `<other>` skill".
+                for path in sorted((root / "skills" / name).rglob("*.md")):
+                    flat = " ".join(path.read_text(encoding="utf-8").split())
+                    for reference, other in re.findall(r"(references/[a-z]+\.md)(?: of the `([a-z-]+)` skill)?", flat):
+                        self.assertTrue((root / "skills" / (other or name) / reference).is_file(), f"{path.name}: {reference}")
 
     def test_agents_are_told_never_to_print_a_container_environment(self) -> None:
         # Docker keeps a local run's HF_TOKEN in the container's configuration.
         root = shipped_root()
-        agents = " ".join((root / "AGENTS.md").read_text(encoding="utf-8").split())
-        self.assertIn("Do not show a container's environment either (`docker inspect`, `docker exec`, reading `/proc/<pid>/environ`)", agents)
-        mentions = [
-            path for path in root.rglob("*.md")
-            for _ in range(path.read_text(encoding="utf-8").count("docker inspect"))
-        ]
-        self.assertEqual(mentions, [root / "AGENTS.md"])
+        text = (root / "AGENTS.md").read_text(encoding="utf-8")
+        rule = "Do not show a container's environment (`docker inspect`, `docker exec`, reading `/proc/<pid>/environ`)"
+        # The rule sits with the other secret rules.
+        secrets = " ".join(text.split("### Secrets", 1)[1].split("\n### ", 1)[0].split())
+        self.assertIn(rule, secrets)
+        # No shipped text names a way to print one, except that rule.
+        for way, allowed in (("docker inspect", 1), ("docker exec", 1), ("/environ", 1), ("docker container inspect", 0), ("printenv", 0)):
+            with self.subTest(way=way):
+                mentions = [path for path in root.rglob("*.md") for _ in range(path.read_text(encoding="utf-8").count(way))]
+                self.assertEqual(mentions, [root / "AGENTS.md"] * allowed)
 
     def test_development_skills_stay_in_the_repository(self) -> None:
         development = sorted(path.name for path in (ROOT / "dev" / "skills").iterdir())

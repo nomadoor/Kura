@@ -90,7 +90,8 @@ A dataset is the folder `datasets/<id>/` with two files:
 | `target` | the image or video trained on (the result) |
 | `control` | an edit's before image, a condition image |
 | `reference` | a reference image or video |
-| `audio` and others | audio |
+| `audio` | a separate sound file for the item (video with audio) |
+| `reference-muted`, `reference-audio` | reference variants a few models take (references/rows.md) |
 
 How to write each kind (image only, edit pairs, references, video, video with audio) is in
 references/rows.md.
@@ -105,7 +106,7 @@ references/rows.md.
 - When the user's files are elsewhere, copy the ones to train into `datasets/<id>/`; never move
   the originals.
 - **Images only**: put the images in `datasets/<id>/` (or `datasets/<id>/images/`) with captions
-  as same-name `.txt` files, write `dataset.yaml`, and run `kura dataset draft <id> --write`. It
+  as same-name `.txt` (or `.caption`) files, write `dataset.yaml`, and run `kura dataset draft <id> --write`. It
   writes the list.
 - **Anything else** (edit pairs, references, video, audio): `draft` cannot pair them. Write
   `items.jsonl` by references/rows.md.

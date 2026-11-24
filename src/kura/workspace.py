@@ -211,9 +211,9 @@ def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str
             raise _workspace_schema_error(source, path, "is empty; delete the line to leave it unset")
         choices = schema.get("choices")
         if value in schema.get("removed", ()):
-            raise ValueError(
-                f"{source} {path} {value!r} was removed; use one of " + ", ".join(repr(choice) for choice in choices)
-                + ", or run `kura workspace migrate`, which drops it."
+            raise _workspace_schema_error(
+                source, path, f"{value!r} was removed; use one of " + ", ".join(repr(choice) for choice in choices)
+                + ", or run `kura workspace migrate`, which drops it",
             )
         if choices and value not in choices:
             raise _workspace_schema_error(source, path, "must be one of " + ", ".join(repr(choice) for choice in choices))

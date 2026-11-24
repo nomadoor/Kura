@@ -38,19 +38,23 @@ upload (with the user's own login)
   the card or the base model's page and tell the user.
 
 ### 2. Build the upload folder
-- Use `artifacts/publish/<repository name>/`, holding:
+- Use `publish/<repository name>/` at the top of the workspace (a folder of its own; `runs/`
+  and `artifacts/` hold Kura's files), holding only:
   - the LoRA file (a copy; never move the original)
   - `README.md` (the model card)
   - sample images (from Kura render runs; the user picks them)
 - The model card says: the base model, how to use it (trigger word, LoRA strength), the training
   settings (backend, rank and alpha, steps), what the dataset was, the license.
 - Do not include the dataset unless the user asks for it explicitly.
+- The upload sends every file in the folder. Nothing else may be in it: no `.env.local`, no
+  other weights, no image the user did not pick.
 
 ### 3. Check it and get a yes
-- `kura check secrets artifacts/publish/<repository name>`: nothing may be found; fix anything
-  it finds.
-- `kura check artifacts artifacts/publish/<repository name>`: it lists the weight files. Only
-  the LoRA you mean to upload may be listed (it always lists that one).
+- `kura check secrets publish/<repository name>`: nothing may be found; fix anything it finds.
+  It reads text files only: not images, not model files, not `.env.local`. So also list the
+  folder's files and check that they are exactly the ones named in step 2.
+- `kura check artifacts publish/<repository name>`: it lists the weight files. Only the LoRA
+  you mean to upload may be listed (it always lists that one).
 - A LoRA file can carry training metadata in its header (settings, and with some trainers
   caption words or folder names). Kura neither checks nor removes it; tell the user it goes
   up with the file.
@@ -61,7 +65,7 @@ upload (with the user's own login)
 - Hugging Face:
   ```sh
   hf repo create <user>/<repository name> --private   # or --public
-  hf upload <user>/<repository name> artifacts/publish/<repository name>
+  hf upload <user>/<repository name> publish/<repository name>
   ```
 - If `hf repo create` fails because the repository already exists, stop before uploading: its
   public or private setting stays as it is. Tell the user, and upload only after they confirm
