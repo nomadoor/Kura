@@ -189,6 +189,13 @@ class SecretFlagTests(unittest.TestCase):
         self.assertEqual(secret_flags(["bash", "-lc", f"cd /workspace;WANDB_API_KEY={VALUE} python train.py"]), ["WANDB_API_KEY"])
         self.assertEqual(secret_flags(["bash", "-c", f"cd /workspace&&python train.py --wandb_api_key {VALUE}|tee log"]), ["--wandb_api_key"])
         self.assertEqual(secret_flags(["bash", "-c", "cd /workspace;TOKENIZERS_PARALLELISM=false python train.py --max_token_length 225"]), [])
+        # A shell keeps `#` inside a word, so the flag after it is still read.
+        self.assertEqual(secret_flags(["bash", "-c", f"python train.py --run_name trial#1 --hf_token {VALUE}"]), ["--hf_token"])
+        # The command string is the first argument after the shell's options, not the one right after `-c`.
+        self.assertEqual(secret_flags(["bash", "-c", "-e", f"python train.py --hf_token {VALUE}"]), ["--hf_token"])
+        self.assertEqual(secret_flags(["/bin/sh", "-e", "-o", "pipefail", "-c", f"python train.py --hf_token {VALUE}"]), ["--hf_token"])
+        # Another program's `-c` takes code, not a shell string.
+        self.assertEqual(secret_flags(["python", "-c", "print('--max_token_length 2048 --resolution 1024')"]), [])
 
     def test_a_secret_in_a_shell_string_or_after_a_single_dash_flag_is_refused_on_every_backend(self) -> None:
         from kura.backends.registry import validate_backend_config

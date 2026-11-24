@@ -163,7 +163,30 @@ def holds_secret(name: str, value: str) -> bool:
 
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # The option that hands a shell its command as one string: `bash -c`, `sh -lc`.
-_SHELL_COMMAND_OPTION = re.compile(r"-[A-Za-z]*c")
+_SHELL_COMMAND_OPTION = re.compile(r"-[A-Za-z]*c[A-Za-z]*")
+_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash"})
+
+
+def _shell_command_strings(arguments: list[str]) -> set[int]:
+    """The positions of the command strings shells in this argv are given: after a shell (by its
+    program name) and a `-c` option, the first argument that is not an option, as the shell reads it;
+    `-o name` and `+o name` take the next argument."""
+    positions: set[int] = set()
+    for start, program in enumerate(arguments):
+        if program.replace("\\", "/").rsplit("/", 1)[-1] not in _SHELLS:
+            continue
+        command_mode = False
+        index = start + 1
+        while index < len(arguments) and arguments[index][:1] in ("-", "+"):
+            option = arguments[index]
+            if option == "--":
+                index += 1
+                break
+            command_mode = command_mode or bool(_SHELL_COMMAND_OPTION.fullmatch(option))
+            index += 2 if option in ("-o", "+o") else 1
+        if command_mode and index < len(arguments):
+            positions.add(index)
+    return positions
 
 
 def _shell_words(text: str) -> list[str]:
@@ -171,6 +194,7 @@ def _shell_words(text: str) -> list[str]:
     spaces, or its whitespace-separated parts when the quoting cannot be read."""
     lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    lexer.commenters = ""  # a shell keeps `#` inside a word (`trial#1`); dropping the rest would hide a flag
     try:
         return list(lexer)
     except ValueError:
@@ -187,8 +211,9 @@ def secret_flags(arguments: list[str]) -> list[str]:
     A bare flag, or a short value such as sd-scripts' `--max_token_length 225`, is a setting.
     """
     found = []
+    command_strings = _shell_command_strings(arguments)
     for index, argument in enumerate(arguments):
-        if index and _SHELL_COMMAND_OPTION.fullmatch(arguments[index - 1]):
+        if index in command_strings:
             found.extend(secret_flags(_shell_words(argument)))
         if argument.startswith("-"):
             dashes = argument[:len(argument) - len(argument.lstrip("-"))]
