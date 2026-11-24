@@ -79,6 +79,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import migrate_workspace_config
+from kura.workspace import named_run_dir
 from kura.run_commands.common import _backend_image_name, backend_command_lock
 from kura.run_envelope import run_datasets as _run_datasets
 
@@ -1337,14 +1338,10 @@ def _file_count(path: Path) -> int:
 
 def cmd_run_discard(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
-    run_id_path = Path(args.run_id)
-    if run_id_path.is_absolute() or len(run_id_path.parts) != 1 or run_id_path.parts[0] in {"", ".", ".."}:
-        print("cannot discard run: run_id must be a safe run directory name", file=sys.stderr)
-        return 1
-    runs_root = (workspace / "runs").resolve()
-    run_dir = (runs_root / args.run_id).resolve()
-    if not run_dir.is_relative_to(runs_root) or run_dir.parent != runs_root:
-        print("cannot discard run: run_id must stay under runs/", file=sys.stderr)
+    try:
+        run_dir = named_run_dir(workspace, args.run_id)
+    except ValueError as exc:
+        print(f"cannot discard run: {exc}", file=sys.stderr)
         return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -1364,7 +1361,7 @@ def cmd_run_discard(args: argparse.Namespace) -> int:
         )
         return 1
 
-    target = str(run_dir.relative_to(workspace))
+    target = f"runs/{args.run_id}"
     result = {
         "dry_run": not args.yes,
         "id": args.run_id,
@@ -1394,13 +1391,13 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
     from kura.runner import pod_may_still_bill
 
     workspace = _require_workspace()
-    runs_root = (workspace / "runs").resolve()
     actions: list[dict[str, Any]] = []
     problems: list[str] = []
     for run_id in args.run_ids:
-        run_dir = (runs_root / run_id).resolve()
-        if Path(run_id).name != run_id or run_id in {"", ".", ".."} or run_dir.parent != runs_root:
-            problems.append(f"{run_id!r} is not a run directory name")
+        try:
+            run_dir = named_run_dir(workspace, run_id)
+        except ValueError as exc:
+            problems.append(str(exc))
             continue
         if not run_dir.is_dir():
             problems.append(f"there is no run {run_id!r}; `kura cleanup plan --outputs` lists finished runs")
@@ -1426,7 +1423,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
             problems.append(f"run {run_id!r} is kept: render run(s) {', '.join(users)} will read its checkpoints (unfinished or "
                             "compiled, or their frozen records cannot be read); prune it after those renders end or are discarded")
             continue
-        actions.append({"id": run_id, "state": status["state"], "target": str(run_dir.relative_to(workspace.resolve())), "size_bytes": _path_size_bytes(run_dir)})
+        actions.append({"id": run_id, "state": status["state"], "target": f"runs/{run_id}", "size_bytes": _path_size_bytes(run_dir)})
     if problems:
         print("cannot prune runs: " + "; ".join(problems), file=sys.stderr)
         return 1

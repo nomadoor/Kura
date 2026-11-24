@@ -7213,7 +7213,7 @@ class RunDiscardTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(status, 1)
             self.assertTrue(outside.exists())
-            self.assertIn("run_id must be a safe run directory name", stderr.getvalue())
+            self.assertIn("'../outside' is not a run directory name", stderr.getvalue())
 
 
 class RunPruneTests(unittest.TestCase):
@@ -7297,6 +7297,145 @@ class RunPruneTests(unittest.TestCase):
                 os.chdir(previous)
         self.assertEqual(status, 1)
         self.assertIn("cannot prune run old: docker cleanup failed", stderr.getvalue())
+
+
+def _link_directory(link: Path, target: Path) -> None:
+    """Make `link` a directory link to `target`: a junction on native Windows (it needs no privilege), a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+class RunIdNamesEntryTests(unittest.TestCase):
+    """`kura run prune` and `kura run discard` delete the entry `runs/<id>` itself, never what a link there points to."""
+
+    COMMANDS = {
+        "prune": ("completed", lambda run_id, yes: cmd_run_prune(argparse.Namespace(run_ids=[run_id], yes=yes))),
+        "discard": ("draft", lambda run_id, yes: cmd_run_discard(argparse.Namespace(run_id=run_id, yes=yes))),
+    }
+
+    @staticmethod
+    def _make_run(directory: Path, state: str) -> Path:
+        (directory / "notes").mkdir(parents=True)
+        (directory / "notes" / "kept.txt").write_text("kept", encoding="utf-8")
+        (directory / "run.yaml").write_text(f"id: {directory.name}\n", encoding="utf-8")
+        (directory / "status.json").write_text(json.dumps({"state": state, "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+        return directory
+
+    def _run(self, root: Path, command: str, run_id: str, *, yes: bool = True) -> tuple[int, str, str]:
+        previous = Path.cwd()
+        stdout, stderr = io.StringIO(), io.StringIO()
+        os.chdir(root)
+        try:
+            with patch("kura.cli.shutil.which", return_value=None), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = self.COMMANDS[command][1](run_id, yes)
+        finally:
+            os.chdir(previous)
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def test_a_linked_run_entry_is_refused_and_its_target_stays(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            for place in ("sibling run", "outside the workspace"):
+                with self.subTest(command=command, place=place), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve() / "workspace"
+                    (root / "runs").mkdir(parents=True)
+                    (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                    target = self._make_run(root / "runs" / "b" if place == "sibling run" else root.parent / "elsewhere", state)
+                    link = root / "runs" / "a"
+                    _link_directory(link, target)
+                    for yes in (False, True):
+                        status, stdout, stderr = self._run(root, command, "a", yes=yes)
+                        self.assertEqual(status, 1)
+                        self.assertEqual(stdout, "")
+                        self.assertIn("runs/a is a link, not a run; remove the link yourself", stderr)
+                        self.assertTrue(os.path.lexists(link))
+                        self.assertEqual((target / "notes" / "kept.txt").read_text(encoding="utf-8"), "kept")
+                        self.assertTrue((target / "run.yaml").is_file())
+
+    def test_a_dangling_link_is_refused_as_a_link(self) -> None:
+        for command in self.COMMANDS:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "runs").mkdir()
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                gone = root / "gone"
+                gone.mkdir()
+                _link_directory(root / "runs" / "a", gone)
+                gone.rmdir()
+                status, _, stderr = self._run(root, command, "a")
+                self.assertEqual(status, 1)
+                self.assertIn("runs/a is a link, not a run", stderr)
+                self.assertTrue(os.path.lexists(root / "runs" / "a"))
+
+    def test_a_workspace_reached_through_a_linked_parent_still_deletes_its_run(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                real = Path(directory).resolve() / "real"
+                (real / "workspace" / "runs").mkdir(parents=True)
+                (real / "workspace" / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                run_dir = self._make_run(real / "workspace" / "runs" / "plain", state)
+                linked_parent = Path(directory).resolve() / "linked"
+                _link_directory(linked_parent, real)
+                status, stdout, stderr = self._run(linked_parent / "workspace", command, "plain", yes=False)
+                self.assertEqual((status, stderr), (0, ""))
+                result = json.loads(stdout)
+                self.assertEqual((result["actions"][0] if command == "prune" else result)["target"], "runs/plain")
+                self.assertTrue(run_dir.is_dir())
+                status, _, stderr = self._run(linked_parent / "workspace", command, "plain", yes=True)
+                self.assertEqual((status, stderr), (0, ""))
+                self.assertFalse(run_dir.exists())
+                self.assertTrue((real / "workspace" / "runs").is_dir())
+
+    def test_a_name_that_is_not_one_directory_entry_is_refused(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            for run_id in ("../outside", "runs/../../outside", "", ".", "..", "a/b"):
+                with self.subTest(command=command, run_id=run_id), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve() / "workspace"
+                    (root / "runs").mkdir(parents=True)
+                    (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                    outside = self._make_run(root.parent / "outside", state)
+                    self._make_run(root / "runs" / "a" / "b", state)
+                    status, _, stderr = self._run(root, command, run_id)
+                    self.assertEqual(status, 1)
+                    self.assertIn(f"{run_id!r} is not a run directory name", stderr)
+                    self.assertTrue((outside / "run.yaml").is_file())
+                    self.assertTrue((root / "runs" / "a" / "b" / "run.yaml").is_file())
+
+    def test_both_commands_ask_the_one_owner_which_directory_the_id_names(self) -> None:
+        for command, (state, _) in self.COMMANDS.items():
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                run_dir = self._make_run(root / "runs" / "plain", state)
+                with patch("kura.cli.named_run_dir", side_effect=ValueError("the owner refused")) as owner:
+                    status, _, stderr = self._run(root, command, "plain")
+                owner.assert_called_once_with(root, "plain")
+                self.assertEqual(status, 1)
+                self.assertIn("the owner refused", stderr)
+                self.assertTrue(run_dir.is_dir())
+
+    def test_named_run_dir_refuses_an_id_that_is_not_one_entry(self) -> None:
+        # Only the deleting commands refuse here; run_path keeps accepting what it accepted, so a
+        # spelling such as `kura run stop my-run/` still reaches a billing Pod.
+        from kura.workspace import named_run_dir, run_path
+
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            os.chdir(root)
+            try:
+                self.assertEqual(named_run_dir(root, "plain"), root / "runs" / "plain")
+                self.assertEqual(run_path("plain/"), root / "runs" / "plain")
+                for run_id in ("../outside", "", ".", "..", "a/b", str(root / "runs" / "plain")):
+                    with self.subTest(run_id=run_id):
+                        with self.assertRaisesRegex(ValueError, "is not a run directory name"):
+                            named_run_dir(root, run_id)
+            finally:
+                os.chdir(previous)
 
 
 class RunPodLifecycleTests(unittest.TestCase):
