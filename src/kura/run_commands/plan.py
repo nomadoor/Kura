@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import re
@@ -1893,8 +1894,6 @@ def max_lease_seconds(value: Any) -> int:
 
 def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
     """Hand the stop to the runner's follower when one will see it; None when the CLI should act."""
-    import time
-
     from kura import runner
 
     workspace = run_dir.parent.parent
@@ -1907,6 +1906,17 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
             # the runner that later settles what the CLI cannot reach: a launch not recorded yet, a render cut short.
             runner.write_stop_request(run_dir)
         return None
+    return _wait_for_follower_to_stop(run_dir, timeout_sec=timeout_sec)
+
+
+def _wait_for_follower_to_stop(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
+    """Write the stop request and wait for the follower to carry it out. None when no follower will:
+    the run has no launch request to write one beside, or whoever held the run left without stopping
+    it and no runner is alive (it was another `kura run stop` that failed), so the caller acts."""
+    import time
+
+    from kura import runner
+
     path = runner.write_stop_request(run_dir)
     if path is None:
         return None
@@ -1917,6 +1927,8 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
         if runner.stop_done(run_dir) or (request is not None and runner.request_outcome(request) is not None):
             print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
             return 0
+        if not runner.follower_present(run_dir.parent.parent, run_dir):
+            return None
         time.sleep(1)
     print(f"the stop request stays in effect and the follower carries it out when it next checks; "
           f"confirm with `kura run status {run_dir.name}`", file=sys.stderr)
@@ -1943,6 +1955,14 @@ def _uncollected_pod_work(run_dir: Path) -> str | None:
 
 
 def stop_run(run_id: str, *, yes: bool = False) -> int:
+    """Stop a run. One actor carries a stop out: the run's follower, or this command while it holds
+    the run's controller lock, the lock a follower holds for life. A follower that starts while the
+    command acts finds the lock held and leaves (`runner.work`), so nothing reconciles a container
+    or a Pod in the middle of being stopped and records the stop as a failure or a vanished Pod."""
+    from kura import runner
+    from kura.executors.common import _OperationBusy, _run_operation_lock
+
+    run_dir: Path | None = None
     try:
         run_dir = _run_path(run_id)
         if not run_dir.is_dir():
@@ -1955,26 +1975,42 @@ def stop_run(run_id: str, *, yes: bool = False) -> int:
         handed_over = _stop_through_runner(run_dir)
         if handed_over is not None:
             return handed_over
-        if (problem := run_without_status_problem(run_dir)) is not None:
-            # Stopping reads status; the message names the Pods to delete by hand, and nothing is deleted here.
-            raise ValueError(problem)
-        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        if unresolved_create_intents(run_dir):
-            raise ValueError(
-                f"a launch of this run stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` "
-                "first, which finds it by name so this command can stop it"
-            )
-        realization_ref = status.get("last_realization")
-        if not isinstance(realization_ref, str):
-            raise ValueError("run has no launch recorded to stop; if a runner was following it, `kura runner start` records the stop "
-                             "(a launch that never began as not launched, a local render cut short as interrupted)")
-        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-        if realization.get("executor") == "runpod":
-            print(json.dumps(stop_runpod(run_dir), indent=2))
-        else:
-            print(json.dumps(stop_docker(run_dir), indent=2))
+        with contextlib.ExitStack() as held:
+            try:
+                held.enter_context(_run_operation_lock(run_dir, "controller", blocking=False))
+            except _OperationBusy:
+                # A follower took the run after the check above, so it is there after all and carries the stop out.
+                handed_over = _wait_for_follower_to_stop(run_dir)
+                if handed_over is not None:
+                    return handed_over
+                # Nobody will: take the run now, or say who holds it (`_OperationBusy` is a ValueError).
+                held.enter_context(_run_operation_lock(run_dir, "controller", blocking=False))
+            if (problem := run_without_status_problem(run_dir)) is not None:
+                # Stopping reads status; the message names the Pods to delete by hand, and nothing is deleted here.
+                raise ValueError(problem)
+            if runner.stop_done(run_dir):
+                # A follower held the run before this command did and carried the stop out.
+                print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
+                return 0
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            if unresolved_create_intents(run_dir):
+                raise ValueError(
+                    f"a launch of this run stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` "
+                    "first, which finds it by name so this command can stop it"
+                )
+            realization_ref = status.get("last_realization")
+            if not isinstance(realization_ref, str):
+                raise ValueError("run has no launch recorded to stop; if a runner was following it, `kura runner start` records the stop "
+                                 "(a launch that never began as not launched, a local render cut short as interrupted)")
+            realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+            if realization.get("executor") == "runpod":
+                print(json.dumps(stop_runpod(run_dir), indent=2))
+            else:
+                print(json.dumps(stop_docker(run_dir), indent=2))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"cannot stop run: {_safe_error(exc)}", file=sys.stderr)
+        if run_dir is not None and runner.stop_waiting(run_dir):
+            print("The stop stays requested; `kura runner start` carries it out.", file=sys.stderr)
         return 1
     return 0
 
