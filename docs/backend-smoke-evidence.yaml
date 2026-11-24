@@ -14,6 +14,43 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-oom-patch-conformance-runpod-2026-11-24
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 521cb6e7cbe1f6750a9a4ab3cbbfe766a415dd888a6c32ad2cb0dc08c0020a16
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-24'
+    artifact: smoke-evidence/2026-11-24-ai-toolkit-oom-patch-conformance.yaml
+  - id: ai-toolkit-oom-patch-conformance-docker-2026-11-24
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 521cb6e7cbe1f6750a9a4ab3cbbfe766a415dd888a6c32ad2cb0dc08c0020a16
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9918aa0bd3b2f5c1958ae6272a61f63b0f3b51929d6820090da1f53942d04f86
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs; a 12-step run with six step saves)
+      optimizer_steps: 12
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-11-24'
+    artifact: smoke-evidence/2026-11-24-ai-toolkit-oom-patch-conformance.yaml
   - id: ai-toolkit-minimax-h3-image-edit-a100-runpod-2026-11-20
     backend: ai-toolkit
     adapter_source:
