@@ -350,16 +350,27 @@ def plain_relative_folder(value: Any) -> bool:
 def comfyui_endpoint_problem(value: Any, *, where: str) -> str | None:
     """Why a ComfyUI endpoint cannot be used, or None.
 
-    Kura reaches ComfyUI without a user name, password, or query (they cannot reach it through
-    the URL anyway), and keeps the endpoint in run records; the message never repeats the value.
+    Kura reaches ComfyUI over http or https, without a user name, password, or query (they cannot
+    reach it through the URL anyway), and keeps the endpoint in run records; the message never
+    repeats the value. Without a scheme a URL has no host to read, so `user:password@host:8188`
+    would otherwise pass as a scheme and a path. An unset endpoint (not a string, or the empty
+    string a render run may hold) is not judged here.
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or value == "":
         return None
-    if "@" in urllib.parse.urlsplit(value.strip()).netloc or "?" in value or "#" in value:
+    form = f"{where} must start with http:// or https:// and name a host, such as http://127.0.0.1:8188"
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+        hostname = parts.hostname
+    except ValueError:  # a malformed bracketed host such as http://[x
+        return form
+    if "@" in parts.netloc or "?" in value or "#" in value:
         return (
             f"{where} must not hold a user name, password, query, or fragment; write the scheme, host, port, "
             "and an optional path, such as http://127.0.0.1:8188"
         )
+    if parts.scheme not in ("http", "https") or not hostname:
+        return form
     return None
 
 
