@@ -9,6 +9,9 @@ Updated: 2026-10-08 — the status projection runs in shadow mode first.
 Updated: 2026-10-23 — a capacity wait whose create intent finds no Pod by name
 continues, as one without an intent does (decision 3).
 
+Updated: 2026-11-24 — a failed create's HTTP status is read before its text;
+a refused key, a rate limit, and a capacity refusal are not looked up.
+
 Updated: 2026-10-07 — the job runner deletes a Pod of its own launch whose job
 never started, and continues a confirmed RunPod launch that created nothing yet.
 
@@ -83,13 +86,15 @@ creates nothing, so only decisions 3 to 7 apply to it.
   2026-10-22: it used to be kept apart from a count of failed collections that
   handed a run to a person, which no longer exists, see
   `runpod-unattended-completion.md`, "No Pod is kept for a person").
-- A create that fails, whatever its reply says, goes to discovery before
-  anything is created again (2026-10-22); the reply's status, code, or text
-  never decides that nothing was made. One match is adopted; a complete listing
-  without the name means nothing was created, and the next GPU candidate may be
-  tried; a listing that fails or finds more than one hands the run to the user.
-  Only a capacity refusal skips the lookup, because a capacity wait repeats it
-  every round.
+- A create that fails goes to discovery before anything is created again
+  (2026-10-22), unless its HTTP status says RunPod refused the request
+  (amended 2026-11-24): 401 or 403 (the key), 429 (the rate limit), or a
+  status below 500 with a capacity text, which a capacity wait repeats every
+  round. A refusal made no Pod and is not looked up. The status is read before
+  the text: a server error, a lost reply, or a reply Kura cannot read is looked
+  up whatever it says. One match is adopted; a complete listing without the
+  name means nothing was created, and the next GPU candidate may be tried; a
+  listing that fails or finds more than one hands the run to the user.
 - A lookup can miss a Pod that a create whose reply was lost makes only
   afterwards. So deleting a run's Pods (`stop_runpod`, the one deleter the
   runner and every command use) also lists Pods by every name the run's create

@@ -776,13 +776,18 @@ def _pod_made_by_failed_create(run_dir: Path, realization_id: str, api_key: str,
     """Whether a failed create made a Pod after all: the one Pod by its name, None when it made none,
     or the run handed over to the user when the answer is not known.
 
-    A failed reply does not say whether RunPod created the Pod, so every failure
-    is looked up by name before anything is created again; only a capacity
-    refusal, the one failure a capacity wait repeats, skips the lookup. A complete
-    listing without the name means nothing was created and the next candidate
-    may be tried.
+    The reply's HTTP status is read before its text. RunPod refused the request,
+    so no Pod exists and nothing is looked up, when it answered 401 or 403 (the
+    key), 429 (the rate limit), or below 500 with a capacity text. Everything
+    else (a server error whatever its text, no reply, a reply Kura cannot read)
+    does not say whether RunPod created the Pod, so it is looked up by name
+    before anything is created again. A complete listing without the name means
+    nothing was created and the next candidate may be tried.
     """
-    if _is_runpod_capacity_error(exc):
+    status_code = exc.status_code if isinstance(exc, RunPodAPIError) else None
+    if runpod_key_refused(exc) or status_code == 429:
+        return None
+    if status_code is not None and status_code < 500 and _is_runpod_capacity_error(exc):
         return None
     error = _redact_secret_text(str(exc))
     try:

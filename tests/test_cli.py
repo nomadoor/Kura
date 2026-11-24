@@ -8096,9 +8096,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch(
                          "kura.executors.runpod._runpod_request",
                          side_effect=[
-                             ValueError("no GPU capacity"),
-                             ValueError("no GPU capacity"),
-                             ValueError("no GPU capacity"),
+                             # A capacity refusal as RunPod sends it: a GraphQL `errors` reply, which needs no lookup.
+                             *[RunPodAPIError("RunPod GraphQL failed: no GPU capacity", status_code=400) for _ in range(3)],
                              {"id": "pod-1", "desiredStatus": "RUNNING"},
                          ],
                      ) as request:
@@ -8266,7 +8265,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(realization_id)
             self.assertEqual(probe.call_count, 2)
             self.assertEqual(request.call_count, 2)
-            listed.assert_called_once()
+            listed.assert_not_called()  # a 429 is a refusal: no Pod was made
             sleep.assert_called_once_with(10)
 
     def test_an_unconfirmed_create_is_never_retried_and_is_handed_over(self) -> None:
