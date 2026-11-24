@@ -75,6 +75,19 @@ def _estimates(run: dict[str, Any], save_every: int) -> dict[str, Any]:
     }
 
 
+# The local launch preflight asks where Docker keeps its data; these tests answer it by name
+# instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
+
+
+def setUpModule() -> None:
+    _DOCKER_DATA_OFF.start()
+
+
+def tearDownModule() -> None:
+    _DOCKER_DATA_OFF.stop()
+
+
 class TrainedStepsOwnerTests(unittest.TestCase):
     def test_a_run_trains_the_resume_added_steps_else_the_recipe_steps(self) -> None:
         self.assertEqual(trained_steps(musubi_run()), 1000)

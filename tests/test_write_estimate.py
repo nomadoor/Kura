@@ -29,6 +29,19 @@ def _roomy(real_probe, free_bytes: int = 1024**5):
     return probe
 
 
+# The local launch preflight asks where Docker keeps its data; these tests answer it by name
+# instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
+
+
+def setUpModule() -> None:
+    _DOCKER_DATA_OFF.start()
+
+
+def tearDownModule() -> None:
+    _DOCKER_DATA_OFF.stop()
+
+
 class BoundTests(unittest.TestCase):
     def test_the_bound_holds_every_file_the_acceptance_runs_wrote(self) -> None:
         # Measured over the 13 acceptance runs of 2026-10-17 (SDXL, Anima, Z-Image, FLUX.2 Klein 4B,

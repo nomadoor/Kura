@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 from tests.backend_fixtures import with_required
 from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only, small_local_reserve
+from tests.test_runpod_create_intent import _no_price_lookup
 from tests.user_config import isolate_user_config
 
 
@@ -83,6 +84,9 @@ RUNPOD_OBJECT_JOB_SOURCE = (Path(__file__).resolve().parents[1] / "docker" / "ai
 # `kura init` probes Docker and ComfyUI for its readiness summary; unit tests
 # must not depend on what this machine has running.
 _READINESS_OFF = patch("kura.init_templates.readiness_gaps", return_value=[])
+# The local launch preflight asks where Docker keeps its data; tests of the preflight answer it by
+# name instead of through whatever their `subprocess.run` patch returns for `docker info`.
+_PREFLIGHT_DOCKER_DATA_OFF = patch("kura.run_commands.plan.docker_data_location", return_value=(None, "not measured in tests"))
 
 
 def setUpModule() -> None:
@@ -90,9 +94,11 @@ def setUpModule() -> None:
     _SSH_REUSE_OFF.start()
     _RUNPOD_MARKS_OFF.start()
     _READINESS_OFF.start()
+    _PREFLIGHT_DOCKER_DATA_OFF.start()
 
 
 def tearDownModule() -> None:
+    _PREFLIGHT_DOCKER_DATA_OFF.stop()
     _READINESS_OFF.stop()
     _RUNPOD_MARKS_OFF.stop()
     _SSH_REUSE_OFF.stop()
@@ -6145,7 +6151,7 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertIn("requires at least 20 GiB", short[0]["fact"])
         self.assertEqual([item["severity"] for item in enough], ["info", "info"])
         self.assertIn("passes", enough[0]["fact"])
-        self.assertIn("Docker's data root is not watched (`docker info` did not report it)", enough[1]["fact"])
+        self.assertIn("Docker's data root is not watched (not measured in tests)", enough[1]["fact"])
 
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8159,6 +8165,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API is unreachable: timed out")) as request,
                     patch("kura.executors.runpod._runpod_pods_named", side_effect=lambda _key, name: [{"id": "pod-late", "name": name, "desiredStatus": "RUNNING"}]),
                     patch("kura.executors.runpod.time.sleep"),
+                    _no_price_lookup(),
                 ):
                     realization_id = launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
@@ -8203,7 +8210,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                 seen.append(any((run_dir / "realizations").glob("*.create-intent.json")))
                 return {"id": "pod-1", "desiredStatus": "RUNNING"}
 
-            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod._runpod_request", side_effect=create):
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod._runpod_request", side_effect=create), \
+                    _no_price_lookup():
                 launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             self.assertEqual(seen, [True])
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kura.status_projection import shadow_differences
-from tests.test_runpod_create_intent import CONFIG, CAPACITY_REFUSED, _crashed_launch, _status
+from tests.test_runpod_create_intent import CONFIG, CAPACITY_REFUSED, _crashed_launch, _no_price_lookup, _status
 from tests.user_config import isolate_user_config
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "kura" / "executors"
@@ -44,7 +44,7 @@ class OneLaunchWriterTests(unittest.TestCase):
             run_dir = _session_run(Path(directory))
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-9", "desiredStatus": "RUNNING"}), \
-                    patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod.time.sleep"), _no_price_lookup():
                 launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", yes=True, max_lease_sec=3600)
             status = _status(run_dir)
             self.assertEqual(status["pod_id"], "pod-9")
@@ -55,6 +55,12 @@ class OneLaunchWriterTests(unittest.TestCase):
 
             self.assertTrue(runner._pod_left_running(run_dir, status))
             self.assertEqual(shadow_differences(run_dir, status), {})
+            # A live Pod of an ordinary launch is not a recovered one: only a launch settled from a
+            # create intent blocks the next launch through `unstopped_recovered_pod`.
+            from kura.executors.runpod import pods_left, unstopped_recovered_pod
+
+            self.assertEqual(pods_left(run_dir, status), ["pod-9"])
+            self.assertIsNone(unstopped_recovered_pod(run_dir))
 
     def test_a_failed_session_launch_says_what_its_realization_says(self) -> None:
         from kura.executors.runpod import RunPodAPIError, launch_runpod_session
@@ -63,7 +69,7 @@ class OneLaunchWriterTests(unittest.TestCase):
             run_dir = _session_run(Path(directory))
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
                     patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError(CAPACITY_REFUSED, status_code=400)), \
-                    patch("kura.executors.runpod.time.sleep"):
+                    patch("kura.executors.runpod.time.sleep"), _no_price_lookup():
                 with self.assertRaises(ValueError):
                     launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", yes=True, max_lease_sec=3600)
             status = _status(run_dir)

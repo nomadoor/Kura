@@ -90,9 +90,9 @@ def request_confirmed_at(details: dict[str, Any]) -> str | None:
 
 
 def confirm_launch(question: str, *, yes: bool, refusal: str, cancelled: str, show: Callable[[], Any] = lambda: None) -> Any:
-    """The one confirmation a training run's launch takes before Kura writes its request, locally
-    and on RunPod: `y` at a terminal, or `yes` (`--yes`), which is given only after the user
-    approved the plan. Without a terminal and without `yes` it refuses before `show` runs. `show`
+    """The one confirmation a launch takes before Kura writes its request, for a training run and
+    a render, locally and on RunPod: `y` at a terminal, or `yes` (`--yes`), which is given only
+    after the user approved the plan. Without a terminal and without `yes` it refuses before `show` runs. `show`
     prints what is confirmed (a RunPod launch's price); its result is returned. A refusal or a
     cancellation raises ValueError with the text given."""
     if not sys.stdin.isatty() and not yes:

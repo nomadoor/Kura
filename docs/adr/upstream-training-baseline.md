@@ -120,10 +120,12 @@ the pinned source and records it. Kura does not author these values.
   (`frozen_model_requirements`), so a run compiled earlier shows no adapter it
   did not load; an adapter an older manifest wrote in the native key shows as
   that authored native setting.
-- Several UI entries can share one arch (`zimage`, `zimage:turbo`). The entry
-  whose model path equals `model.base` wins, then the entry named like the
-  authored selector, then the entry named after the arch, then a sole entry.
-  Anything else is ambiguous and treated as unknown.
+- Several UI entries can share one arch (`zimage`, `zimage:turbo`). The
+  declared `model_arch` selects the entry (`select_baseline_entry`): the entry
+  of that name, else the one entry whose arch it is. An arch several entries
+  share and none is named after is refused, naming them. `model.base` never
+  chooses: a base that is another entry's model path, and not this entry's,
+  is refused as a conflict.
 - One UI name differs from the pinned arch: the `sd15` entry builds a Stable
   Diffusion 1.5 job, which the registry selects as `sd1`. The extractor records
   this as a named alias.

@@ -71,6 +71,14 @@ class RedactionTests(unittest.TestCase):
         self.assertIs(common._redact_secrets, secrets.redact)
         self.assertIs(common._redact_secret_text, secrets.redact_text)
 
+    def test_a_tuple_is_redacted_like_a_list_and_stays_a_tuple(self) -> None:
+        from kura import secrets
+
+        with patch.dict(os.environ, {"HF_TOKEN": VALUE}):
+            redacted = secrets.redact({"argv": ("--token", VALUE, {"note": f"x {VALUE}"})})
+        self.assertEqual(redacted, {"argv": ("--token", "***", {"note": "x ***"})})
+        self.assertIsInstance(redacted["argv"], tuple)
+
     def test_values_are_looked_up_once_per_record(self) -> None:
         from kura import secrets
 

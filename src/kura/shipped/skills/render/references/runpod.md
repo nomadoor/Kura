@@ -8,6 +8,9 @@ references/runpod.md of the `train` skill.
 ## Writing the run
 
 - `executor.name: runpod` in `run.yaml`.
+- The GPU is `compute.gpu` in the render's `run.yaml` (a list, in order of preference). Without
+  it the workspace's list is used (`comfyui.runpod.gpu_type_ids` in `workspace.yaml`, else
+  `runpod.gpu_type_ids`). Choose it with the user.
 - The workflow's base models must be known by name: from the sample's sidecar, or from
   `comfyui.model_registry` in `workspace.yaml`. Compile refuses a model it cannot place before
   any Pod exists; propose its source to the user and, with their yes, add it to the registry.
@@ -18,8 +21,12 @@ references/runpod.md of the `train` skill.
 ## Running it
 
 - `kura render launch <run-id> --dry-run` shows the GPU, the hourly price, and the cost
-  ceiling. Show them to the user.
+  ceiling, not the cases. Show them to the user together with the cases from your cases file
+  (step 5 of the skill).
 - After their yes, `kura render launch <run-id> --yes`.
+- `kura render launch` has no `--max-lease`: a render's Pod gets the default lease (12h), and
+  the dry run's cost ceiling is for that lease. `kura run lease <run-id> <duration>` changes it
+  while the Pod runs; a longer lease is the user's billing decision, as for training.
 
 ## A local render that failed
 

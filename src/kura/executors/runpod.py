@@ -1711,6 +1711,14 @@ def reconcile_runpod(
     blocking: bool = True,
     source: str = "explicit",
 ) -> dict[str, Any]:
+    """Look at the run's Pod and record what is true of it.
+
+    `source` is written into the observation and decides one thing: an `explicit` reconcile
+    (`kura run reconcile`, and the runner's follower before it follows a started job) always writes its
+    observation, while any other value (`automatic`, from `observe_run`'s polling) writes one
+    only when the state or exit code changed, so polling does not fill the run with identical
+    records.
+    """
     with _run_operation_lock(run_dir, "observe", blocking=blocking):
         api_key = runpod_api_key("needed to reconcile a RunPod run")
         status = _load_status(run_dir)

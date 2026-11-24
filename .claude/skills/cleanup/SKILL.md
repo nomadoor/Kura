@@ -55,6 +55,11 @@ What is in use (a model an unfinished run needs, say) is left out or refused.
 
 - Docker's build cache, and a model cache outside the workspace (`docker.hf_cache`), may be
   shared with other projects or workspaces. Say so before removing them.
+- `hub/blobs` in the list is model files in the Hugging Face cache that no model links to any
+  more. On native Windows Kura removes nothing from it; when it is listed there, say that
+  its space is not freed. On a cache kept on a Windows drive and used from WSL, Kura's lock
+  on those files may not hold against a download running in a container: remove models
+  there only while no run is downloading.
 
 ## Removing trained results
 
@@ -78,7 +83,7 @@ In the user's words, effect first:
 
 | What | Size | Removing it costs |
 |---|---|---|
-| temporary files | 12 GB | nothing |
+| temporary files and Docker's build cache (shared with your other Docker projects) | 12 GB | nothing |
 | 2 models unused since September | 15 GB | a download if you use them again |
 | training states of 3 finished runs | 4 GB | those runs cannot be continued (LoRAs stay) |
 
@@ -86,7 +91,7 @@ Your datasets and trained LoRAs are not touched.
 
 ▶ Choose
 - A. Remove all three → about 31 GB freed
-- B. Temporary files only → about 12 GB freed
+- B. Only what costs nothing to remove (recommended: nothing to get back) → about 12 GB freed
 ```
 
 Not like this: "May I run `kura cleanup --models org/model --yes`?"
