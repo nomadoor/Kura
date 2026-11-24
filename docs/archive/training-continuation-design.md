@@ -181,7 +181,8 @@ The mirror does not currently:
 - prove which save event produced an accompanying optimizer file.
 
 After a remote exit record exists, terminal finalization inventories every
-regular remote run file except `cache/` and `transfer/`, recording path, size,
+regular remote run file except `transfer/` and `cache/` (the directories in
+`cache/` an adapter names as `cache_outputs` are kept), recording path, size,
 mtime, and SHA-256. Exact checkpoints recorded by the periodic mirror and
 protected training-state bytes are reused in a staged snapshot; only missing or
 changed files are packed and downloaded. Kura inventories the remote run again,
